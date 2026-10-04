@@ -52,6 +52,60 @@ function setVal(el, v) {
 }
 
 (async () => {
+  /* ==========================================================
+     CSS 静态检查 —— 必须在页面加载【之前】跑完。
+     实测：一旦 hover 规则泄漏到触摸端（少了 @media 包裹），
+     jsdom 会在后续交互里陷入死循环、整个 smoke 静默卡死，
+     连一行断言输出都没有 —— 那种「靠卡死暴露问题」等于没有测试。
+     所以这里先拦下来、当场报 FAIL，然后 process.exit(1) 不再加载页面。
+     ========================================================== */
+  const staticFails = [];
+  const assertStatic = (cond, name) => { if(!cond) staticFails.push(name); };
+
+  const cssText = html.slice(html.indexOf("<style>"), html.indexOf("</style>"));
+  /* 取出 @media (hover:hover){...} 的全部块（按花括号配平，支持嵌套）。
+     不能只查子串是否存在 —— 代码注释里写一句「包在 @media (hover:hover) 里」
+     就足以骗过断言。 */
+  const hoverBlocks = () => {
+    const out = [];
+    const re = /@media\s*\(\s*hover\s*:\s*hover\s*\)\s*\{/g;
+    let m;
+    while ((m = re.exec(cssText))) {
+      let i = m.index + m[0].length, depth = 1;
+      while (i < cssText.length && depth > 0) {
+        if (cssText[i] === "{") depth++;
+        else if (cssText[i] === "}") depth--;
+        i++;
+      }
+      out.push(cssText.slice(m.index, i));
+    }
+    return out;
+  };
+  const hoverCss = () => hoverBlocks().join("\n");
+
+  assertStatic(hoverCss().indexOf(".card:hover .card-3d") >= 0,
+    "hover 翻面规则已声明（选择器存在）");
+  assertStatic(hoverBlocks().some(b => b.indexOf(".card:hover .card-3d") >= 0 && b.indexOf("rotateY(180deg)") >= 0),
+    "hover 翻面规则被 @media (hover:hover) 隔离");
+  assertStatic(hoverCss().indexOf(".card:hover .fc-sweep") >= 0,
+    "hover 规则同时放开装饰动画");
+  /* 剥掉 hover 媒体查询块后，剩下的部分不应再有卡片交互类的 :hover 规则。
+     只要漏一条，触摸设备就会因「粘住」的 :hover 把 pointer-events 交给背面，
+     静止态卡片正面点不动 —— 这类 bug 在桌面上完全看不出来。 */
+  assertStatic((() => {
+    let rest = cssText;
+    for (const b of hoverBlocks()) rest = rest.split(b).join("");
+    const leaked = rest.match(/\.card:hover[^{]*\{[^}]*(pointer-events|animation-play-state)/g);
+    return leaked === null;
+  })(), "所有 :hover 交互规则都被 hover 媒体查询隔离（无泄漏）");
+
+  if (staticFails.length) {
+    console.log("CSS 静态检查未通过，已中止（带着退化加载页面会让 jsdom 死循环）：");
+    staticFails.forEach(n => console.log("  FAIL " + n));
+    console.log("\n通过 0 / 0  未执行运行时测试");
+    process.exit(1);
+  }
+
   await new Promise((r) => {
     if (doc.readyState === "complete") r();
     else win.addEventListener("load", r);
@@ -127,6 +181,8 @@ function setVal(el, v) {
 
   // 6b. 3D 翻转卡结构与交互（真实点击 DOM，不只调函数）
   const cs = (sel) => win.getComputedStyle(q(sel));
+
+
   check("卡片含 3D 容器 card-3d", () => qa(".wall .card > .card-3d").length === 1 || qa(".wall .card > .card-3d").length);
   check("正反两面都是 direct child（3D 层级不被包裹打乱）",
     () => qa(".wall .card > .card-3d > .fc-face").length === 2 || qa(".wall .card > .card-3d > .fc-face").length);
@@ -141,15 +197,18 @@ function setVal(el, v) {
     const acts = qa(".fc-acts [data-act]");
     return acts.length === 1 && acts[0].dataset.act === "detail";
   });
-  check("翻面按钮存在且有 aria-pressed", () => {
-    const b = q(".fc-flip");
-    return !!b && b.getAttribute("aria-pressed") === "false";
-  });
-  /* 整卡只渲染一个翻面按钮，且必须挂在 .card 上而不是 .card-3d 里 ——
-     放进去的话它会跟着 3D 翻转，正反两面各画一次，视觉上叠成双层圆圈箭头。 */
-  check("整卡只有一个翻面按钮（不再正反两面各一个）", () => qa(".fc-flip").length === 1);
-  check("翻面按钮挂在 .card 上、不在 3D 翻转层内", () =>
-    !!q(".wall .card > .fc-flip") && qa(".card-3d .fc-flip").length === 0);
+  /* 卡片右下角那个常驻的圆形翻面按钮已按用户要求整块删除。
+     它在桌面上是纯视觉噪音（鼠标移上去卡片就自己翻了），
+     触摸端的翻面入口改由「点卡片」承担（见下方 cardFlipByHover 断言）。 */
+  check("卡片上不再有翻面按钮", () => qa(".fc-flip").length === 0);
+  check("翻面按钮的 CSS 也已清除（不留死样式）", () =>
+    win.eval("!String(document.querySelector('style') ? document.querySelector('style').textContent : '').includes('.fc-flip{')"));
+  /* 删按钮后不能留下给按钮让位的空隙：.fc-acts 曾有 padding-right:44px，
+     按钮没了这条会让人以为「详情」按钮没居中。
+     用静态检查而非 getComputedStyle：jsdom 的计算样式依赖布局，
+     而这条断言所在位置的路由未必是片库（q(".fc-acts") 会拿到 null）。 */
+  check("操作区不再为已删按钮保留右侧空隙", () =>
+    !/\.fc-acts\{[^}]*padding-right/.test(cssText));
   /* 命中测试修复的回归防线：不可见的那一面必须关掉指针事件。
      backface-visibility:hidden 只管绘制不管命中，正面靠 DOM 顺序
      抢走背面的全部点击（这正是「三个按钮都跳详情页」的根因）。 */
@@ -168,7 +227,6 @@ function setVal(el, v) {
     }
     return frontOff && backOn;
   });
-  check("背面操作区为翻面按钮留出空间（防重叠）", () => cs(".fc-acts").paddingRight !== "0px");
   // 3D 卡片最常见的失效：.card 上的 overflow:hidden 会 flatten preserve-3d
   check("卡片无 overflow:hidden（否则 preserve-3d 被压平）", () => cs(".wall .card").overflow !== "hidden");
   check("card-3d 声明 preserve-3d", () => cs(".card-3d").transformStyle === "preserve-3d");
@@ -178,42 +236,33 @@ function setVal(el, v) {
     cs(".fc-back").backfaceVisibility === "hidden");
   // 静止态光带/光球必须暂停（否则 60 张卡常驻跑 blur 动画）
   check("装饰动画静止态为 paused", () => cs(".fc-sweep").animationPlayState === "paused" && cs(".fc-orb").animationPlayState === "paused");
-  // hover 翻面
-  q(".wall .card").dispatchEvent(new win.MouseEvent("mouseover", { bubbles: true }));
-  check("hover 规则已声明（选择器存在）", () => {
-    let found = false;
-    for (const sheet of win.document.styleSheets) {
-      let rules; try { rules = sheet.cssRules; } catch (_) { continue; }
-      for (const r of rules) if (r.selectorText && /\.card:hover \.card-3d/.test(r.selectorText)) found = true;
-    }
-    return found;
+  /* 触摸端翻面入口：常驻按钮删掉后改由「点卡片」承担。
+     这条必须真跑一遍 —— 它是「删按钮」不会让手机端变成死功能的关键。
+     jsdom 不支持 :hover 媒体查询，cardFlipByHover() 在此返回 false，
+     正好等于触摸端分支，可以直接验证点一下是否翻面。 */
+  check("触摸端（无 hover）走点卡片翻面，不直接跳详情", () => {
+    win.eval("go('library')");
+    const card = q(".wall .card");
+    if(!card) return false;
+    if(card.classList.contains("is-flipped")) card.classList.remove("is-flipped");
+    const before = win.eval("state.route");
+    click(card);
+    return card.classList.contains("is-flipped") && win.eval("state.route") === before;
   });
-  check("hover 规则同时放开装饰动画", () => {
-    let found = false;
-    for (const sheet of win.document.styleSheets) {
-      let rules; try { rules = sheet.cssRules; } catch (_) { continue; }
-      for (const r of rules) if (r.selectorText && /\.card:hover \.fc-sweep/.test(r.selectorText) && /running/.test(r.style.animationPlayState)) found = true;
-    }
-    return found;
-  });
-  // 点击翻面按钮 → is-flipped 切换
-  click(q(".fc-flip"));
-  await sleep(60);
-  check("点翻面按钮后卡片进入 is-flipped", () => q(".wall .card").classList.contains("is-flipped"));
-  check("翻面后 aria-pressed 变为 true", () => qa(".fc-flip").every(b => b.getAttribute("aria-pressed") === "true"));
-  check("翻面后按钮文案切为「翻回封面」", () => qa(".fc-flip").every(b => b.getAttribute("aria-label") === "翻回封面"));
-  /* 触摸设备没有 hover，翻面按钮是唯一入口 —— 再点一次必须能翻回封面。
-     用 aria-label 找而不是 .fc-back .fc-flip：按钮已移出 3D 层，
-     不再是 .fc-back 的后代。 */
-  check("再点一次可翻回（触摸设备回头路）", () => {
-    const b = qa(".fc-flip")[0];
-    if(!b) return false;
-    click(b);
-    return !q(".wall .card").classList.contains("is-flipped");
-  });
+  /* 这条会真的跳进放映厅，所以必须排在「仍在片库页」断言之后、
+     且自己负责回到片库 —— 顺序错了会让后面依赖「当前在片库」的断言全挂。 */
   check("is-flipped 未误触发跳转（仍在片库页）", () => win.eval("state.route") === "library" || win.eval("state.route"));
+  check("翻面后再点卡片才进详情（触摸端两段式）", () => {
+    const card = q(".wall .card");
+    if(!card) return false;
+    if(!card.classList.contains("is-flipped")) return false;
+    click(card);
+    return win.eval("state.route") === "theater";
+  });
+  win.eval("go('library')");
+  await sleep(60);
   // 翻面状态下点详情仍能进放映厅
-  click(q(".fc-flip"));
+  win.eval("document.querySelector('.wall .card').classList.add('is-flipped')");
   await sleep(40);
   click(q('.fc-acts [data-act="detail"]'));
   await sleep(160);
@@ -236,7 +285,7 @@ function setVal(el, v) {
 
   // 7. 详情 + 放映厅结构
   /* 皮肤切换与待机语录屏保已按用户要求删除，原来的两条断言测的是
-     ���个不存在的功能，形式上是「通过」（`|| win.eval(...)` 永远真），
+     一个不存在的功能，形式上是「通过」（`|| win.eval(...)` 永远真），
      实际上什么都没验证。换成测新结构：详情在上、播放器在下。 */
   win.eval(`go("theater","${id2}")`);
   await sleep(100);

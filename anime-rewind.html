@@ -558,9 +558,20 @@ input[type="range"]{ accent-color:var(--accent); width:100%; }
   transition:transform var(--dur-slow) var(--ease);
   border-radius:var(--r-lg);
 }
-.card:hover .card-3d,
+/* 翻面触发：分设备能力给入口，不再挂常驻按钮。
+   原先卡片右下角常驻一个圆形翻面按钮，桌面端其实用不上 ——
+   鼠标移上去卡片就翻了，它纯粹是个视觉噪音（且在封面上压住画面）。
+   但触摸设备没有 hover，若只留 hover 入口，手机上背面就永远看不到。
+   所以：能 hover 的设备走 :hover，不能的走 JS 点击（见 bindLibraryActions），
+   翻面态统一用 .is-flipped 承载，两条路径共用同一套样式。
+   必须用 @media (hover:hover) 包住 :hover 规则：移动端浏览器点完会留下
+   「粘住」的 :hover，若不隔离，JS 刚翻好的面会被 :hover 规则接管，
+   出现「点了没反应 / 翻了又翻回去」的怪状。 */
 .card:focus-within .card-3d,
 .card.is-flipped .card-3d{ transform:rotateY(180deg); }
+@media (hover:hover){
+  .card:hover .card-3d{ transform:rotateY(180deg); }
+}
 
 .fc-face{
   position:absolute; inset:0; border-radius:var(--r-lg); overflow:hidden;
@@ -577,10 +588,19 @@ input[type="range"]{ accent-color:var(--accent); width:100%; }
    整个背面（含三个操作按钮）的点击全被它吃掉，冒泡到卡片的 data-open，
    表现为「三个按钮都跳到详情页」。
    修法是显式关掉不可见那一面的指针事件。
-   注意 :focus-within 也算「翻开」：键盘 Tab 进背面按钮时卡片同样处于翻开态。 */
-.card:hover .fc-front,.card:focus-within .fc-front,.card.is-flipped .fc-front{ pointer-events:none; }
-.card:hover .fc-back,.card:focus-within .fc-back,.card.is-flipped .fc-back{ pointer-events:auto; }
+   注意 :focus-within 也算「翻开」：键盘 Tab 进背面按钮时卡片同样处于翻开态。
+   :hover 触发的那条同样要包在 @media (hover:hover) 里 —— 触摸设备上
+   :hover 会「粘住」，若不隔离，静止态的卡片会因为残留 hover
+   把 pointer-events 交给背面，鼠标/手指再点正面就点不动了。 */
+.card:focus-within .fc-front,
+.card.is-flipped .fc-front{ pointer-events:none; }
+.card:focus-within .fc-back,
+.card.is-flipped .fc-back{ pointer-events:auto; }
 .fc-back{ pointer-events:none; }
+@media (hover:hover){
+  .card:hover .fc-front{ pointer-events:none; }
+  .card:hover .fc-back{ pointer-events:auto; }
+}
 
 /* 状态标记：封面封底一道 2px 细线（挂在正面内，避免 3D 层级错乱） */
 .fc-front::after{
@@ -634,8 +654,11 @@ input[type="range"]{ accent-color:var(--accent); width:100%; }
 .fc-orb-b{ width:76%; aspect-ratio:1; left:24%; top:-16%;   opacity:.34; animation-delay:-.8s; }
 .fc-orb-c{ width:16%; aspect-ratio:1; right:5%; top:16%;   opacity:.6;  animation-delay:-1.8s; }
 /* 只在翻开时才让装饰层运动：静止态零合成开销 */
-.card:hover .fc-sweep,.card:focus-within .fc-sweep,.card.is-flipped .fc-sweep,
-.card:hover .fc-orb,.card:focus-within .fc-orb,.card.is-flipped .fc-orb{ animation-play-state:running; }
+.card:focus-within .fc-sweep,.card.is-flipped .fc-sweep,
+.card:focus-within .fc-orb,.card.is-flipped .fc-orb{ animation-play-state:running; }
+@media (hover:hover){
+  .card:hover .fc-sweep,.card:hover .fc-orb{ animation-play-state:running; }
+}
 
 @keyframes fc-rotate{ from{ transform:rotateZ(0deg); } to{ transform:rotateZ(360deg); } }
 @keyframes fc-float{ 0%,100%{ transform:translateY(0); } 50%{ transform:translateY(10px); } }
@@ -648,7 +671,7 @@ input[type="range"]{ accent-color:var(--accent); width:100%; }
   .fc-face{ position:static; inset:auto; backface-visibility:visible; -webkit-backface-visibility:visible; }
   .fc-cover{ position:relative; inset:auto; aspect-ratio:3/4; }
   .fc-back{ transform:none; border-top:1px solid var(--border); }
-  .fc-sweep,.fc-orb,.fc-flip{ display:none; }
+  .fc-sweep,.fc-orb{ display:none; }
   /* 平铺后 .fc-body 不能再靠 flex 撑开，字幕块改用静态配色 */
   .fc-caption{ position:static; background:var(--panel-2); }
   .fc-name,.fc-orig,.fc-sub{ color:var(--text); }
@@ -665,24 +688,16 @@ input[type="range"]{ accent-color:var(--accent); width:100%; }
 .fc-rows span{ min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .fc-prog{ display:flex; align-items:center; gap:6px; font-size:11px; color:var(--muted); }
 .fc-prog .progress{ flex:1; }
-.fc-acts{ position:relative; z-index:1; display:flex; gap:6px; flex-wrap:wrap; padding-right:44px; }
+/* 底部操作区。原先有 padding-right:44px 给右下角那个圆形翻面按钮让位，
+   按钮删掉后这行会让「详情」按钮右侧凭空空一截、看起来没居中，已去掉。 */
+.fc-acts{ position:relative; z-index:1; display:flex; gap:6px; flex-wrap:wrap; }
 .fc-acts .btn{ flex:1 1 auto; min-width:0; min-height:30px; padding:0 var(--sp-2); }
 
-/* 翻面按钮：整卡只渲染一个，挂在 .card 上而不是某个 .fc-face 里。
-   原先正反两面各放一个，视觉上就是「右下角两个圆圈箭头」——
-   用户看到的是同一位置叠着两个同心圆（背面那个被正面那个压住）。
-   移出 .card-3d 后它不参与 3D 翻转，无论卡片朝哪面都停在同一处。 */
-.fc-flip{
-  position:absolute; right:8px; bottom:8px; z-index:6;
-  width:30px; height:30px; min-height:0; padding:0; border-radius:50%;
-  display:inline-flex; align-items:center; justify-content:center;
-  background:rgba(6,10,16,.62); border:1px solid rgba(255,255,255,.22); color:#fff;
-  -webkit-backdrop-filter:blur(4px); backdrop-filter:blur(4px);
-  transition:background var(--dur-fast),border-color var(--dur-fast),transform var(--dur-fast);
-}
-.fc-flip:hover{ background:rgba(6,10,16,.85); border-color:rgba(255,255,255,.4); }
-.fc-flip:active{ transform:scale(.92); }
-.fc-flip svg{ width:15px; height:15px; }
+/* 卡片右下角原先常驻一个圆形翻面按钮，现已整块删除。
+   桌面端鼠标移上去卡片就自己翻了，按钮纯属视觉噪音；
+   触摸端改用「点卡片翻面」，不再往封面上压一个圆圈。
+   保留这条注释是为了防止以后有人觉得「少了个翻面入口」又加回来 ——
+   要加回触摸端翻面，用 .is-flipped，不要加常驻按钮。 */
 
 .placeholder{
   width:100%; height:100%; display:flex; align-items:center; justify-content:center;
@@ -3345,13 +3360,11 @@ function cardHTML(a){
       : '<div class="fc-prog"><div class="progress"><i style="width:' + p + '%"></i></div><span>' + (a.watchedEpisodes||0) + "/" + a.totalEpisodes + " · " + Math.round(p) + "%</span></div>";
   }
 
-  // 整卡只渲染一个翻面按钮，挂在 .card 上（不在 .card-3d 内）。
-  // 原先正反两面各渲染一个，位置完全相同 —— 背面那个被正面那个压住，
-  // 看上去就是右下角一个「双层圆圈箭头」。移出 3D 层后它不跟着翻转，
-  // 两种朝向下都停在卡片右下角，且 aria-pressed 只需同步一处。
-  const flipBtn = '<button class="fc-flip" type="button" data-act="flip" data-id="' + attr(a.id) + '"' +
-    ' title="翻面" aria-label="翻面查看资料与操作" aria-pressed="false">' + ic("refresh",15) + "</button>";
-
+  // 卡片右下角原先还有一个常驻的圆形翻面按钮（flipBtn），现已整块删除。
+  // 它在桌面上纯属视觉噪音 —— 鼠标移上去卡片就自己翻了，按钮只是压住封面；
+  // 但触摸设备没有 hover，它曾是唯一的翻面入口。
+  // 现在这个入口由 bindLibraryActions 的「点卡片翻面」承担：
+  // 桌面端行为完全不变，触摸端点一下也能翻面看资料与操作。
   // 背面只留一个入口。
   // 原先三个按钮（改状态 / 重看 / 详情）实测点击后全都落到详情页 ——
   // 根因是 backface-visibility 不阻止命中测试，正面字幕块把背面按钮的
@@ -3395,7 +3408,6 @@ function cardHTML(a){
         "</div>" +
       "</div>" +
     "</div>" +
-    flipBtn +
   "</article>";
 }
 
@@ -3532,10 +3544,35 @@ function renderLibrary(root){
   bindLibraryActions(root);
 }
 
+/* 卡片当前能不能靠「悬停」翻面。
+   能 → 桌面端，:hover 已经在翻，点击直接进详情。
+   不能 → 触摸设备（手机/平板），以前靠右下角那个常驻的圆形翻面按钮，
+        该按钮已按用户要求删掉，于是翻面入口改由「点卡片」承担。
+   另有一条例外：开了「降低动效」时 CSS 根本不翻转（背面平铺在正面下方，
+   两面同时可见），此时点卡片就该直接进详情，没有翻面可言。 */
+function cardFlipByHover(){
+  if(reduceMotion()) return false;
+  return !!(window.matchMedia && window.matchMedia("(hover: hover)").matches);
+}
+
+/* 触摸端点卡片：第一次点翻面看资料，再点一次进详情。
+   翻面态统一落在 .is-flipped 上，与桌面端 :hover 是同一套样式。
+   为什么不直接进详情：背面还有完整资料和「详情」按钮，
+   直接跳走等于触摸端永远看不到背面 —— 那才是真的功能缺失。
+   （那个常驻的圆形翻面按钮已按用户要求删掉了，触摸端原本只剩它一个入口。） */
 function bindLibraryActions(root){
+  /* 触摸端是否需要「点一下翻面」。只算一次，不在每个卡片的点击里问媒体查询。 */
+  const tapToFlip = !cardFlipByHover();
+
   root.querySelectorAll("[data-open]").forEach(n => {
     n.addEventListener("click", (e) => {
       if(e.target.closest("[data-act],[data-inline],input,select,button")) return;
+      /* 触摸端：卡片没翻开时先把资料面翻出来，翻开状态下再点才进详情。
+         桌面端（tapToFlip 为 false）直接进详情，行为与以前一致。 */
+      if(tapToFlip && n.classList.contains("card") && !n.classList.contains("is-flipped")){
+        n.classList.add("is-flipped");
+        return;
+      }
       go("theater", n.dataset.open);
     });
     if(n.tagName === "ARTICLE"){
@@ -3565,20 +3602,6 @@ async function libraryAction(act, id, root){
   if(!a) return;
   switch(act){
     case "detail": go("theater", id); break;
-    case "flip": {
-      // 触摸设备没有 hover，翻面按钮是唯一入口；点击卡片本身仍进详情。
-      // 整卡只有一个翻面按钮（原先正反两面各一个，视觉上叠成双层圆圈）。
-      const card = root.querySelector('.card[data-open="' + (window.CSS && CSS.escape ? CSS.escape(id) : id) + '"]');
-      if(!card) break;
-      const on = card.classList.toggle("is-flipped");
-      const btn = card.querySelector(".fc-flip");
-      if(btn){
-        btn.setAttribute("aria-pressed", on ? "true" : "false");
-        btn.setAttribute("aria-label", on ? "翻回封面" : "翻面查看资料与操作");
-        btn.title = on ? "翻回封面" : "翻面";
-      }
-      break;
-    }
     case "rewatch": await promptReview(a); break;
     case "fav": a.favorite = !a.favorite; await saveAnime(a); rerender(); break;
     case "master": a.masterpiece = !a.masterpiece; await saveAnime(a); rerender(); break;

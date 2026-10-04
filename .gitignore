@@ -4,3 +4,5 @@ assets/honor-webp/
 *.log
 .DS_Store
 tools/_shot/
+.wbapp_*.genie
+.workbuddy/applications.yaml

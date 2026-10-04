@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<!--
+  番忆 · GitHub Pages 入口页
+  ------------------------------------------------------------
+  存在的原因：主文件叫 anime-rewind.html（本地双击、开具名文件都用这个名），
+  而 GitHub Pages 的站点根路径只会找 index.html，缺了它就直接返回
+  “404 未找到文件”。所以这里放一个跳转页，把根路径接到主文件上。
+
+  为什么不用「复制一份主文件当 index.html」：
+  那是把1.1MB 单文件变成两份独立副本，此后每次改代码都要记得同步两处，
+  漏同步就出现两个行为不一致的版本。跳转页只做路由，代码唯一来源仍是
+  anime-rewind.html。
+
+  为什么不用纯meta refresh：
+  老浏览器与禁用 JS 的场景下无脚本手段，必须留 <noscript> 链接兜底。
+-->
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Anime Rewind・番忆 · 童年动画档案馆</title>
+<meta name="robots" content="noindex, follow">
+<meta name="author" content="ll9-m">
+<meta name="copyright" content="© 2026 ll9-m">
+<meta name="license" content="CC BY-NC 4.0">
+<link rel="canonical" href="anime-rewind.html">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230e1116'/%3E%3Cpath d='M17.5 8.5 9 16l8.5 7.5V18.6h9.2v-5.2h-9.2z' fill='%2322d3ee'/%3E%3C/svg%3E">
+<script>
+/* 相对路径跳转：站点可能被部署在仓库子路径（/Anime_Rewind/）或域名根下，
+   用相对路径而不是绝对路径，两种部署位置都不会跳错。
+   replace 而非 assign：不往历史里塞一条，用户按返回键不会又被弹回来。 */
+location.replace("anime-rewind.html");
+</script>
+<style>
+  body{
+    margin:0; min-height:100vh; display:grid; place-content:center; gap:14px;
+    justify-items:center; background:#0e1116; color:#e6edf3;
+    font:400 15px/1.7 system-ui,-apple-system,"Segoe UI","Microsoft YaHei",sans-serif;
+    text-align:center; padding:24px;
+  }
+  a{ color:#22d3ee; }
+  p{ margin:0; color:#9aa7b4; font-size:13px; }
+</style>
+</head>
+<body>
+  <!-- JS 正常时已在上面跳转，这里只是脚本被拦截时的兜底出口。 -->
+  <a href="anime-rewind.html">进入番忆 · Anime Rewind</a>
+  <p>© 2026 ll9-m · 代码采用 <a href="https://creativecommons.org/licenses/by-nc/4.0/" rel="noopener noreferrer" target="_blank">CC BY-NC 4.0</a> 许可</p>
+  <noscript>
+    <p>浏览器未启用 JavaScript，无法自动跳转。</p>
+  </noscript>
+</body>
+</html>

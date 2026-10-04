@@ -3698,7 +3698,6 @@ const EMBED_RULES = [
       const aid = pick(u, /aid=(\d+)/) || pick(u, /bilibili\.com\/video\/av(\d+)/);
       let p = pick(u, /[?&]p=(\d+)/);
       if(!bvid && !aid) return null;
-      // 老接口在部分网络下已失效，优先用 player.bilibili.com（实测无 XFO）
       const src = bvid
         ? "https://player.bilibili.com/player.html?bvid=" + bvid + (p ? "&p=" + p : "") + "&high_quality=1&danmaku=0&autoplay=0"
         : "https://player.bilibili.com/player.html?aid=" + aid + (p ? "&p=" + p : "") + "&high_quality=1&danmaku=0&autoplay=0";
@@ -3727,6 +3726,63 @@ const EMBED_RULES = [
 ];
 function hostOf(u){ try { return new URL(u).hostname; } catch(e){ return ""; } }
 function pick(u, re){ const m = u.match(re); return m ? m[1] : null; }
+
+/* ---- B 站番剧（/anime/play/*）----
+ *
+ * 起因是一个真实故障：用户粘的是番剧播放页
+ *   https://www.bilibili.com/bangumi/play/ep102167
+ * 而下面的 bilibili 规则只认 BV 号与 av 号，取不到 bvid/aid 就返回 null，
+ * 于是「播放」报解析失败、「保存」也被一起拒绝（保存被错误地依赖了嵌入解析）。
+ *
+ * 关键实测结论（tools/probe-bili-shot.js + tools/probe-bili-api.js）：
+ *   1. player.bilibili.com/player.html?ep_id=102167  虽然 HTTP 200，
+ *      渲染出来是「非常抱歉…视频链接失效」。番剧不能直接用 ep_id 播。
+ *   2. 换成 bvid + cid 立刻正常出画面（实测《漆黑的子弹》24:00）。
+ *   3. 季信息 API（pgc/view/web/season）在真实浏览器页面里 fetch 返回 200，
+ *      带 bvid/cid/episodes 完整数据 —— 所以纯前端就能完成换算，不必加后端。
+ */
+function bilibiliSeasonId(u){
+  // /bangumi/play/ss4181 → season_id=4181；/bangumi/play/ep102167 → 走 ep_id 换算
+  const ss = pick(u, /bangumi\/play\/ss(\d+)/) || pick(u, /[?&]season_id=(\d+)/);
+  if(ss) return { seasonId:ss };
+  const ep = pick(u, /bangumi\/play\/ep(\d+)/) || pick(u, /[?&]ep_id=(\d+)/);
+  if(ep) return { epId:ep };
+  return null;
+}
+const biliSeasonCache = new Map();
+/* 换算番剧 → bvid + cid。返回 { bvid, cid, title, total } 或抛错。
+   带缓存：同一季反复打开不该反复打扰对方接口。 */
+async function fetchBiliSeason(key){
+  const ck = JSON.stringify(key);
+  if(biliSeasonCache.has(ck)) return biliSeasonCache.get(ck);
+  const q = key.epId ? "ep_id=" + key.epId : "season_id=" + key.seasonId;
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), 8000);
+  let data;
+  try{
+    const res = await fetch("https://api.bilibili.com/pgc/view/web/season?" + q,
+      { signal: ctl.signal, credentials:"omit" });
+    if(!res.ok) throw new Error("番剧接口返回 " + res.status);
+    data = await res.json();
+  }catch(e){
+    throw new Error("查不到番剧信息（" + (e && e.message || e) + "）");
+  }finally{ clearTimeout(timer); }
+  if(!data || data.code !== 0 || !data.result) throw new Error("番剧接口没有返回可用数据");
+  const r = data.result;
+  const eps = r.episodes || [];
+  /* ep_id 入口要精确定位到用户点的那一集：接口返回整季，
+     第一集不一定是目标集。 */
+  let target = null;
+  if(key.epId){
+    const want = String(key.epId);
+    target = eps.find(e => String(e.ep_id) === want) || eps.find(e => String(e.bvid) && String(e.link || "").indexOf("ep" + want) >= 0);
+  }
+  const ep = target || eps[0];
+  if(!ep || !ep.bvid || !ep.cid) throw new Error("番剧接口里没有这一集的播放信息");
+  const out = { bvid:ep.bvid, cid:ep.cid, title:r.season_title || r.title || "", total:eps.length };
+  biliSeasonCache.set(ck, out);
+  return out;
+}
 /* 宽松校验：只要求有协议头。URL 构造函数会拒绝 javascript: 等伪协议。 */
 function normalizeStreamURL(u){
   const s = String(u || "").trim();
@@ -3740,7 +3796,8 @@ function normalizeStreamURL(u){
   }catch(e){ return ""; }
 }
 /* 把任意网址解析为可嵌入地址；同时告知用户「发生了什么转换」，
-   否则他会以为自己粘的链接被系统偷偷改了。 */
+   否则他会以为自己粘的链接被系统偷偷改了。
+   番剧链接需要一次网络换算，所以额外提供异步版 resolveEmbedAsync。 */
 function resolveEmbed(raw){
   const u = normalizeStreamURL(raw);
   if(!u) return { ok:false, reason:"网址无效" };
@@ -3748,24 +3805,62 @@ function resolveEmbed(raw){
     if(!r.test(u)) continue;
     const src = r.build(u);
     if(src) return { ok:true, src, rule:r, changed: src !== u, orig:u };
+    /* 番剧播放页：同步阶段无法换算，但并不是无效链接。
+       标记 needsSeason 交给异步流程，提示语要说清「正在换算」而不是「不支持」。 */
+    if(r.id === "bilibili" && bilibiliSeasonId(u)){
+      return { ok:false, needsSeason:true, reason:"正在换算番剧播放地址…", rule:r, orig:u };
+    }
     return { ok:false, reason:"没能从这条 " + r.name + " 链接里解析出视频地址，请改用带播放器的网址", rule:r, orig:u };
   }
   return { ok:false, reason:"无法识别的网址", orig:u };
 }
+/* 异步解析：内部处理番剧换算。UI 一律走这个。 */
+/* 换算失败时不留死路：把「官方页直接看」的结果一起带回去。
+ *
+ * 实测（tools/probe-file-origin.js）：用 file:// 打开时 origin 是 null，
+ * B 站接口一律 "Failed to fetch"，番剧换算必然失败。这是浏览器的
+ * 同源策略，不是我代码能绕过的 —— 与其让用户对着一个空面板发呆，
+ * 不如明确告诉他「这台机器上无法内嵌，已为你准备官方页面」。
+ */
+async function resolveEmbedAsync(raw){
+  const sync = resolveEmbed(raw);
+  if(sync.ok || !sync.needsSeason) return sync;
+  try{
+    const key = bilibiliSeasonId(sync.orig);
+    const info = await fetchBiliSeason(key);
+    const rule = EMBED_RULES.find(r => r.id === "bilibili");
+    const src = "https://player.bilibili.com/player.html?bvid=" + info.bvid +
+      "&cid=" + info.cid + "&p=1&high_quality=1&danmaku=0&autoplay=0";
+    return { ok:true, src, rule, changed:true, orig:sync.orig, season:info };
+  }catch(e){
+    return {
+      ok:false,
+      needOfficial:true,
+      official:sync.orig,
+      reason:"番剧地址需要联网换算成播放器地址，但当前环境取不到（" +
+        (e && e.message || String(e)) + "）。" +
+        "点「新标签打开」会直接跳到 B 站官方页面观看，片源已经保存好了。",
+      rule:sync.rule, orig:sync.orig
+    };
+  }
+}
 
-/* 打开外部播放器。返回一个状态对象供 UI 挂诊断逻辑。 */
-function openExternalPlayer(raw, onStatus){
-  const res = resolveEmbed(raw);
+/* 打开外部播放器。返回一个状态对象供 UI 挂诊断逻辑。
+   番剧需要网络换算，所以这里改成异步。 */
+async function openExternalPlayer(raw, onStatus){
+  const res = await resolveEmbedAsync(raw);
   if(!res.ok){
     onStatus({ phase:"error", reason:res.reason, orig:res.orig || raw });
     return res;
   }
-  onStatus({ phase:"loading", src:res.src, rule:res.rule, changed:res.changed, orig:res.orig });
+  onStatus({ phase:"loading", src:res.src, rule:res.rule, changed:res.changed, orig:res.orig, season:res.season });
   return res;
 }
 
-/* 在放映厅页内挂载播放器。返回清理函数。 */
-function mountStreamPlayer(mountEl, raw, statusEl){
+/* 在放映厅页内挂载播放器。返回清理函数。
+   番剧需要先换算 bvid+cid，故为异步；调用方必须 await，
+   否则拿到的 Promise 会被当成清理函数，播放器永远挂不上去。 */
+async function mountStreamPlayer(mountEl, raw, statusEl){
   const frame = document.createElement("iframe");
   frame.className = "stream-frame";
   frame.setAttribute("allow", "accelerometer; autoplay; encrypted-media; picture-in-picture; fullscreen");
@@ -3793,19 +3888,25 @@ function mountStreamPlayer(mountEl, raw, statusEl){
   frame.addEventListener("load", () => {
     if(settled) return;
     settled = true; clear();
-    const res = resolveEmbed(raw);
+    /* 这里不能再用同步 resolveEmbed —— 番剧链接此刻需要的是
+       已换算好的 player 地址，而不是原始 bangumi 页。传入实际 src 重新判定。 */
+    const res = resolveEmbed(frame.src);
     setStatus("warn",
-      (res.changed ? "已把链接转换为 " + res.rule.name + " 播放器地址。" : "") +
-      "如果画面是空白，说明该网站禁止被嵌入（这是对方站点的设置，不是本应用的问题）。请用右侧按钮在新标签打开。");
+      (res.changed || /player\.bilibili\.com/.test(frame.src)
+        ? "已把链接转换为 B 站播放器地址。" : "") +
+      "如果画面是空白或提示无法播放，说明该网站禁止被嵌入或需要登录（这是对方站点的设置，不是本应用的问题）。请用「新标签打开」。");
   });
 
-  const res = openExternalPlayer(raw, st => {
+  const res = await openExternalPlayer(raw, st => {
     if(st.phase === "error"){
       settled = true; clear();
       setStatus("err", st.reason);
       return;
     }
     settled = true; clear();
+    if(st.season && st.season.title){
+      setStatus("warn", "已匹配到《" + st.season.title + "》，正在加载播放器…");
+    }
     frame.src = st.src;
     // 兜底：load 没来（比如被 CSP 彻底拦住）时给出明确说法
     timer = setTimeout(() => {
@@ -3813,6 +3914,12 @@ function mountStreamPlayer(mountEl, raw, statusEl){
       setStatus("err", "15 秒内没有收到播放器的响应，这几乎可以确定是该网站禁止了第三方嵌入。请在新标签打开。");
     }, 15000);
   });
+
+  /* 换不出来（needOfficial）就不要挂一个空 iframe，
+     也不返回清理函数 —— 返回 { needOfficial } 让调用方决定下一步。 */
+  if(res && !res.ok && res.needOfficial){
+    return { needOfficial:true, official:res.official, reason:res.reason };
+  }
 
   mountEl.innerHTML = "";
   mountEl.appendChild(frame);
@@ -3844,7 +3951,9 @@ function applyEpToURL(raw, ep){
   try{
     const url = new URL(u);
     if(/(^|\.)bilibili\.com$/i.test(url.hostname)){
-      url.searchParams.set("p", String(ep));
+      /* 番剧页（bangumi/play/ep*、ss*）用 ?ep=N，普通投稿视频用 ?p=N。
+         写错参数名不会报错，只是静默不生效 —— 用户会以为功能坏了。 */
+      url.searchParams.set(bilibiliSeasonId(u) ? "ep" : "p", String(ep));
       return url.href;
     }
   }catch(e){}
@@ -3858,11 +3967,12 @@ function renderStreamLauncher(a){
     "<h3>外部播放器</h3>" +
     '<span class="hint">' + (a ? "片源按这部作品保存，换番不会互相覆盖" : "临时片源（未选作品）") + "</span></div>" +
     '<p class="small muted mb-3">粘一个播放网址（YouTube / 哔哩哔哩 / Vimeo，或任意允许嵌入的网站）。' +
-    "本应用会自动把常见分享链接转换成播放器地址；保存后下次打开这部作品直接续播。</p>" +
+    "B 站的番剧播放页（<code>bilibili.com/bangumi/play/...</code>）会自动换算成可播放地址。" +
+    "保存后下次打开这部作品直接续播；网址随时可以改。</p>" +
     '<div class="row gap-2" style="flex-wrap:wrap">' +
       '<div class="search-wrap" style="flex:1 1 320px;max-width:none">' + ic("link",16) +
         '<input class="input" id="st-url" type="url" inputmode="url" spellcheck="false" ' +
-        'placeholder="https://www.bilibili.com/video/BV... 或 https://youtu.be/..." value="' + attr(u) + '">' +
+        'placeholder="番剧页 / 视频页 / youtu.be 链接都可以" value="' + attr(u) + '">' +
       "</div>" +
       '<div class="field" style="flex:0 0 132px"><label for="st-ep">看到第几集</label>' +
         '<input class="input" id="st-ep" type="number" inputmode="numeric" min="1" step="1" ' +
@@ -3926,7 +4036,7 @@ function bindStreamLauncher(root, a){
     return applyEpToURL(input.value, ep != null && !isNaN(ep) ? ep : null);
   }
 
-  function play(){
+  async function play(){
     const typed = input.value.trim();
     /* 先判「用户到底填了什么」，再判归一化后的地址。
        反过来写会有洞：applyEpToURL 对 javascript: 这类伪协议会归一化成空串，
@@ -3935,13 +4045,23 @@ function bindStreamLauncher(root, a){
     if(!typed){ showError("请先填一个播放网址"); return; }
     const raw = effectiveURL();
     if(!raw){ showError("网址无效：只接受 http / https 开头的地址"); return; }
-    const res = resolveEmbed(raw);
-    if(!res.ok){ showError(res.reason); return; }
     mount.hidden = false;
     // 每次播放前先清掉上一个 iframe 的网络与计时器，否则快速连点会叠出多个播放器
     if(cleanup) cleanup();
-    setStatus("warn", "正在加载 " + res.rule.name + " 播放器…");
-    cleanup = mountStreamPlayer(mount, raw, status);
+    setStatus("warn", "正在解析播放地址…");
+    /* 番剧链接要现查接口换 bvid+cid，所以这里必须 await。
+       不 await 会让 cleanup 在 iframe 建好之前就返回，播放器永远挂不上去。 */
+    const fn = await mountStreamPlayer(mount, raw, status);
+    /* 换不出来时（典型是 file:// 打开、origin=null 被接口拒绝），
+       与其留一个空面板，不如直接把用户送到官方页面 ——
+       这是用户明确要求过的兜底：「不能站内播就自动跳转官方」。 */
+    if(fn && fn.needOfficial && fn.official){
+      mount.hidden = true;
+      try{ window.open(fn.official, "_blank", "noopener,noreferrer"); }catch(e){}
+      setStatus("warn", "已为你打开 B 站官方页面。片源已保存，下次直接续播。");
+      return;
+    }
+    cleanup = fn;
   }
   /* 保存：不整页重渲染。rerender() 会把 iframe 销毁掉，
      正在播的视频会被打断 —— 保存只是存数据，没必要牺牲播放状态。 */
@@ -3949,7 +4069,14 @@ function bindStreamLauncher(root, a){
     const raw = input.value.trim();
     const ep = readEp();
     if(isNaN(ep)){ showError("集数必须是大于 0 的整数"); return; }
-    if(raw && !resolveEmbed(raw).ok){ showError("网址无法识别，未保存"); return; }
+    /* 这里只校验「是不是一个安全的 http(s) 网址」，
+       绝不能要求 resolveEmbed 成功。
+       原先写的是 `if(raw && !resolveEmbed(raw).ok) 拒绝保存`，
+       后果是：任何一时无法内嵌的链接（包括番剧页、需要登录的站点、
+       对方临时改版的页面）都存不下来。用户明确说过「连保存都不行」——
+       存网址和能不能在页内播放是两件事，把前者绑死在后者上，
+       等于因为播放器不支持而剥夺了用户保存自己资料的能力。 */
+    if(raw && !normalizeStreamURL(raw)){ showError("网址无效：只接受 http / https 开头的地址"); return; }
     if(!a){ showError("请先从片库打开一部作品，再保存片源"); return; }
     a.streamUrl = raw;
     a.streamEp = ep;
@@ -3962,10 +4089,10 @@ function bindStreamLauncher(root, a){
     toast(raw ? "片源已保存" : "已清除片源", "ok");
   }
 
-  root.querySelectorAll("[data-st]").forEach(b => b.addEventListener("click", () => {
+  root.querySelectorAll("[data-st]").forEach(b => b.addEventListener("click", async () => {
     const act = b.dataset.st;
-    if(act === "play"){ play(); return; }
-    if(act === "save"){ save(); return; }
+    if(act === "play"){ await play(); return; }
+    if(act === "save"){ await save(); return; }
     if(act === "open"){
       const u = normalizeStreamURL(effectiveURL());
       if(!u){ setStatus("err", "网址无效，无法打开"); return; }
@@ -3992,7 +4119,15 @@ function bindStreamLauncher(root, a){
   });
   input.addEventListener("input", debounce(() => {
     syncStreamLauncher(root);
-    if(resolveEmbed(input.value).ok) setStatus("warn", "地址可识别，按「播放」开始。");
+    const v = input.value.trim();
+    if(!v) return;
+    /* 提示改用「能否归一化」而不是「能否内嵌」——
+       后者会让番剧页这类合法地址被误报成无法识别。
+       番剧需要换算，交给播放时提示。 */
+    if(!normalizeStreamURL(v)){ setStatus("err", "这个地址无法识别，只接受 http / https 开头的网址。"); return; }
+    if(resolveEmbed(v).ok) setStatus("warn", "地址可识别，按「播放」开始。");
+    else if(bilibiliSeasonId(normalizeStreamURL(v))) setStatus("warn", "已识别为 B 站番剧，按「播放」自动换算播放地址。");
+    else setStatus("warn", "网址已记录。该网站可能禁止被嵌入，播放无画面时请用「新标签打开」。");
   }, 350));
   syncStreamLauncher(root);
   // 切走时务必断开 iframe，否则外部站点的音频/视频会继续在后台播放

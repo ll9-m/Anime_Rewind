@@ -258,6 +258,78 @@ function check(name, cond, detail){
   check("放映厅页头不再有「换一条语录」按钮", !/换一条语录/.test(visibleText), visibleText.slice(0, 60));
   check("放映厅页头不再有 CRT/现代影院皮肤切换", !/现代影院/.test(visibleText), visibleText.slice(0, 60));
 
+  /* ---------- 番剧播放页（真实故障回归） ----------
+   *
+   * 用户粘的是 https://www.bilibili.com/bangumi/play/ep102167，
+   * 而 bilibili 规则只认 BV/av —— 取不到 bvid/aid 就返回 null。
+   * 连锁反应有两个，都很容易被忽略：
+   *   1) 播放直接报「没能解析出视频地址」；
+   *   2) 保存被一起拒绝（save() 当时写的是 `!resolveEmbed(raw).ok` 就 return）。
+   * 第 2 条才是用户真正抱怨的「连保存都不行」—— 保存一个网址
+   * 跟能不能在页内播放本就是两件事，不该绑死。
+   * 真实浏览器验证见 tools/e2e-theater-stream.js。 */
+  const bangumi = [
+    ["https://www.bilibili.com/bangumi/play/ep102167", "epId", "102167"],
+    ["https://www.bilibili.com/bangumi/play/ep102167?spm_id_from=333.337.0.0", "epId", "102167"],
+    ["https://www.bilibili.com/bangumi/play/ss4181", "seasonId", "4181"],
+    ["https://www.bangumi.tv/play/ep102167", null, null]
+  ];
+  for (const [input, key, val] of bangumi) {
+    const k = evSync('bilibiliSeasonId(normalizeStreamURL(' + JSON.stringify(input) + '))');
+    if (key === null) {
+      check("非 B 站番剧链接不被误判: " + input.slice(0, 44), k === null, JSON.stringify(k));
+      continue;
+    }
+    check("番剧链接被识别(" + key + "): " + input.slice(0, 40),
+      k && k[key] === val, JSON.stringify(k));
+  }
+  const needSeason = evSync('resolveEmbed("https://www.bilibili.com/bangumi/play/ep102167")');
+  check("番剧链接走 needsSeason 换算流程，而不是被判为无效",
+    needSeason && needSeason.ok === false && needSeason.needsSeason === true,
+    JSON.stringify({ ok: needSeason.ok, needs: needSeason.needsSeason }));
+  check("needsSeason 的提示语不说「无法识别」（否则用户以为自己粘错了）",
+    needSeason && !/无法识别|没能从这条/.test(needSeason.reason || ""), needSeason && needSeason.reason);
+
+  // 保存绝不能被嵌入解析拦住 —— 这是本次修复的核心。
+  // 用 go() 进详情：直接改 state.routeId 不会触发重渲染。
+  await ev('go("theater", "an_test1");');
+  await new Promise(r => setTimeout(r, 400));
+  check("进入详情后播放器面板就位", !!doc.querySelector("#st-url"));
+  const saveBangumi = await ev(`
+    const input = document.querySelector("#st-url");
+    input.value = "https://www.bilibili.com/bangumi/play/ep102167?spm_id_from=333.337.0.0";
+    const ep = document.querySelector("#st-ep");
+    ep.value = "2";
+    document.querySelector('[data-st="save"]').click();
+    await new Promise(r => setTimeout(r, 400));
+    const a = animeById("an_test1");
+    return JSON.stringify({ u: a.streamUrl, e: a.streamEp });
+  `);
+  const sb = JSON.parse(saveBangumi);
+  check("无法内嵌的番剧网址也能保存（本次修复）",
+    sb.u === "https://www.bilibili.com/bangumi/play/ep102167?spm_id_from=333.337.0.0", saveBangumi);
+  check("保存集数与番剧链接同时生效", sb.e === 2, saveBangumi);
+
+  // 换算失败时不得抛出未捕获异常，且必须带回官方页
+  const seasonFail = await ev(`
+    window.fetch = () => Promise.reject(new Error("no-network"));
+    const res = await resolveEmbedAsync("https://www.bilibili.com/bangumi/play/ep102167");
+    return JSON.stringify({ ok: res.ok, needOfficial: !!res.needOfficial,
+      official: res.official || null, reason: res.reason || "" });
+  `);
+  const sf = JSON.parse(seasonFail);
+  check("换算失败时返回 needOfficial 而不是抛错", sf.ok === false && sf.needOfficial === true, seasonFail);
+  check("换算失败时带回官方页地址", String(sf.official || "").indexOf("bangumi/play/ep102167") > 0, seasonFail);
+  check("换算失败的提示指向「新标签打开」这条例外", /新标签打开/.test(sf.reason || ""), sf.reason);
+
+  // 集数写回：番剧用 ep=，普通投稿用 p=（写错参数名会静默不生效）
+  check("番剧链接写回归数用 ep=",
+    evSync('applyEpToURL("https://www.bilibili.com/bangumi/play/ep102167", 5)').indexOf("ep=5") > 0,
+    evSync('applyEpToURL("https://www.bilibili.com/bangumi/play/ep102167", 5)'));
+  check("普通投稿视频写回归数仍用 p=",
+    evSync('applyEpToURL("https://www.bilibili.com/video/BV1GJ411x7h7", 5)').indexOf("p=5") > 0,
+    evSync('applyEpToURL("https://www.bilibili.com/video/BV1GJ411x7h7", 5)'));
+
   console.log("\n通过 " + pass + " / " + (pass + fail));
   if (errs.length) { console.log("\n失败项："); errs.forEach(e => console.log("  · " + e)); }
   process.exit(fail ? 1 : 0);

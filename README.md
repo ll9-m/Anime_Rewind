@@ -39,7 +39,7 @@ python -m http.server 8080       # 然后访问 http://localhost:8080/anime-rewi
 | **放映厅** | 详情在上、播放器在下。片源地址与观看进度**按作品保存**，随时改随时记 |
 | **童年编年史** | 按「几岁 / 几年级看的」把作品钉回时间轴 |
 | **重看转盘** | 让转盘替你决定今晚重温哪一部 |
-| **语录本** | 内置 28 条经典台词 + 自己的收藏，支持 CSV 批量导入 |
+| **语录本** | 内置 26 条经典台词 + 自己的收藏，支持 CSV 批量导入 |
 | **设置** | 9 个分区，所有可控项都在这里 |
 
 另有**荣誉墙**（侧栏入口）：12 个内置称号 + 自定义称号，按收录数据实时计算，无需领取。
@@ -122,8 +122,8 @@ export NODE_PATH=C:/Users/lxc/.workbuddy/binaries/node/workspace/node_modules
 ```
 
 ```bash
-# 功能测试（共 392 项）
-node tools/smoke.js                  # 113 项 · 启动/入库/七页面/主题/导入导出/3D 卡/触摸端
+# 功能测试（共 404 项）
+node tools/smoke.js                  # 125 项 · 启动/入库/七页面/主题/导入导出/3D 卡/触摸端/版权
 node tools/test-csv.js               #  30 项 · CSV 解析与表头映射
 node tools/test-sound.js             #  25 项 · WebAudio 音效
 node tools/test-theater.js           #  94 项 · 放映厅、播放记录、死设置清理
@@ -139,12 +139,13 @@ node tools/caption-contrast.js       # 封面墙字幕
 node tools/contrast-stream-note.js   # 播放记录提示条
 ```
 
-当前状态：**392/392 全绿**，5 个对比度脚本全部通过 WCAG AA。
+当前状态：**404/404 全绿**，5 个对比度脚本全部通过 WCAG AA。
 
 ### 浏览器端验证（CDP）
 
 ```bash
 node tools/verify-flip.js       # 桌面 / 无 hover 两条翻面路径
+node tools/verify-license.js    # 版权声明：meta / 关于页排版 / 三主题对比度
 node tools/verify-series.js     # 系列功能全流程 + 截图
 node tools/verify-visual.js
 node tools/verify-bg-css.js
@@ -305,6 +306,51 @@ DOM 顺序靠前的正面元素会把背面的点击全部吃掉，冒泡到卡�
 
 ---
 
-## 许可
+## 版权与许可
 
-个人项目，随意取用。
+本项目的**源代码**采用 [Creative Commons Attribution-NonCommercial 4.0 International
+License（CC BY-NC 4.0）](LICENSE) 许可。
+
+**© 2026 ll9-m**（[GitHub](https://github.com/ll9-m)）
+
+你可以：
+
+- 复制、修改、二次创作
+- 个人学习、非商业用途使用
+- 在注明来自本项目的前提下分享你的改编版本
+
+你**不能**：
+
+- 任何商业用途（包括但不限于收费售卖、付费订阅、广告变现、
+  作为商业产品的一部分提供服务）
+- 去除或隐瞒署名信息
+
+完整协议见 [`LICENSE`](LICENSE)（协议全文，未经改动）。SPDX 标识：`CC-BY-NC-4.0`
+
+> 协议全文 408 行，建议不要改动它 —— CC 的署名条款要求「保留版权声明」，
+> 擅自删改会让许可失效，法律上就不再是 CC BY-NC 4.0 了。
+
+### 第三方素材不在此许可范围内
+
+上面的许可**只覆盖我写的代码**。以下内容的版权归各自权利人所有，
+不随本项目的许可一起开放：
+
+| 内容 | 来源 | 说明 |
+|---|---|---|
+| 作品资料、封面图 | [Bangumi 番组计划](https://bgm.tv)、[AniList](https://anilist.co) | 通过公开 API 获取，仅在本机缓存，**不随代码分发** |
+| 内置语录台词（26 条） | 各作品的原作台词 | 台词本身属于原作作者/版权方，此处仅作个人收藏用途 |
+| 荣誉墙配图（5 张） | AI 生成 | 由 `tools/build-honor-art.js` 生成后内联，生成来源已在该脚本中记录 |
+| 字体 | Outfit / JetBrains Mono | [SIL Open Font License](https://scripts.sil.org/OFL)，随 Google Fonts 分发 |
+| ECharts | [Apache-2.0](https://github.com/apache/echarts) | 走 CDN 引入，未内联 |
+| 「Anime Rewind」「番忆」名称 | 本项目 | 未注册商标 |
+
+如果你要把本项目用于商业场景，或需要明确区分「哪些是你的、哪些不是」，
+请先移除上述第三方内容，或改用其他许可（例如 MIT / Apache-2.0，
+它们不限制商业用途）。
+
+### 商标与内容归属
+
+**「Anime Rewind」与「番忆」是本项目的名称，不是作品名称。**
+本项目与它收录的任何动画作品、出版社、电视台、制作公司无隶属或背书关系。
+片库中出现的所有作品名称、著作权与相关权利归各自权利人所有。
+

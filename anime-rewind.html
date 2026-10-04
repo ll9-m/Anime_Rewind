@@ -6,6 +6,14 @@
 <title>Anime Rewind・番忆 · 童年动画档案馆</title>
 <meta name="description" content="番忆 — 把童年看过的动画建成一座私人档案馆。记录片库、重看次数、童年编年史与语录。数据全部留在本机。">
 <meta name="color-scheme" content="dark light">
+<!-- 版权与许可：CC BY-NC 4.0 要求署名信息随作品一起分发。
+     这个文件是单文件交付、极易被单独转发，一旦脱离仓库，
+     页内的声明就是唯一的署名载体 —— 所以 meta 与页脚两处都要有，
+     且不能只写在 README 里（README 不会跟着文件走）。 -->
+<meta name="author" content="ll9-m">
+<meta name="copyright" content="© 2026 ll9-m">
+<meta name="license" content="CC BY-NC 4.0">
+<meta name="dcterms.rights" content="© 2026 ll9-m. 代码采用 CC BY-NC 4.0；第三方素材版权归各自权利人所有。">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230e1116'/%3E%3Cpath d='M17.5 8.5 9 16l8.5 7.5V18.6h9.2v-5.2h-9.2z' fill='%2322d3ee'/%3E%3C/svg%3E">
 <!-- 字体非阻塞加载：@import 会让整个样式表串行等它，是首屏最常见的拖慢源。
      改成 preload + onload 切换 rel，字体到位后再应用；
@@ -6812,6 +6820,11 @@ function settingsBodyHTML(){
     html += "</div>";
   }
   if(t === "about"){
+    /* 版权与许可放在「关于」里，而不是只写进 meta ——
+       meta 里的声明机器读得到但人看不见，而 CC BY-NC 的署名义务
+       恰恰是「让人知道这是谁做的、什么条件下能用」。
+       这个 html 是单文件交付、极易被单独转发，
+       拿走文件的人看不到仓库里的 README，这里的文字就是唯一的声明载体。 */
     html += '<div class="panel"><div class="panel-head"><h3>关于</h3></div>' +
       '<div class="col">' +
         '<div class="row gap-3"><svg width="40" height="40" viewBox="0 0 32 32" style="color:var(--accent)"><rect x="1" y="1" width="30" height="30" rx="7" fill="none" stroke="currentColor" stroke-width="1.4" opacity=".45"/><path d="M18 8.5 9.6 16 18 23.5V18h7.4v-4H18z" fill="currentColor"/></svg>' +
@@ -6820,6 +6833,33 @@ function settingsBodyHTML(){
         (Repo.mode === "idb" ? "可用" : "不可用，已降级到 localStorage") + '），不会上传到任何服务器，也没有账号系统。<br>' +
         "清理浏览器数据会一并清掉片库，请定期使用「导出 JSON」做备份。<br>" +
         "封面与作品资料来自 Bangumi（番组计划）与 AniList，版权归各自权利人所有。</p>" +
+
+        /* 许可块单独用 panel 套 panel 区分：它不是功能说明而是法律声明，
+           混在正文小字里容易被当成可忽略的信息。 */
+        '<div class="panel" style="background:var(--panel-2)">' +
+          '<div class="panel-head"><h4 style="font-size:var(--fs-sm)">版权与许可</h4></div>' +
+          '<div class="col" style="gap:var(--sp-2)">' +
+            '<div class="small" style="line-height:1.85">' +
+              "源代码采用 <b>CC BY-NC 4.0</b>（署名-非商业性使用）许可。<br>" +
+              "© 2026 <a href=\"https://github.com/ll9-m\" target=\"_blank\" rel=\"noopener noreferrer\">ll9-m</a> · " +
+              '<a href="https://creativecommons.org/licenses/by-nc/4.0/" target="_blank" rel="noopener noreferrer">协议全文</a>' +
+            "</div>" +
+            '<div class="small muted" style="line-height:1.8">' +
+              "可自由复制、修改、二次创作，用于个人学习与非商业用途，条件是保留署名。<br>" +
+              "<b>不可用于任何商业用途</b>，也不得去除署名信息。" +
+            "</div>" +
+            "<details style=\"margin-top:var(--sp-1)\"><summary class=\"small muted\" style=\"cursor:pointer\">第三方素材说明（不在此许可范围内）</summary>" +
+              '<div class="small muted" style="line-height:1.8;margin-top:var(--sp-2)">' +
+                "· 作品资料与封面：来自 Bangumi / AniList 公开 API，仅本机缓存，不随代码分发<br>" +
+                "· 内置语录台词（" + BUILTIN_QUOTES.length + " 条）：台词属原作作者与版权方，仅作个人收藏<br>" +
+                "· 荣誉墙配图：AI 生成，已内联于本文件<br>" +
+                "· 字体 Outfit / JetBrains Mono：SIL Open Font License<br>" +
+                "· ECharts：Apache-2.0，走 CDN 引入<br>" +
+                "· 「Anime Rewind」「番忆」为本项目名称，非作品名称；与收录的任何作品无隶属或背书关系" +
+              "</div>" +
+            "</details>" +
+          "</div>" +
+        "</div>" +
       "</div></div>";
   }
   return html;

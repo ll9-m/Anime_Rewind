@@ -563,6 +563,51 @@ function setVal(el, v) {
   win.eval('go("library")');
   await sleep(200);
 
+  // ---------- 版权与许可 ----------
+  /* CC BY-NC 4.0 的署名义务是「随作品一起分发」，
+     而署名信息被删掉时不会有任何报错 —— 它只是悄悄消失。
+     这类「静默失效」必须由断言守住，不能指望 review 时有人记得。
+     检查点分两处，因为单文件交付时最容易被转发的就是 html 本身：
+     meta（机器可读）与「关于」页（人可读）。缺一不可。 */
+  const AUTHOR = "ll9-m";
+  const LICENSE_ID = "CC BY-NC 4.0";
+
+  check("meta 里有 author 署名（CC 署名要求）", () =>
+    html.indexOf('<meta name="author" content="' + AUTHOR + '">') >= 0);
+  check("meta 里有 copyright 年份与署名", () =>
+    html.indexOf('<meta name="copyright" content="© 2026 ' + AUTHOR + '">') >= 0);
+  check("meta 里有 license 标识（机器可读的许可声明）", () =>
+    html.indexOf('<meta name="license" content="' + LICENSE_ID + '">') >= 0);
+  /* 只写 license 不写 rights 不够：dcterms.rights 才是「第三方素材另属
+     各自权利人」这类限制性说明的正规载体，GitHub 与搜索引擎读的是它。 */
+  check("meta 里声明了第三方素材另属各自权利人", () =>
+    html.indexOf('<meta name="dcterms.rights"') >= 0);
+
+  // 关于页：实际渲染出来看，而不是只搜源码
+  win.eval("settingsState.tab = 'about'; go('settings')");
+  await sleep(80);
+  const aboutText = () => win.eval("(document.querySelector('#view') || {}).textContent || ''");
+  check("关于页显示许可类型", () => aboutText().indexOf(LICENSE_ID) >= 0);
+  check("关于页显示署名 " + AUTHOR, () => aboutText().indexOf(AUTHOR) >= 0);
+  check("关于页显示版权年份", () => aboutText().indexOf("© 2026") >= 0);
+  check("关于页写明不可商用（非商业限制是 CC BY-NC 的核心，漏了等于没告知）", () =>
+    aboutText().indexOf("不可用于任何商业用途") >= 0);
+  check("关于页链接到协议全文", () =>
+    win.eval("!!document.querySelector('#view a[href*=\"creativecommons.org/licenses/by-nc\"]')") === true);
+  /* 署名链接是 target="_blank"，缺 rel="noopener" 会被新页面通过
+     window.opener 反向操控本页（tabnabbing）。 */
+  check("关于页外链带 rel=noopener（防 tabnabbing）", () =>
+    win.eval("Array.from(document.querySelectorAll('#view a[target=\"_blank\"]')).every(a => /noopener/.test(a.rel))") === true);
+  /* 第三方素材必须与代码许可分开声明：统一按 CC BY-NC 写会暗示作者对
+     Bangumi / AniList 的数据也持有权利，法律上站不住、也容易误导使用者。 */
+  check("关于页单独说明第三方素材不在许可范围内", () =>
+    aboutText().indexOf("第三方素材") >= 0 && aboutText().indexOf("版权方") >= 0);
+  check("关于页声明项目名与收录作品无隶属关系", () =>
+    aboutText().indexOf("无隶属或背书关系") >= 0);
+
+  win.eval("settingsState.tab = 'look'; go('library')");
+  await sleep(60);
+
   // 输出
   console.log("\n=== 冒烟测试结果 ===");
   results.forEach(([st, name, extra]) => console.log(st.padEnd(5) + name + (extra ? "   → " + extra : "")));

@@ -3,3 +3,4 @@ assets/honor/
 assets/honor-webp/
 *.log
 .DS_Store
+tools/_shot/

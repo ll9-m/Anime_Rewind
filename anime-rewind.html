@@ -345,6 +345,27 @@ input[type="range"]{ accent-color:var(--accent); width:100%; }
 .chip-on{ background:var(--accent-soft); border-color:var(--accent); color:var(--text); }
 .tag-list{ display:flex; flex-wrap:wrap; gap:var(--sp-1); }
 
+/* 详情页「同系列其他作品」：横向小卡，点一下直接跳过去 */
+.series-sibs{ display:grid; grid-template-columns:repeat(auto-fill,minmax(180px,1fr)); gap:var(--sp-3); }
+.sib-card{
+  display:flex; gap:var(--sp-3); align-items:center; text-align:left; width:100%;
+  padding:var(--sp-2); border-radius:var(--r-md); cursor:pointer;
+  background:var(--panel-2); border:1px solid var(--border); color:inherit; font:inherit;
+  transition:border-color var(--dur-fast),background var(--dur-fast),transform var(--dur-fast);
+}
+.sib-card:hover{ border-color:var(--accent); background:var(--panel-3); transform:translateY(-1px); }
+.sib-card:focus-visible{ outline:2px solid var(--accent); outline-offset:2px; }
+.sib-thumb{
+  flex:0 0 auto; width:44px; height:60px; border-radius:var(--r-sm); overflow:hidden;
+  background:var(--panel-3); display:flex; align-items:center; justify-content:center;
+}
+.sib-thumb img{ width:100%; height:100%; object-fit:cover; display:block; }
+.sib-body{ min-width:0; display:flex; flex-direction:column; gap:3px; }
+.sib-name{ font-size:var(--fs-sm); font-weight:600; line-height:1.3; }
+.sib-meta{ display:flex; align-items:center; gap:4px; font-size:11px; color:var(--muted); flex-wrap:wrap; }
+.sib-meta svg{ width:11px; height:11px; }
+.sib-meta .st-dot{ display:inline-flex; }
+
 /* 面板：层次靠「顶边高光 + 发丝下沿」建立，而不是四周等重边框。
    这是档案馆卡片与网页卡片的区别 —— 前者像一张被插入的索引卡。 */
 .panel{
@@ -549,6 +570,18 @@ input[type="range"]{ accent-color:var(--accent); width:100%; }
 .fc-front{ background:var(--panel); }
 .fc-back{ transform:rotateY(180deg); background:var(--panel-2); display:flex; flex-direction:column; justify-content:space-between; padding:var(--card-p); }
 
+/* 关键修正：backface-visibility:hidden 只让背面「不被绘制」，
+   并不阻止它参与命中测试。实测（tools/probe-card-hit.js）：
+   卡片已翻成 matrix3d rotateY(180°)，但点背面的「改状态」按钮，
+   elementFromPoint 返回的却是正面 .fc-name —— 正面在 DOM 中靠前，
+   整个背面（含三个操作按钮）的点击全被它吃掉，冒泡到卡片的 data-open，
+   表现为「三个按钮都跳到详情页」。
+   修法是显式关掉不可见那一面的指针事件。
+   注意 :focus-within 也算「翻开」：键盘 Tab 进背面按钮时卡片同样处于翻开态。 */
+.card:hover .fc-front,.card:focus-within .fc-front,.card.is-flipped .fc-front{ pointer-events:none; }
+.card:hover .fc-back,.card:focus-within .fc-back,.card.is-flipped .fc-back{ pointer-events:auto; }
+.fc-back{ pointer-events:none; }
+
 /* 状态标记：封面封底一道 2px 细线（挂在正面内，避免 3D 层级错乱） */
 .fc-front::after{
   content:""; position:absolute; left:0; right:0; bottom:0; height:2px; z-index:3;
@@ -573,6 +606,18 @@ input[type="range"]{ accent-color:var(--accent); width:100%; }
   background:rgba(0,0,0,.5); color:#fff; font-size:10.5px; font-weight:600; letter-spacing:.03em;
   -webkit-backdrop-filter:blur(2px); backdrop-filter:blur(2px);
 }
+/* 系列徽标与状态标签同一行；没有系列时不留空隙 */
+.fc-tagrow{ display:flex; gap:4px; flex-wrap:wrap; align-items:center; }
+.fc-tagrow:empty{ display:none; }
+.fc-series{
+  display:inline-flex; align-items:center; gap:3px; max-width:100%;
+  padding:2px 8px; border-radius:var(--r-pill);
+  background:rgba(0,0,0,.5); color:#fff; font-size:10.5px; font-weight:600; letter-spacing:.03em;
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+  box-shadow:inset 0 0 0 1px rgba(255,255,255,.28);
+  -webkit-backdrop-filter:blur(2px); backdrop-filter:blur(2px);
+}
+.fc-series svg{ width:10px; height:10px; flex:0 0 auto; }
 .fc-name{ font-size:var(--fs-sm); font-weight:600; line-height:1.35; color:#fff; text-shadow:0 1px 2px rgba(0,0,0,.55); }
 .fc-orig{ font-size:11px; color:rgba(255,255,255,.78); text-shadow:0 1px 2px rgba(0,0,0,.5); }
 .fc-sub{ font-size:11px; color:rgba(255,255,255,.86); display:flex; align-items:center; gap:6px; flex-wrap:wrap; text-shadow:0 1px 2px rgba(0,0,0,.5); }
@@ -620,12 +665,15 @@ input[type="range"]{ accent-color:var(--accent); width:100%; }
 .fc-rows span{ min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .fc-prog{ display:flex; align-items:center; gap:6px; font-size:11px; color:var(--muted); }
 .fc-prog .progress{ flex:1; }
-.fc-acts{ position:relative; z-index:1; display:flex; gap:6px; flex-wrap:wrap; padding-right:38px; }
+.fc-acts{ position:relative; z-index:1; display:flex; gap:6px; flex-wrap:wrap; padding-right:44px; }
 .fc-acts .btn{ flex:1 1 auto; min-width:0; min-height:30px; padding:0 var(--sp-2); }
 
-/* 翻面按钮：正反两面同位，触屏与键盘用户靠它翻面（hover 在触摸设备不存在） */
+/* 翻面按钮：整卡只渲染一个，挂在 .card 上而不是某个 .fc-face 里。
+   原先正反两面各放一个，视觉上就是「右下角两个圆圈箭头」——
+   用户看到的是同一位置叠着两个同心圆（背面那个被正面那个压住）。
+   移出 .card-3d 后它不参与 3D 翻转，无论卡片朝哪面都停在同一处。 */
 .fc-flip{
-  position:absolute; right:8px; bottom:8px; z-index:4;
+  position:absolute; right:8px; bottom:8px; z-index:6;
   width:30px; height:30px; min-height:0; padding:0; border-radius:50%;
   display:inline-flex; align-items:center; justify-content:center;
   background:rgba(6,10,16,.62); border:1px solid rgba(255,255,255,.22); color:#fff;
@@ -1552,7 +1600,10 @@ const SCHEMA_VERSION = 1;
 const LS_SETTINGS = "ar.settings.v1";
 const LS_DATA = "ar.data.v1";
 const IDB_NAME = "anime-rewind";
-const IDB_VERSION = 1;
+/* v2：新增 series 表（系列）。必须真的升版本号 ——
+   onupgradeneeded 只在版本号变大时触发，版本不动的话
+   老用户永远建不出这张表，series 读写会直接抛错。 */
+const IDB_VERSION = 2;
 
 const GRADES = ["学前","小学一年级","小学二年级","小学三年级","小学四年级","小学五年级","小学六年级",
   "初一","初二","初三","高一","高二","高三","大学","已工作"];
@@ -1739,8 +1790,8 @@ const Repo = {
         let data = null;
         try { data = JSON.parse(localStorage.getItem(LS_DATA) || "null"); } catch(e){ data = null; }
         Repo._mem = data && typeof data === "object"
-          ? Object.assign({ anime:[], quotes:[], statuses:[], assets:{} }, data)
-          : { anime:[], quotes:[], statuses:[], assets:{} };
+          ? Object.assign({ anime:[], quotes:[], statuses:[], series:[], assets:{} }, data)
+          : { anime:[], quotes:[], statuses:[], series:[], assets:{} };
         done("ls");
       };
       if(!("indexedDB" in window)) return useLS();
@@ -1748,7 +1799,7 @@ const Repo = {
       try { req = indexedDB.open(IDB_NAME, IDB_VERSION); } catch(e){ return useLS(); }
       req.onupgradeneeded = () => {
         const db = req.result;
-        ["anime","quotes","statuses"].forEach(name => {
+        ["anime","quotes","statuses","series"].forEach(name => {
           if(!db.objectStoreNames.contains(name)) db.createObjectStore(name, { keyPath:"id" });
         });
         if(!db.objectStoreNames.contains("assets")) db.createObjectStore("assets", { keyPath:"key" });
@@ -1895,14 +1946,47 @@ const SYSTEM_STATUSES = [
   { id:"st_drop",    name:"弃坑", color:"#e05a5a", matchType:"manual",   progressMin:null,progressMax:null,isSystem:true }
 ];
 
+/* 系列：把「同一部动画的多季 / 剧场版 / 续作」归到一起。
+   起因是「每部动画都不止一部/一季」—— 库拆平之后，
+   《XX》第一季、第二季、剧场版彼此找不到，像互不相干的作品。
+   anime.seriesId 指向 state.series 里的记录；未归类的作品 seriesId 为空串，
+   UI 层兜底成「默认系列」。默认系列不落库（不占一条记录），
+   否则库里会出现两条同名的默认档，筛选时得选「哪一个默认」才发现问题。 */
+const DEFAULT_SERIES_ID = "";
+function defaultSeries(){ return { id:DEFAULT_SERIES_ID, name:"默认系列", isSystem:true }; }
+
 const state = {
   anime: [],
   quotes: [],
   statuses: SYSTEM_STATUSES.slice(),
+  series: [],
   route: "home",
   routeId: null,
   lastRoute: "home"
 };
+
+function seriesById(id){
+  if(!id) return null;
+  return state.series.find(s => s.id === id) || null;
+}
+function seriesNameOf(a){
+  const s = seriesById(a && a.seriesId);
+  return s ? s.name : "默认系列";
+}
+/* 系列下拉的可选项：默认系列恒在第一位，其余按名称排。
+   库里已无归属作品的系列也保留（用户可能正在整理），避免选项忽有忽无。 */
+function allSeries(){
+  return [defaultSeries()].concat(state.series.slice().sort((x,y) => x.name.localeCompare(y.name, "zh")));
+}
+function seriesOptionsHTML(sel){
+  return allSeries().map(s =>
+    '<option value="' + attr(s.id) + '"' + (String(sel || "") === s.id ? " selected" : "") + ">" + esc(s.name) + "</option>").join("");
+}
+/* 只列出真有作品的系列 + 默认系列（若默认系列下有作品），用于筛选器 */
+function usedSeries(){
+  const used = new Set(state.anime.map(a => a.seriesId || DEFAULT_SERIES_ID));
+  return allSeries().filter(s => used.has(s.id));
+}
 
 function statusById(id){ return state.statuses.find(s => s.id === id) || null; }
 function statusByName(name){
@@ -1964,11 +2048,18 @@ function migrateRecord(rec, kind){
     rec.createdAt = rec.createdAt || new Date().toISOString();
     rec.updatedAt = rec.updatedAt || rec.createdAt;
     if(!statusById(rec.statusId)) rec.statusId = "st_want";
+    // seriesId 缺失/null 统一成空串，避免 undefined 参与相等判断
+    if(rec.seriesId == null) rec.seriesId = DEFAULT_SERIES_ID;
+    else rec.seriesId = String(rec.seriesId);
   }
   if(kind === "quote"){
     rec.id = rec.id || uid("q");
     rec.isBuiltin = !!rec.isBuiltin;
     rec.favorite = !!rec.favorite;
+  }
+  if(kind === "series"){
+    rec.id = rec.id || uid("se");
+    rec.name = String(rec.name || "").trim() || "未命名系列";
   }
   return rec;
 }
@@ -2138,6 +2229,16 @@ async function removeStatus(id){
   const i = state.statuses.findIndex(s => s.id === id);
   if(i >= 0) state.statuses.splice(i,1);
   try { await Repo.del("statuses", id); return true; }
+  catch(e){ toast("删除失败：" + e.message, "err"); return false; }
+}
+async function saveSeries(s){
+  upsertLocal(state.series, s);
+  return await persist("series", s);
+}
+async function removeSeries(id){
+  const i = state.series.findIndex(s => s.id === id);
+  if(i >= 0) state.series.splice(i,1);
+  try { await Repo.del("series", id); return true; }
   catch(e){ toast("删除失败：" + e.message, "err"); return false; }
 }
 
@@ -2570,6 +2671,9 @@ function draftFromCandidate(c, an){
     communityScore: null, durationMinutes: null, fetchedAt: new Date().toISOString(),
     statusId: "st_want", watchedEpisodes: 0, myScore: null, watchYear: null,
     watchGrade: null, watchChannel: null, rewatchCount: 0,
+    /* 系列：空串 = 未归类（UI 显示「默认系列」）。
+       一部动画常有多季/剧场版，靠这个字段把它们聚在一起。 */
+    seriesId: DEFAULT_SERIES_ID,
     favorite: false, masterpiece: false, personalTags: [], reviews: [],
     /* 在线播放：按作品独立保存，而不是全局一份。
        原先是 settings.stream_url —— 一部番的片源会覆盖另一部，
@@ -2677,6 +2781,17 @@ function animeFormBody(an){
       '<select class="select" id="f-watchChannel" data-f="watchChannel">' + channelOptionsHTML(an.watchChannel) + "</select></div>" +
     '<div class="field"><label for="f-personalTags">个人标签（、分隔）</label>' +
       '<input class="input" id="f-personalTags" data-f="personalTags" value="' + attr(arrToStr(an.personalTags)) + '"></div>' +
+    '<div class="field full"><div class="series-pick">' +
+      '<label for="f-seriesId">所属系列</label>' +
+      '<div class="row gap-2" style="flex-wrap:wrap">' +
+        '<select class="select" id="f-seriesId" data-f="seriesId" style="flex:1 1 200px">' +
+          seriesOptionsHTML(an.seriesId) + "</select>" +
+        '<input class="input" id="f-seriesNew" placeholder="新系列名称" maxlength="30" style="flex:1 1 160px" ' +
+          'aria-label="新建系列名称，留空则不创建">' +
+        '<button class="btn" type="button" id="f-seriesAdd">' + ic("plus",14) + "新建系列</button>" +
+      "</div>" +
+      '<div class="hint" id="f-seriesHint">同一部动画的多季、剧场版请归到同一系列，便于在片库按系列查看。留空则归入「默认系列」。</div>' +
+    "</div></div>" +
     '<div class="field full"><div class="row gap-3">' +
       '<label class="checkline"><input type="checkbox" id="f-favorite"' + (an.favorite ? " checked" : "") + "><span>收藏</span></label>" +
       '<label class="checkline"><input type="checkbox" id="f-masterpiece"' + (an.masterpiece ? " checked" : "") + "><span>神作</span></label>" +
@@ -2706,6 +2821,7 @@ function readFormAnime(modalRoot, base){
   an.watchGrade = get("f-watchGrade") || null;
   an.watchChannel = get("f-watchChannel") || null;
   an.personalTags = strToArr(get("f-personalTags"));
+  an.seriesId = get("f-seriesId") || DEFAULT_SERIES_ID;
   an.favorite = !!modalRoot.querySelector("#f-favorite").checked;
   an.masterpiece = !!modalRoot.querySelector("#f-masterpiece").checked;
   return an;
@@ -2765,6 +2881,11 @@ function openAnimeForm(opts){
     }catch(e){ toast("读取图片失败", "err"); }
   });
 
+  /* 新建系列：真正写库并立刻选中新项。
+     不能只在输入框里打字然后保存时才建 —— 用户会以为按钮坏了，
+     而且同名系列会因大小写/空格差异被建出两条。 */
+  bindSeriesCreator(root, () => base);
+
   async function onSave(){
     const an = readFormAnime(root, base);
     if(!an.titleCn){
@@ -2801,6 +2922,66 @@ function openAnimeForm(opts){
     refreshAll();
   }
 }
+/* 按名称找或建系列。名称比较走 normalize（去空白、大小写归一），
+   否则「XX 第二季」和「xx第二季」会被当成两个系列。 */
+async function ensureSeries(name){
+  const n = String(name || "").trim().slice(0, 30);
+  if(!n) return null;
+  const hit = state.series.find(s => normalize(s.name) === normalize(n));
+  if(hit) return hit;
+  const rec = { id: uid("se"), name:n, createdAt:new Date().toISOString(), schemaVersion:SCHEMA_VERSION };
+  const ok = await saveSeries(rec);
+  if(!ok) return null;
+  return rec;
+}
+
+/* 表单里的「新建系列」控件。行为必须可见：
+   点按钮 → 立即写库 → 下拉里出现新项并选中 → 输入框清空。
+   静默失败（只清输入框、不建记录）是最糟的一种，用户无从判断。 */
+function bindSeriesCreator(root, getBase){
+  const btn = root.querySelector("#f-seriesAdd");
+  const input = root.querySelector("#f-seriesNew");
+  const sel = root.querySelector("#f-seriesId");
+  if(!btn || !input || !sel) return;
+  const hint = root.querySelector("#f-seriesHint");
+
+  const setHint = (html, isErr) => {
+    if(!hint) return;
+    hint.innerHTML = isErr ? '<span class="err-text">' + html + "</span>" : html;
+  };
+  const restoreHint = () => setHint(
+    "同一部动画的多季、剧场版请归到同一系列，便于在片库按系列查看。留空则归入「默认系列」。");
+
+  btn.addEventListener("click", async () => {
+    const name = input.value.trim();
+    if(!name){ setHint("请先填写新系列名称", true); input.focus(); return; }
+    const dup = state.series.find(s => normalize(s.name) === normalize(name));
+    if(dup){
+      // 已存在就直接选它，不报错也不重复建 —— 用户的意图是「归到这个系列」
+      sel.value = dup.id;
+      input.value = "";
+      restoreHint();
+      toast("「" + dup.name + "」已存在，已直接选中", "warn");
+      return;
+    }
+    btn.disabled = true;
+    const prevText = btn.innerHTML;
+    btn.innerHTML = '<span class="spinner"></span>';
+    const rec = await ensureSeries(name);
+    btn.disabled = false;
+    btn.innerHTML = prevText;
+    if(!rec){ setHint("新建系列失败，请重试", true); return; }
+    sel.innerHTML = seriesOptionsHTML(rec.id);
+    input.value = "";
+    restoreHint();
+    toast("已创建系列「" + rec.name + "」并选中", "ok");
+  });
+  // 输入框回车等同点按钮，否则键盘用户按了没反应
+  input.addEventListener("keydown", e => {
+    if(e.key === "Enter"){ e.preventDefault(); btn.click(); }
+  });
+}
+
 function readFileAsDataURL(file){
   return new Promise((resolve, reject) => {
     const fr = new FileReader();
@@ -3019,6 +3200,12 @@ const libState = {
   watchGrade: "",
   studio: "",
   genre: "",
+  /* null = 未按系列筛选；"" = 筛选「默认系列」（未归类作品）；
+     其余为具体系列 id。
+     这三个状态必须分开：默认系列的 id 就是空串，若用 "" 同时表示
+     「未筛选」和「筛选默认系列」，两者永远无法区分 ——
+     用户选「默认系列」会看到全部作品，以为筛选器坏了。 */
+  seriesId: null,
   flag: ""
 };
 const SORTS = [
@@ -3028,7 +3215,8 @@ const SORTS = [
   { key:"airDate_asc",    name:"首播年（旧→新）" },
   { key:"myScore_desc",   name:"我的评分（高→低）" },
   { key:"communityScore_desc", name:"社区评分（高→低）" },
-  { key:"rewatchCount_desc", name:"重看次数（多→少）" }
+  { key:"rewatchCount_desc", name:"重看次数（多→少）" },
+  { key:"series_asc",     name:"系列（归拢同一部）" }
 ];
 
 function allDecades(){
@@ -3054,7 +3242,9 @@ function allWatchYears(){
 function matchQ(a, q){
   if(!q) return true;
   const k = normalize(q);
-  return [a.titleCn, a.titleOriginal].concat(a.aliases || [], a.personalTags || [], a.studios || [], a.genres || [])
+  /* 系列名一并参与搜索：用户记得「这是那个系列里的」，
+     却想不起具体某一季的片名时，搜系列名应该能捞出来。 */
+  return [a.titleCn, a.titleOriginal, seriesNameOf(a)].concat(a.aliases || [], a.personalTags || [], a.studios || [], a.genres || [])
     .filter(Boolean).some(s => normalize(s).indexOf(k) >= 0);
 }
 function filterAnime(list){
@@ -3066,6 +3256,9 @@ function filterAnime(list){
     if(f.watchGrade && a.watchGrade !== f.watchGrade) return false;
     if(f.studio && (a.studios || []).indexOf(f.studio) < 0) return false;
     if(f.genre && (a.genres || []).indexOf(f.genre) < 0) return false;
+    /* 系列筛选：libState.seriesId === null 表示未筛选，
+       空串表示「只看未归类的作品」，两者语义不同，必须显式判 null。 */
+    if(f.seriesId !== null && (a.seriesId || DEFAULT_SERIES_ID) !== f.seriesId) return false;
     if(f.flag === "fav" && !a.favorite) return false;
     if(f.flag === "master" && !a.masterpiece) return false;
     if(f.flag === "review" && !(a.reviews || []).length) return false;
@@ -3085,13 +3278,26 @@ function sortAnime(list){
     case "myScore_desc":   arr.sort((a,b) => num(b.myScore) - num(a.myScore)); break;
     case "communityScore_desc": arr.sort((a,b) => num(b.communityScore) - num(a.communityScore)); break;
     case "rewatchCount_desc":   arr.sort((a,b) => (b.rewatchCount||0) - (a.rewatchCount||0)); break;
+    /* 按系列归拢：先按系列名，同系列内再按首播年 ——
+       这样「第一季 / 第二季 / 剧场版」会自动挨在一起。 */
+    case "series_asc":
+      arr.sort((a,b) => {
+        const sa = seriesNameOf(a), sb = seriesNameOf(b);
+        const c = sa.localeCompare(sb, "zh");
+        if(c) return c;
+        return String(a.airDate||"9999").localeCompare(String(b.airDate||"9999"));
+      });
+      break;
     default: arr.sort((a,b) => String(b.createdAt).localeCompare(String(a.createdAt)));
   }
   return arr;
 }
 function activeFilterCount(){
   let n = 0;
+  /* seriesId 的「未筛选」是 null，用 truthy 判断会漏计，
+     于是「正在按系列筛选」时清空筛选按钮不出现，用户找不到退出口。 */
   ["statusId","decade","watchYear","watchGrade","studio","genre","flag"].forEach(k => { if(libState[k]) n++; });
+  if(libState.seriesId !== null) n++;
   return n;
 }
 
@@ -3110,10 +3316,19 @@ function cardHTML(a){
   if(cf.communityScore !== false && a.communityScore != null) sub += '<span class="score-pill">' + ic("star",11) + fmtNum(a.communityScore) + "</span>";
   if(cf.myScore !== false && a.myScore != null) sub += '<span class="score-pill mine">' + ic("starfill",11) + fmtNum(a.myScore) + "</span>";
 
+  /* 系列徽标：只在真归了类时显示。
+     「默认系列」满库都是时不挂标签 —— 挂满屏的「默认系列」等于没信息。 */
+  const sName = seriesNameOf(a);
+  const inSeries = !!seriesById(a.seriesId);
+  const seriesTag = inSeries
+    ? '<span class="fc-series" title="系列：' + attr(sName) + '">' + ic("grid",10) + esc(sName) + "</span>"
+    : "";
+
   // 背面：完整元信息
   let rows = "";
   const addRow = (k, v) => { if(v) rows += "<div><b>" + esc(k) + "</b><span>" + v + "</span></div>"; };
   addRow("译名", esc(name));
+  if(inSeries) addRow("系列", esc(sName));
   if(orig && cf.year !== false) addRow("原名", esc(orig));
   if((a.studios||[]).length) addRow("制作", esc(a.studios.join("、")));
   if(cf.communityScore !== false && a.communityScore != null) addRow("社区分", ic("star",11) + " " + fmtNum(a.communityScore));
@@ -3130,11 +3345,20 @@ function cardHTML(a){
       : '<div class="fc-prog"><div class="progress"><i style="width:' + p + '%"></i></div><span>' + (a.watchedEpisodes||0) + "/" + a.totalEpisodes + " · " + Math.round(p) + "%</span></div>";
   }
 
-  // 翻面按钮必须正反两面都有：触摸设备上翻面是唯一入口，
-  // 只放在正面的话翻开后就没有回头路（点卡片会直接跳详情）。
+  // 整卡只渲染一个翻面按钮，挂在 .card 上（不在 .card-3d 内）。
+  // 原先正反两面各渲染一个，位置完全相同 —— 背面那个被正面那个压住，
+  // 看上去就是右下角一个「双层圆圈箭头」。移出 3D 层后它不跟着翻转，
+  // 两种朝向下都停在卡片右下角，且 aria-pressed 只需同步一处。
   const flipBtn = '<button class="fc-flip" type="button" data-act="flip" data-id="' + attr(a.id) + '"' +
     ' title="翻面" aria-label="翻面查看资料与操作" aria-pressed="false">' + ic("refresh",15) + "</button>";
 
+  // 背面只留一个入口。
+  // 原先三个按钮（改状态 / 重看 / 详情）实测点击后全都落到详情页 ——
+  // 根因是 backface-visibility 不阻止命中测试，正面字幕块把背面按钮的
+  // 点击全吃掉，冒泡到卡片的 data-open。修掉之后三者行为才真正不同，
+  // 但卡片正面积极小，三入口挤在一条 44px 宽的余量里点不准，
+  // 合并为「详情」一个：状态与重看在详情页里本来就有（改状态在编辑表单，
+  // 记录重看在「重看与感想」折叠块），功能不丢，操作路径也不变长。
   return '' +
   '<article class="card" tabindex="0" data-open="' + attr(a.id) + '" style="--st-color:' + esc(statusColor(a)) + '" aria-label="' + attr(name) + "，" + esc(statusName(a)) + '，按回车查看详情">' +
     '<div class="card-3d">' +
@@ -3146,12 +3370,14 @@ function cardHTML(a){
           (a.favorite ? '<span class="badge badge-fav">' + ic("heart",11) + "收藏</span>" : "") +
         "</div>" +
         '<div class="fc-caption">' +
-          (a.masterpiece || a.favorite ? '<span class="fc-tag">' + esc(statusName(a)) + "</span>" : "") +
+          '<div class="fc-tagrow">' +
+            (a.masterpiece || a.favorite ? '<span class="fc-tag">' + esc(statusName(a)) + "</span>" : "") +
+            seriesTag +
+          "</div>" +
           '<div class="fc-name clamp-2">' + esc(name) + "</div>" +
           (orig ? '<div class="fc-orig truncate">' + esc(orig) + "</div>" : "") +
           (sub ? '<div class="fc-sub">' + sub + "</div>" : "") +
         "</div>" +
-        flipBtn +
       "</div>" +
       // 背面：光带装饰 + 资料 + 操作
       '<div class="fc-face fc-back">' +
@@ -3165,13 +3391,11 @@ function cardHTML(a){
           prog +
         "</div>" +
         '<div class="fc-acts">' +
-          '<button class="btn btn-sm" type="button" data-act="status" data-id="' + attr(a.id) + '" title="改状态" aria-label="改状态">' + ic("filter",14) + "改状态</button>" +
-          '<button class="btn btn-sm" type="button" data-act="rewatch" data-id="' + attr(a.id) + '" title="记一次重看" aria-label="记一次重看">' + ic("refresh",14) + "重看</button>" +
-          '<button class="btn btn-sm btn-primary" type="button" data-act="detail" data-id="' + attr(a.id) + '" title="查看详情" aria-label="查看详情">' + ic("play",14) + "详情</button>" +
+          '<button class="btn btn-sm btn-primary" type="button" data-act="detail" data-id="' + attr(a.id) + '" title="查看详情与播放" aria-label="查看详情与播放">' + ic("play",14) + "详情</button>" +
         "</div>" +
-        flipBtn +
       "</div>" +
     "</div>" +
+    flipBtn +
   "</article>";
 }
 
@@ -3184,6 +3408,8 @@ function tableHTML(list){
       '<td><div class="truncate" style="max-width:260px">' + esc(name) + "</div>" +
         (a.titleOriginal ? '<div class="small muted truncate" style="max-width:260px">' + esc(a.titleOriginal) + "</div>" : "") + "</td>" +
       '<td class="nowrap">' + esc(String(a.airDate || "").slice(0,4) || "—") + "</td>" +
+      '<td><select class="select" data-inline="seriesId" data-id="' + attr(a.id) + '" aria-label="' + attr(name) + ' 系列">' +
+        seriesOptionsHTML(a.seriesId) + "</select></td>" +
       '<td><div class="truncate" style="max-width:140px">' + esc((a.studios||[]).join("、") || "—") + "</div></td>" +
       '<td><select class="select" data-inline="statusId" data-id="' + attr(a.id) + '" aria-label="' + attr(name) + ' 状态">' + statusOptionsHTML(a.statusId) + "</select></td>" +
       '<td class="nowrap"><input class="input ep-input" type="number" min="0" step="1" data-inline="watchedEpisodes" data-id="' + attr(a.id) + '" value="' + (a.watchedEpisodes||0) + '" aria-label="已看集数">' +
@@ -3203,7 +3429,7 @@ function tableHTML(list){
   }).join("");
   return '<div class="table-wrap scroll"><table class="grid-table">' +
     "<thead><tr>" +
-      '<th class="col-thumb">封面</th><th>片名</th><th>首播</th><th>制作公司</th><th>状态</th><th>已看/总集</th><th>我的评分</th><th>重看</th><th>神作/收藏</th><th>操作</th>' +
+      '<th class="col-thumb">封面</th><th>片名</th><th>首播</th><th>系列</th><th>制作公司</th><th>状态</th><th>已看/总集</th><th>我的评分</th><th>重看</th><th>神作/收藏</th><th>操作</th>' +
     "</tr></thead><tbody>" + rows + "</tbody></table></div>";
 }
 
@@ -3242,6 +3468,17 @@ function renderLibrary(root){
     '<div class="field"><label for="lib-genre">类型</label><select class="select" id="lib-genre">' +
       '<option value="">全部</option>' + allGenres().map(s => '<option value="' + attr(s) + '"' + (libState.genre === s ? " selected":"") + ">" + esc(s) + "</option>").join("") +
       "</select></div>" +
+    /* 系列筛选：只列出真有作品的系列。
+       「未筛选」用 null 表达，与「筛选默认系列」（空串）区分开。 */
+    '<div class="field"><label for="lib-series">系列</label><select class="select" id="lib-series">' +
+      '<option value="__all__"' + (libState.seriesId === null ? " selected" : "") + ">全部</option>" +
+      usedSeries().map(s => {
+        const sel = libState.seriesId === s.id;
+        const n = state.anime.filter(a => (a.seriesId || DEFAULT_SERIES_ID) === s.id).length;
+        return '<option value="' + attr(s.id) + '"' + (sel ? " selected" : "") + ">" +
+          esc(s.name) + "（" + n + "）</option>";
+      }).join("") +
+      "</select></div>" +
     '<div class="field"><label for="lib-flag">标记</label><select class="select" id="lib-flag">' +
       '<option value="">全部</option>' +
       '<option value="fav"' + (libState.flag === "fav" ? " selected":"") + ">仅收藏</option>" +
@@ -3279,6 +3516,13 @@ function renderLibrary(root){
   }
   bind("#lib-status","statusId"); bind("#lib-decade","decade"); bind("#lib-year","watchYear"); bind("#lib-grade","watchGrade");
   bind("#lib-studio","studio"); bind("#lib-genre","genre"); bind("#lib-flag","flag"); bind("#lib-sort","sort", true);
+  /* 系列筛选要单独处理：默认系列的 id 是空串，
+     走通用 bind() 的话哨兵值会被原样写进去。 */
+  const seriesSel = root.querySelector("#lib-series");
+  if(seriesSel) seriesSel.addEventListener("change", () => {
+    libState.seriesId = seriesSel.value === "__all__" ? null : seriesSel.value;
+    rerender();
+  });
   root.querySelectorAll("[data-view]").forEach(b => b.addEventListener("click", () => {
     libState.view = b.dataset.view;
     settings.default_view = libState.view;
@@ -3314,7 +3558,7 @@ async function libraryAction(act, id, root){
      这个不对称正是它难以被发现的原因。 */
   if(act === "add"){ openSearchModal(); return; }
   if(act === "reset-filter"){
-    Object.assign(libState, { q:"", statusId:"", decade:"", watchYear:"", watchGrade:"", studio:"", genre:"", flag:"" });
+    Object.assign(libState, { q:"", statusId:"", decade:"", watchYear:"", watchGrade:"", studio:"", genre:"", seriesId:null, flag:"" });
     rerender(); return;
   }
   const a = animeById(id);
@@ -3323,15 +3567,16 @@ async function libraryAction(act, id, root){
     case "detail": go("theater", id); break;
     case "flip": {
       // 触摸设备没有 hover，翻面按钮是唯一入口；点击卡片本身仍进详情。
-      // 正反两面各有一个翻面按钮，必须一起切换 aria-pressed，否则状态不同步。
+      // 整卡只有一个翻面按钮（原先正反两面各一个，视觉上叠成双层圆圈）。
       const card = root.querySelector('.card[data-open="' + (window.CSS && CSS.escape ? CSS.escape(id) : id) + '"]');
       if(!card) break;
       const on = card.classList.toggle("is-flipped");
-      card.querySelectorAll(".fc-flip").forEach(btn => {
+      const btn = card.querySelector(".fc-flip");
+      if(btn){
         btn.setAttribute("aria-pressed", on ? "true" : "false");
         btn.setAttribute("aria-label", on ? "翻回封面" : "翻面查看资料与操作");
         btn.title = on ? "翻回封面" : "翻面";
-      });
+      }
       break;
     }
     case "rewatch": await promptReview(a); break;
@@ -3368,6 +3613,10 @@ async function inlineEdit(id, field, value){
     applyAutoStatus(a);
   } else if(field === "statusId"){
     a.statusId = value;
+  } else if(field === "seriesId"){
+    /* 表格视图的系列下拉：指向已不存在的系列时落回默认，
+       否则这条记录会变成「哪部作品都不属于」的孤儿。 */
+    a.seriesId = seriesById(value) ? value : DEFAULT_SERIES_ID;
   }
   await saveAnime(a);
   rerender();
@@ -4222,6 +4471,11 @@ function renderDetail(root, id){
         "</div>" +
       "</div>" +
 
+      /* 系列区块：这是「一部动画有多季」这件事唯一真正有用的地方 ——
+         在详情页直接看到同系列的其他作品并跳过去，
+         而不必回片库按名字搜。 */
+      seriesBlockHTML(a) +
+
       (p === null
         ? '<div class="mt-4 sec-title">' + ic("clock",16) + "<span>进度</span></div>" +
           '<div class="small muted">总集数未知，已看 ' + (a.watchedEpisodes||0) + " 集</div>"
@@ -4280,6 +4534,56 @@ function renderDetail(root, id){
   // 播放器按作品绑定：保存只更新内存与库，不整页重渲染 ——
   // rerender() 会销毁 iframe，正在播的视频会被打断。
   bindStreamLauncher(root, a);
+  // 同系列跳转：这些是 <a> 之外的 <button>，走 delegation 而非 data-act
+  root.querySelectorAll("[data-series-go]").forEach(b => b.addEventListener("click", () => {
+    go("theater", b.dataset.seriesGo);
+  }));
+}
+
+/* 详情页的系列区块。
+   默认系列下作品可能极多，全部列出反而变成一堵墙 ——
+   那种情况下只提示可以归类，不铺列表。 */
+function seriesBlockHTML(a){
+  const s = seriesById(a.seriesId);
+  const siblings = state.anime
+    .filter(x => x.id !== a.id && (x.seriesId || DEFAULT_SERIES_ID) === (a.seriesId || DEFAULT_SERIES_ID))
+    .sort((x,y) => String(x.airDate||"9999").localeCompare(String(y.airDate||"9999")));
+
+  const picker =
+    '<div class="row gap-2 mt-3" style="flex-wrap:wrap">' +
+      '<label class="small muted nowrap" for="dt-series">归入系列</label>' +
+      '<select class="select" id="dt-series" style="flex:1 1 200px">' + seriesOptionsHTML(a.seriesId) + "</select>" +
+      '<input class="input" id="dt-seriesNew" placeholder="新系列名称" maxlength="30" style="flex:1 1 150px" ' +
+        'aria-label="新建系列名称，留空则不创建">' +
+      '<button class="btn btn-sm" type="button" id="dt-seriesAdd">' + ic("plus",14) + "新建</button>" +
+    "</div>";
+
+  if(!s && siblings.length < 2){
+    return '<div class="mt-4"><div class="sec-title">' + ic("grid",16) + "<span>系列</span></div>" +
+      '<div class="small muted">尚未归类。一部动画常有多季 / 剧场版，归到同一系列后可以互相跳转。</div>' +
+      picker + "</div>";
+  }
+
+  const list = siblings.length
+    ? '<div class="series-sibs mt-3">' + siblings.map(x => {
+        const nm = x.titleCn || x.titleOriginal || "未命名";
+        const prog = progressOf(x);
+        return '<button class="sib-card" type="button" data-series-go="' + attr(x.id) + '">' +
+          '<div class="sib-thumb">' + coverThumb(x) + "</div>" +
+          '<div class="sib-body"><div class="sib-name clamp-2">' + esc(nm) + "</div>" +
+            '<div class="sib-meta">' + ic("clock",11) + " " +
+              (x.watchedEpisodes||0) + "/" + (x.totalEpisodes == null ? "?" : x.totalEpisodes) +
+              (prog == null ? "" : " · " + Math.round(prog) + "%") +
+              ' · <span class="st-dot" style="--st-color:' + esc(statusColor(x)) + '"><i></i></span> ' +
+              esc(statusName(x)) +
+          "</div></div></button>";
+      }).join("") + "</div>"
+    : '<div class="small muted mt-3">这个系列目前只有这一部作品。</div>';
+
+  return '<div class="mt-4"><div class="sec-title">' + ic("grid",16) +
+      "<span>" + esc(s ? s.name : "默认系列") + "</span>" +
+      '<b class="small muted" style="margin-left:auto">' + (siblings.length + 1) + " 部</b></div>" +
+    list + picker + "</div>";
 }
 function sourceLabel(a){
   if(a.source === "bangumi") return "Bangumi";
@@ -4322,6 +4626,48 @@ function bindDetailActions(root, a){
     await saveAnime(a);
     rerender();
   }));
+
+  /* 系列下拉：改完立即落库。走 rerender() 整页重渲是安全的 ——
+     这一段位于播放器之上，而播放器的 iframe 靠 bindStreamLauncher
+     在渲染后重新挂载。 */
+  const dsel = root.querySelector("#dt-series");
+  if(dsel) dsel.addEventListener("change", async () => {
+    a.seriesId = seriesById(dsel.value) ? dsel.value : DEFAULT_SERIES_ID;
+    await saveAnime(a);
+    toast("已归入「" + seriesNameOf(a) + "」", "ok");
+    rerender();
+  });
+  /* 详情页的「新建系列」：与添加/编辑表单同一套语义 ——
+     已存在则直接选中（不报错、不重复建），否则真建一条并选中。 */
+  const realAdd = root.querySelector("#dt-seriesAdd");
+  const realIn  = root.querySelector("#dt-seriesNew");
+  if(dsel && realAdd && realIn){
+    realAdd.addEventListener("click", async () => {
+      const name = realIn.value.trim();
+      if(!name){ toast("请先填写新系列名称", "warn"); realIn.focus(); return; }
+      const dup = state.series.find(s => normalize(s.name) === normalize(name));
+      if(dup){
+        dsel.value = dup.id;
+        realIn.value = "";
+        toast("「" + dup.name + "」已存在，已直接选中", "warn");
+      } else {
+        realAdd.disabled = true;
+        const prev = realAdd.innerHTML;
+        realAdd.innerHTML = '<span class="spinner"></span>';
+        const rec = await ensureSeries(name);
+        realAdd.disabled = false;
+        realAdd.innerHTML = prev;
+        if(!rec){ toast("新建系列失败，请重试", "err"); return; }
+        dsel.innerHTML = seriesOptionsHTML(rec.id);
+        realIn.value = "";
+        toast("已创建系列「" + rec.name + "」", "ok");
+      }
+      dsel.dispatchEvent(new Event("change"));
+    });
+    realIn.addEventListener("keydown", e => {
+      if(e.key === "Enter"){ e.preventDefault(); realAdd.click(); }
+    });
+  }
 }
 
 registerPage({
@@ -5804,6 +6150,7 @@ function buildExportPayload(includeBg){
     anime: state.anime.slice(),
     quotes: state.quotes.slice(),
     statuses: state.statuses.filter(s => !s.isSystem || true).slice(),
+    series: state.series.slice(),
     settings: Object.assign({}, settings)
   };
   if(includeBg && settings.bg_image){
@@ -5881,6 +6228,9 @@ function rawToDraft(raw){
   an.favorite = !!raw.favorite;
   an.masterpiece = !!raw.masterpiece;
   an.personalTags = Array.isArray(raw.personalTags) ? raw.personalTags.map(String) : [];
+  /* seriesId 由 analyzeImport 按名称重映射后覆盖，这里只兜底成默认系列，
+     避免 undefined 流进库里（boot 的孤儿清理只处理字符串）。 */
+  an.seriesId = DEFAULT_SERIES_ID;
   an.source = raw.source || "manual";
   if(raw.sourceIds) an.sourceIds = raw.sourceIds;
   an.reviews = (Array.isArray(raw.reviews) ? raw.reviews : []).map(r => ({
@@ -5900,13 +6250,39 @@ function clampScore(v){
   return n < 0 ? 0 : (n > 10 ? 10 : Math.round(n*2)/2);
 }
 function analyzeImport(payload){
-  const result = { add:[], dup:[], suspect:[], quoteAdd:[], quoteSkip:[], warnings:[], statusAdd:[], settingPatch:{} };
+  const result = { add:[], dup:[], suspect:[], quoteAdd:[], quoteSkip:[], warnings:[], statusAdd:[], seriesAdd:[], settingPatch:{} };
+
+  /* 系列先于作品处理：作品里的 seriesId 指向的是「备份那台机器」的 id，
+     直接搬过来在本机一条都匹配不上，所有作品都会掉回默认系列。
+     正确做法是按名称在本机找同名系列，命中则复用其 id，
+     未命中则新建并记下「旧 id → 新 id」的映射。 */
+  const seriesIdMap = {};
+  const rawSeries = Array.isArray(payload.series) ? payload.series : [];
+  for(const s of rawSeries){
+    if(!s || !String(s.name || "").trim()) continue;
+    const nm = String(s.name).trim().slice(0, 30);
+    const local = state.series.find(x => normalize(x.name) === normalize(nm));
+    if(local){ if(s.id) seriesIdMap[s.id] = local.id; continue; }
+    const rec = { id: uid("se"), name:nm, createdAt:s.createdAt || new Date().toISOString(), schemaVersion:SCHEMA_VERSION };
+    result.seriesAdd.push(rec);
+    if(s.id) seriesIdMap[s.id] = rec.id;
+  }
+  if(result.seriesAdd.length){
+    result.warnings.push("将新建 " + result.seriesAdd.length + " 个系列：" +
+      result.seriesAdd.map(s => s.name).join("、"));
+  }
+  if(rawSeries.length && !Object.keys(seriesIdMap).length){
+    result.warnings.push("备份里的系列清单无法识别，这些作品会归入「默认系列」。");
+  }
+
   const rawAnime = Array.isArray(payload.anime) ? payload.anime : [];
   rawAnime.forEach((raw, i) => {
     const chk = importWarningsFor(raw, i+1);
     result.warnings = result.warnings.concat(chk.warns);
     if(chk.skip) return;
     const draft = rawToDraft(raw);
+    // 按名称重映射到本机 id；映射不到（老备份无系列清单）就落默认系列
+    draft.seriesId = (raw.seriesId && seriesIdMap[raw.seriesId]) || DEFAULT_SERIES_ID;
     const d = detectDuplicate(draft);
     if(!d) result.add.push(draft);
     else if(d.level === "L1" || d.level === "L2") result.dup.push({ draft, level:d.level, match:d.match });
@@ -5942,6 +6318,10 @@ async function applyImport(analysis, mode, opts){
   opts = opts || {};
   const decisions = opts.decisions || {};
   let added = 0, skipped = 0, merged = 0;
+  /* 系列必须先落库：作品的 seriesId 已经被映射到这些新 id 上，
+     顺序反了会写出一批指向不存在系列的记录（boot 的孤儿清理会兜底，
+     但那意味着用户刚导入完series 列表是空的，得重开页面才恢复）。 */
+  for(const s of analysis.seriesAdd){ await saveSeries(s); }
   for(const draft of analysis.add){
     await saveAnime(draft);
     added++;
@@ -6012,7 +6392,7 @@ async function applyImport(analysis, mode, opts){
     await refreshBgImage();
     applyAppearance();
   }
-  return { added, skipped, merged, quotes: analysis.quoteAdd.length, quoteSkip: analysis.quoteSkip.length, statuses: analysis.statusAdd.length, warnings: analysis.warnings };
+  return { added, skipped, merged, quotes: analysis.quoteAdd.length, quoteSkip: analysis.quoteSkip.length, statuses: analysis.statusAdd.length, series: analysis.seriesAdd.length, warnings: analysis.warnings };
 }
 let payloadBg = null;
 function mergeUniqueReviews(a, b){
@@ -6118,6 +6498,7 @@ function openImportDialog(){
           '<span class="chip">疑似 ' + a.suspect.length + " 部</span>" +
           '<span class="chip">语录新增/跳过 ' + a.quoteAdd.length + " / " + a.quoteSkip.length + " 条</span>" +
           '<span class="chip">自定义状态 ' + a.statusAdd.length + " 个</span>" +
+          (a.seriesAdd.length ? '<span class="chip">新建系列 ' + a.seriesAdd.length + " 个</span>" : "") +
           '<span class="chip">字段警告 ' + a.warnings.length + " 条</span>" +
         "</div>" + rows +
       "</div>";
@@ -6143,6 +6524,7 @@ function openImportDialog(){
         "<div><b>跳过</b> " + res.skipped + " 部</div>" +
         "<div><b>语录</b> 新增 " + res.quotes + " 条 / 跳过 " + res.quoteSkip + " 条</div>" +
         "<div><b>自定义状态</b> " + res.statuses + " 个</div>" +
+        (res.series ? "<div><b>新建系列</b> " + res.series + " 个</div>" : "") +
         (res.warnings.length ? '<details><summary class="hint">字段警告 ' + res.warnings.length + " 条</summary>" +
           '<div class="report-list scroll mt-3" style="max-height:200px">' + res.warnings.map(w => "<li>" + esc(w) + "</li>").join("") + "</div></details>" : "") +
       "</div>",
@@ -6157,6 +6539,7 @@ function openImportDialog(){
 const SETTINGS_SECTIONS = [
   { key:"look",      name:"外观" },
   { key:"library",   name:"片库" },
+  { key:"series",    name:"系列" },
   { key:"status",    name:"自定义状态" },
   { key:"source",    name:"数据源" },
   { key:"theater",   name:"放映厅" },
@@ -6306,6 +6689,30 @@ function settingsBodyHTML(){
     html += setRow("单集时长（分钟）", "用于估算总观看时长",
       '<input class="input" style="width:88px" type="number" min="1" max="600" step="1" data-set="episode_minutes" value="' + settings.episode_minutes + '">');
     html += "</div>";
+  }
+  if(t === "series"){
+    const orphan = state.anime.filter(a => a.seriesId && !seriesById(a.seriesId)).length;
+    html += '<div class="panel"><div class="panel-head"><h3>系列</h3>' +
+      '<button class="btn btn-sm btn-primary hint" type="button" data-act="se-add" style="margin-left:auto">' + ic("plus",14) + "新建系列</button></div>" +
+      '<p class="hint mb-3">把同一部动画的多季、剧场版、续作归到一起。片库可按系列筛选与排序，' +
+      "作品详情页会列出同系列的其他作品方便跳转。未归类的作品归入「默认系列」（不占记录，不可删除）。</p>" +
+      (orphan ? '<div class="note-box is-warn mb-3">' + ic("warning",16) +
+        "<span>有 " + orphan + " 部作品指向已不存在的系列，刷新后会归回默认系列。</span></div>" : "") +
+      (state.series.length
+        ? state.series.slice().sort((a,b) => a.name.localeCompare(b.name, "zh")).map(s => {
+            const used = state.anime.filter(a => a.seriesId === s.id).length;
+            return '<div class="status-editor mb-3">' +
+              '<span class="badge badge-src nowrap">' + used + " 部</span>" +
+              '<input class="input" style="max-width:220px" value="' + attr(s.name) + '" data-sefield="name" data-id="' + attr(s.id) + '" aria-label="系列名称">' +
+              '<div class="row" style="margin-left:auto">' +
+                '<button class="btn btn-sm" type="button" data-act="se-view" data-id="' + attr(s.id) + '">在片库查看</button>' +
+                '<button class="btn btn-sm btn-icon" type="button" data-act="se-del" data-id="' + attr(s.id) + '" title="删除系列" aria-label="删除系列">' + ic("trash",14) + "</button>" +
+              "</div>" +
+            "</div>";
+          }).join("")
+        : '<div class="state-box">' + ic("grid",32) +
+          "<h3>还没有自定义系列</h3><p class=\"small\">先在「添加新番 / 编辑资料」里填一个系列名，或点右上角新建。</p></div>") +
+      "</div>";
   }
   if(t === "status"){
     html += '<div class="panel"><div class="panel-head"><h3>自定义状态</h3>' +
@@ -6480,6 +6887,26 @@ function bindSettings(root){
     if(n.tagName === "SELECT") n.addEventListener("change", async () => { await commit(); rerender(); });
     else n.addEventListener("change", async () => { await commit(); afterSettingsChange(); });
   });
+  /* 系列重命名。要拦同名：两个同名系列会让筛选器出现两项一样的名字，
+     用户选哪个都说不清，选错一次就以为归类坏了。 */
+  root.querySelectorAll("[data-sefield]").forEach(n => {
+    n.addEventListener("change", async () => {
+      const s = state.series.find(x => x.id === n.dataset.id);
+      if(!s) return;
+      const name = n.value.trim();
+      if(!name){ n.value = s.name; return; }
+      if(name.length > 30){ n.value = s.name; toast("系列名最长 30 字", "warn"); return; }
+      if(state.series.some(x => x.id !== s.id && normalize(x.name) === normalize(name))){
+        n.value = s.name;
+        toast("已存在同名系列", "warn");
+        return;
+      }
+      s.name = name;
+      await saveSeries(s);
+      toast("已重命名为「" + name + "」", "ok");
+      afterSettingsChange();
+    });
+  });
   root.querySelectorAll("[data-act]").forEach(b => b.addEventListener("click", () => settingsAction(b.dataset.act, b.dataset.id, root)));
   updateUsageText(root);
   // 背景可读性提示跟着遮罩滑块即时刷新。
@@ -6508,6 +6935,60 @@ async function updateUsageText(root){
 }
 async function settingsAction(act, id, root){
   switch(act){
+    case "se-add": {
+      openModal({
+        title:"新建系列", narrow:true,
+        body:'<div class="field"><label for="se-name">系列名称</label>' +
+          '<input class="input" id="se-name" data-autofocus maxlength="30" placeholder="如：漆黑的子弹"></div>' +
+          '<p class="hint mt-3">同一部动画的多季、剧场版请用同一个系列名。归类后可在片库按系列筛选，' +
+          "作品详情页也会列出同系列的其他作品。</p>",
+        footer:(f) => {
+          f.innerHTML = '<div class="grow"></div><button class="btn" type="button" data-close="1">取消</button>' +
+            '<button class="btn btn-primary" type="button" id="se-save">创建</button>';
+          f.querySelector("#se-save").addEventListener("click", async () => {
+            const name = f.ownerDocument.querySelector("#se-name").value.trim();
+            if(!name){ toast("系列名称必填", "warn"); return; }
+            if(state.series.some(s => normalize(s.name) === normalize(name))){ toast("已存在同名系列", "warn"); return; }
+            const rec = await ensureSeries(name);
+            if(!rec){ toast("创建失败，请重试", "err"); return; }
+            closeModal();
+            toast("已创建系列「" + rec.name + "」", "ok");
+            rerender();
+          });
+        }
+      });
+      break;
+    }
+    case "se-del": {
+      const s = state.series.find(x => x.id === id);
+      if(!s) return;
+      const used = state.anime.filter(a => a.seriesId === id);
+      const ok = await confirmDialog({
+        title:"删除系列",
+        html:"确定删除系列「" + esc(s.name) + "」吗？" +
+          (used.length
+            ? "<br><b>其中 " + used.length + " 部作品会归回「默认系列」，作品本身不会被删除。</b>"
+            : "<br>该系列下没有作品。") +
+          '<br><span class="hint">只是想改名字的话，直接在左侧输入框改更省事。</span>',
+        okText:"删除系列", danger:true
+      });
+      if(!ok) return;
+      // 先把作品落回默认系列，再删系列 —— 反序会留下一批指向已删 id 的孤儿
+      for(const a of used){ a.seriesId = DEFAULT_SERIES_ID; await saveAnime(a); }
+      await removeSeries(id);
+      toast(used.length ? ("已删除系列，" + used.length + " 部作品归回默认系列") : "已删除系列", "ok");
+      afterSettingsChange();
+      break;
+    }
+    case "se-view": {
+      const s = state.series.find(x => x.id === id);
+      if(!s) return;
+      libState.seriesId = id;
+      libState.q = "";
+      go("library");
+      toast("已筛选系列「" + s.name + "」", "ok", 2600);
+      break;
+    }
     case "bg-upload": {
       const input = document.createElement("input");
       input.type = "file"; input.accept = "image/*";
@@ -6654,11 +7135,12 @@ async function settingsAction(act, id, root){
 }
 async function clearAllData(){
   try{
-    await Repo.clear("anime"); await Repo.clear("quotes"); await Repo.clear("statuses"); await Repo.clear("assets");
+    await Repo.clear("anime"); await Repo.clear("quotes"); await Repo.clear("statuses");
+    await Repo.clear("series"); await Repo.clear("assets");
   }catch(e){}
-  if(Repo.mode === "ls"){ try{ localStorage.removeItem(LS_DATA); Repo._mem = { anime:[], quotes:[], statuses:[], assets:{} }; }catch(e){} }
+  if(Repo.mode === "ls"){ try{ localStorage.removeItem(LS_DATA); Repo._mem = { anime:[], quotes:[], statuses:[], series:[], assets:{} }; }catch(e){} }
   try{ localStorage.removeItem(LS_SETTINGS); }catch(e){}
-  state.anime = []; state.quotes = []; state.statuses = SYSTEM_STATUSES.slice();
+  state.anime = []; state.quotes = []; state.statuses = SYSTEM_STATUSES.slice(); state.series = [];
   settings = Object.assign({}, DEFAULT_SETTINGS);
   saveSettings();
   await Promise.all(state.statuses.map(s => Repo.put("statuses", s)));
@@ -6698,8 +7180,8 @@ async function boot(){
   loadSettings();
   const mode = await Repo.open();
   try{
-    const [animeRaw, quotesRaw, statusesRaw] = await Promise.all([
-      Repo.all("anime"), Repo.all("quotes"), Repo.all("statuses")
+    const [animeRaw, quotesRaw, statusesRaw, seriesRaw] = await Promise.all([
+      Repo.all("anime"), Repo.all("quotes"), Repo.all("statuses"), Repo.all("series")
     ]);
     state.anime = animeRaw.map(a => migrateRecord(a, "anime")).filter(Boolean);
     state.quotes = quotesRaw.map(q => migrateRecord(q, "quote")).filter(Boolean);
@@ -6713,6 +7195,16 @@ async function boot(){
     } else {
       state.statuses = SYSTEM_STATUSES.slice();
       await Promise.all(state.statuses.map(s => Repo.put("statuses", s).catch(() => {})));
+    }
+    state.series = seriesRaw.map(s => migrateRecord(s, "series")).filter(Boolean);
+    /* seriesId 指向的系列可能已被删除（导入了旧备份、手动清过库），
+       这类作品要落回默认系列 —— 留一个悬空 id 的话，
+       筛选「默认系列」时它们会凭空消失，用户以为作品丢了。 */
+    const orphan = state.anime.filter(a => a.seriesId && !seriesById(a.seriesId));
+    if(orphan.length){
+      orphan.forEach(a => { a.seriesId = DEFAULT_SERIES_ID; });
+      await Promise.all(orphan.map(a => Repo.put("anime", a).catch(() => {})));
+      console.warn("已把 " + orphan.length + " 部作品的系列归回默认系列（原系列已不存在）");
     }
   }catch(e){
     console.warn("数据读取失败", e);

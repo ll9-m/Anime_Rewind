@@ -132,15 +132,42 @@ function setVal(el, v) {
     () => qa(".wall .card > .card-3d > .fc-face").length === 2 || qa(".wall .card > .card-3d > .fc-face").length);
   check("正面是封面、背面是资料", () => qa(".fc-front .fc-cover").length >= 1 && qa(".fc-back .fc-body").length >= 1);
   check("背面有旋转光带与漂浮光球", () => qa(".fc-back .fc-sweep").length >= 1 && qa(".fc-back .fc-orb").length === 3);
-  check("背面三操作按钮齐全", () =>
-    qa('.fc-acts [data-act="status"]').length >= 1 &&
-    qa('.fc-acts [data-act="rewatch"]').length >= 1 &&
-    qa('.fc-acts [data-act="detail"]').length >= 1);
+  /* 背面按钮已按用户要求合并为单个「详情」入口。
+     原先是 status / rewatch / detail 三个 —— 但实测三者点击后全都落到详情页，
+     根因是 backface-visibility 不阻止命中测试，正面字幕块把背面按钮的点击吃掉，
+     冒泡到卡片的 data-open。修掉之后行为才真正不同，但卡片正面积极小，
+     三个入口挤在 44px 余量里点不准，故合并为一个。 */
+  check("背面只有一个操作入口（详情）", () => {
+    const acts = qa(".fc-acts [data-act]");
+    return acts.length === 1 && acts[0].dataset.act === "detail";
+  });
   check("翻面按钮存在且有 aria-pressed", () => {
     const b = q(".fc-flip");
     return !!b && b.getAttribute("aria-pressed") === "false";
   });
-  check("正反两面都有翻面按钮（触摸设备才有回头路）", () => qa(".fc-flip").length === 2 || qa(".fc-flip").length);
+  /* 整卡只渲染一个翻面按钮，且必须挂在 .card 上而不是 .card-3d 里 ——
+     放进去的话它会跟着 3D 翻转，正反两面各画一次，视觉上叠成双层圆圈箭头。 */
+  check("整卡只有一个翻面按钮（不再正反两面各一个）", () => qa(".fc-flip").length === 1);
+  check("翻面按钮挂在 .card 上、不在 3D 翻转层内", () =>
+    !!q(".wall .card > .fc-flip") && qa(".card-3d .fc-flip").length === 0);
+  /* 命中测试修复的回归防线：不可见的那一面必须关掉指针事件。
+     backface-visibility:hidden 只管绘制不管命中，正面靠 DOM 顺序
+     抢走背面的全部点击（这正是「三个按钮都跳详情页」的根因）。 */
+  check("背面静止态关闭指针事件（否则正面会吃掉它的点击）", () =>
+    cs(".fc-back").pointerEvents === "none");
+  check("翻转态下正面关闭、背面开启指针事件", () => {
+    let frontOff = false, backOn = false;
+    for (const sheet of win.document.styleSheets) {
+      let rules; try { rules = sheet.cssRules; } catch (_) { continue; }
+      for (const r of rules) {
+        const t = r.selectorText || "";
+        if (!t || r.style == null) continue;
+        if (/is-flipped[^\n]*\.fc-front|hover[^\n]*\.fc-front/.test(t) && r.style.pointerEvents === "none") frontOff = true;
+        if (/is-flipped[^\n]*\.fc-back|hover[^\n]*\.fc-back/.test(t) && r.style.pointerEvents === "auto") backOn = true;
+      }
+    }
+    return frontOff && backOn;
+  });
   check("背面操作区为翻面按钮留出空间（防重叠）", () => cs(".fc-acts").paddingRight !== "0px");
   // 3D 卡片最常见的失效：.card 上的 overflow:hidden 会 flatten preserve-3d
   check("卡片无 overflow:hidden（否则 preserve-3d 被压平）", () => cs(".wall .card").overflow !== "hidden");
@@ -174,9 +201,14 @@ function setVal(el, v) {
   await sleep(60);
   check("点翻面按钮后卡片进入 is-flipped", () => q(".wall .card").classList.contains("is-flipped"));
   check("翻面后 aria-pressed 变为 true", () => qa(".fc-flip").every(b => b.getAttribute("aria-pressed") === "true"));
-  check("翻面后两个按钮文案都切为「翻回封面」", () => qa(".fc-flip").every(b => b.getAttribute("aria-label") === "翻回封面"));
-  check("翻面后可点背面按钮翻回（触摸设备回头路）", () => {
-    click(q(".fc-back .fc-flip"));
+  check("翻面后按钮文案切为「翻回封面」", () => qa(".fc-flip").every(b => b.getAttribute("aria-label") === "翻回封面"));
+  /* 触摸设备没有 hover，翻面按钮是唯一入口 —— 再点一次必须能翻回封面。
+     用 aria-label 找而不是 .fc-back .fc-flip：按钮已移出 3D 层，
+     不再是 .fc-back 的后代。 */
+  check("再点一次可翻回（触摸设备回头路）", () => {
+    const b = qa(".fc-flip")[0];
+    if(!b) return false;
+    click(b);
     return !q(".wall .card").classList.contains("is-flipped");
   });
   check("is-flipped 未误触发跳转（仍在片库页）", () => win.eval("state.route") === "library" || win.eval("state.route"));

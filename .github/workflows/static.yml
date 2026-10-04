@@ -36,8 +36,22 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          # Upload entire repository
-          path: '.'
+          # 只上传站点真正需要的文件。
+          #
+          # 原来是 path: '.'（整个仓库），那会把 tools/ 下30+ 个测试脚本、
+          # .workbuddy/memory/ 的内部工作记录、需求文档一并公开到线上：
+          # 站点目录变成可浏览的源码仓，且每次改测试脚本都会触发一次重新部署
+          # （artifact 内容变了但页面没变）。这里显式列出四个文件。
+          #
+          # anime-rewind.html — 主应用（1.1MB 单文件）
+          # index.html        — 站点根入口，Pages 只解析这个文件名，缺了就是 404
+          # LICENSE           — CC BY-NC 4.0 全文，许可要求随作品分发
+          # .nojekyll         — Pages 不走 Jekyll 构建
+          path: |
+            anime-rewind.html
+            index.html
+            LICENSE
+            .nojekyll
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v5

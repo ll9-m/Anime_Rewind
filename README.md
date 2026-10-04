@@ -38,9 +38,31 @@ python -m http.server 8080       # 然后访问 http://localhost:8080/anime-rewi
 
 | 方式 | 怎么做 | 备注 |
 |---|---|---|
-| **GitHub Pages** | Settings → Pages → Source 选`master` / 根目录 → 保存 | 仓库已备好 `index.html` 入口页，直接可用 |
-| **Netlify / Vercel / Cloudflare Pages** | 拖整个目录上传，或连仓库选`master` 分支 | 无需构建命令，输出目录就是仓库根 |
-| **自己的服务器** | 任意静态服务指向仓库根即可 | 建议带 HTTPS，`http://` 下部分浏览器能力受限 |
+| **GitHub Pages（自动）** | 什么都不用做 —— 推 `master` 即由 `.github/workflows/static.yml` 自动部署 | 需在 Settings → Pages 把 Source 选为 **GitHub Actions** |
+| **GitHub Pages（手动）** | Settings → Pages → Source 选 `master` / 根目录 → 保存 | 不走 Actions 时用这个 |
+| **Netlify / Vercel / Cloudflare Pages** | 拖整个目录上传，或连仓库选 `master` 分支 | 无需构建命令，输出目录就是仓库根 |
+| **在线体验** | <https://anime-rewind.app.workbuddy.host/> | 已托管的实例，可直接访问 |
+
+> **Source 一定要选 GitHub Actions**：官方模板生成的 workflow 是走 Actions 部署的，
+> 若Source 选了 `master` 分支，两套机制会互相覆盖，行为不稳定。
+
+### 自动部署只上传四个文件
+
+workflow 的 `path:` 是显式清单，不是整个仓库：
+
+| 文件 | 作用 |
+|---|---|
+| `anime-rewind.html` | 主应用（1.1MB 单文件） |
+| `index.html` | 站点根入口，Pages 只解析这个文件名 |
+| `LICENSE` | CC BY-NC 4.0 全文，许可要求随作品分发 |
+| `.nojekyll` | 不走 Jekyll 构建 |
+
+原本写的是 `path: '.'`（整个仓库），那会把 `tools/` 下 30+ 个测试脚本、
+`.workbuddy/memory/` 的内部工作记录和需求文档一并公开到线上——站点目录等于一个可浏览的源码仓，
+而且每次改测试脚本都会触发一次无意义的重新部署（artifact 变了但页面没变）。
+
+> 校验这份清单：`node tools/verify-workflow.js`（16 项）。清单是明文字符串，
+> 文件被改名时 GitHub 不会报错，只会在部署日志里留下一个 404 —— 这个脚本把「声明」和磁盘实际对齐。
 
 ### 关于 `index.html`
 
@@ -57,6 +79,7 @@ python -m http.server 8080       # 然后访问 http://localhost:8080/anime-rewi
 > 想验证根路径确实通了：`node tools/verify-entry.js`。它起本地静态服务对齐托管的根解析规则，
 > 实测 9 项——含**反向验证**：把 `index.html` 挪走，根路径必须回404。
 > 这一步是必要的，否则「检查通过」可能只是因为检查根本没生效。
+> 必须在 `http://` 源下验：`file://` 的origin 为 null，IndexedDB 会降级到 localStorage，线上不会。
 
 ---
 
@@ -177,6 +200,7 @@ node tools/contrast-stream-note.js   # 播放记录提示条
 node tools/verify-flip.js       # 桌面 / 无 hover 两条翻面路径
 node tools/verify-license.js    # 版权声明：meta / 关于页排版 / 三主题对比度
 node tools/verify-entry.js      # 站点根路径：index.html 跳转 + http:// 源下应用启动（含反向验证）
+node tools/verify-workflow.js   # Pages 工作流：上传清单与磁盘对齐，不含该公开的文件
 node tools/verify-series.js     # 系列功能全流程 + 截图
 node tools/verify-visual.js
 node tools/verify-bg-css.js
@@ -322,9 +346,11 @@ jsdom 会在后续交互里陷入死循环，整个测试**静默卡死、连一
 | `d02f7fe` | 修背面按钮点击失效 + 卡片去重 + 新增系列归类 |
 | `4b12619` | 删掉卡片常驻翻面按钮，触摸端改用点卡片翻面 |
 | `12fe2f2` | 版权声明 + CC BY-NC 4.0（LICENSE / 页内 meta / 关于页三处） |
-| `864f7ca` | 补 `index.html` 修 GitHub Pages 根路径 404 |
+| `50d864e` | 补 `index.html` 修GitHub Pages 根路径 404 |
+| `1818af1` | GitHub Actions 自动部署 workflow |
+| `4b3f8a2` | workflow 收敛为只上传四个文件 + `verify-workflow.js` 校验清单 |
 
-### 三个值得记住的坑
+### 四个值得记住的坑
 
 **`backface-visibility: hidden` 只管绘制，不管命中测试。**
 3D 翻转卡翻过去之后，背面虽然看不见，但**仍然参与命中测试**；
@@ -341,6 +367,13 @@ DOM 顺序靠前的正面元素会把背面的点击全部吃掉，冒泡到卡�
 但站点根没有 `index.html` 就是「404 未找到文件」，报错文案完全不提缺什么文件，
 容易误判成 Pages 没启用或分支选错。而且这个问题**在 `file://` 下验不出来** ——
 双击打开主文件一切正常，只有部署后才炸。
+
+**本地提交过 ≠ 推得上去。** 在 GitHub 网页端新建 workflow 文件再推本地，
+远端就多出一个本地没有的提交，`git push` 直接被拒（non-fast-forward），
+报「无法推送 refs 到远端」。这类错误和凭据问题长得完全不一样：
+凭据错会明确说 `could not read Username`，被拒则只说「无法推送」，
+容易往网络或权限上想。正解是 `git fetch` 后 `git rebase origin/master`（或 `pull --rebase`），
+把本地提交挪到远端之上，历史保持线性。
 
 ---
 

@@ -348,7 +348,7 @@ jsdom 会在后续交互里陷入死循环，整个测试**静默卡死、连一
 | `12fe2f2` | 版权声明 + CC BY-NC 4.0（LICENSE / 页内 meta / 关于页三处） |
 | `50d864e` | 补 `index.html` 修GitHub Pages 根路径 404 |
 | `1818af1` | GitHub Actions 自动部署 workflow |
-| `4b3f8a2` | workflow 收敛为只上传四个文件 + `verify-workflow.js` 校验清单 |
+| `451ac63` | workflow 收敛为只上传四个文件 + `verify-workflow.js` 校验清单 |
 
 ### 四个值得记住的坑
 

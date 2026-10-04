@@ -1,0 +1,5 @@
+node_modules/
+assets/honor/
+assets/honor-webp/
+*.log
+.DS_Store

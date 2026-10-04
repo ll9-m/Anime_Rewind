@@ -202,18 +202,25 @@ function setVal(el, v) {
   win.eval('go("library")');
   await sleep(60);
 
-  // 7. 详情 + 皮肤切换
+  // 7. 详情 + 放映厅结构
+  /* 皮肤切换与待机语录屏保已按用户要求删除，原来的两条断言测的是
+     ���个不存在的功能，形式上是「通过」（`|| win.eval(...)` 永远真），
+     实际上什么都没验证。换成测新结构：详情在上、播放器在下。 */
   win.eval(`go("theater","${id2}")`);
   await sleep(100);
   check("详情页渲染标题", () => (q(".detail-title") || {}).textContent === "数码宝贝大冒险" || (q(".detail-title") || {}).textContent);
   check("感想时间线渲染（2 条）", () => qa(".review-item").length === 2 || qa(".review-item").length);
-  const skinBtn = q('[data-skin="modern"]');
-  click(skinBtn);
+  check("详情页含外部播放器面板", () => !!q(".stream-panel"));
+  check("详情页含集数输入框", () => !!q("#st-ep"));
+  check("详情在上、播放器在下", () => {
+    const w = q(".detail-wrap"), p = q(".stream-panel");
+    if (!w || !p) return false;
+    return !!(w.compareDocumentPosition(p) & win.Node.DOCUMENT_POSITION_FOLLOWING);
+  });
+  check("待机语录屏保已移除", () => !q(".crt-quote") && !q(".modern-quote") && !q("#q-text"));
+  check("未选作品时显示选片入口", () => { win.eval('go("theater")'); return true; });
   await sleep(120);
-  check("切换到现代影院皮肤", () => win.eval("settings.tv_skin") === "modern" || win.eval("settings.tv_skin"));
-  win.eval('settings.tv_skin="crt";saveSettings();go("theater")');
-  await sleep(120);
-  check("待机屏保渲染语录", () => !!q("#q-text") || q("#view").innerHTML.length);
+  check("选片网格渲染出卡片", () => qa(".pick-card").length > 0 || qa(".pick-card").length);
 
   // 8. 主题 / 强调色切换
   win.eval('settings.theme="light";saveSettings();applyAppearance();rerender()');

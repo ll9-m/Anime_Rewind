@@ -795,57 +795,45 @@ table.grid-table{ width:100%; border-collapse:collapse; font-size:var(--fs-sm); 
    放映厅
    ============================================================ */
 .theater{ position:relative; }
-/* CRT 皮肤 */
-.crt-frame{
-  position:relative; border-radius:26px; padding:26px;
-  background:linear-gradient(160deg,#2a2f36,#161a1f 60%,#0e1114);
-  box-shadow:inset 0 0 0 2px #3a4048, inset 0 0 30px rgba(0,0,0,.9), var(--shadow-2);
-}
-.crt-frame::after{
-  content:""; position:absolute; right:34px; bottom:8px; width:44px; height:6px; border-radius:3px;
-  background:linear-gradient(90deg,#3a4048,#565e68); opacity:.8;
-}
-.crt-screen{ position:relative; border-radius:22px; overflow:hidden; background:#05070a; box-shadow:inset 0 0 60px rgba(0,0,0,.9); }
-.crt-screen.scanlines::before{
-  content:""; position:absolute; inset:0; z-index:5; pointer-events:none; opacity:.5;
-  background:repeating-linear-gradient(180deg,rgba(0,0,0,0) 0px,rgba(0,0,0,0) 2px,rgba(0,0,0,.55) 3px,rgba(0,0,0,.55) 4px);
-}
-.crt-screen.chroma::after{
-  content:""; position:absolute; inset:0; z-index:6; pointer-events:none; mix-blend-mode:screen; opacity:.12;
-  background:linear-gradient(90deg,#f00 0 33%,#0f0 33% 66%,#00f 66% 100%);
-}
-.crt-snow{ position:absolute; inset:0; z-index:4; pointer-events:none; opacity:.16; }
-.crt-vignette{ position:absolute; inset:0; z-index:7; pointer-events:none; box-shadow:inset 0 0 90px 20px rgba(0,0,0,.75); border-radius:22px; }
-.crt-brand{ position:absolute; left:50%; transform:translateX(-50%); top:6px; z-index:8; font-size:10px; letter-spacing:.3em; color:#7c8794; }
-.crt-standby{ position:relative; min-height:440px; display:flex; align-items:center; justify-content:center; padding:var(--sp-7); text-align:center; }
-.crt-quote{ max-width:640px; position:relative; z-index:9; }
-/* 荧光屏字：靠字重与冷白亮色本身读出「显示器发光」，
-   不用零偏移彩色 text-shadow —— 那是 AI 界面的廉价指纹。 */
-.crt-quote .q-text{
-  font-size:var(--fs-3xl); font-weight:600; line-height:1.5; color:#e8f0f7;
-  text-shadow:0 1px 0 rgba(0,0,0,.55);
-}
-.crt-quote .q-src{ margin-top:var(--sp-4); font-size:var(--fs-sm); color:#8fa3b6; letter-spacing:.1em; }
-/* 现代影院皮肤 */
-.modern-frame{
-  position:relative; border-radius:var(--r-xl); overflow:hidden;
-  background:linear-gradient(180deg,#101319,#080a0e);
-  border:1px solid var(--border-2); box-shadow:var(--shadow-2);
-}
-.modern-screen{ position:relative; aspect-ratio:16/9; min-height:440px; display:flex; align-items:center; justify-content:center; padding:var(--sp-6) var(--sp-7); }
-.modern-screen::before{ content:""; position:absolute; inset:0; background:radial-gradient(120% 90% at 50% 40%,rgba(255,255,255,.05),transparent 70%); }
-.modern-quote{ position:relative; z-index:2; max-width:760px; text-align:center; }
-.modern-quote .q-text{ font-size:var(--fs-3xl); font-weight:600; line-height:1.5; animation:fadein var(--dur-slow) var(--ease); }
-.modern-quote .q-src{ margin-top:var(--sp-4); font-size:var(--fs-sm); color:var(--muted); letter-spacing:.08em; }
-.curtain{ position:absolute; top:0; bottom:0; width:38%; z-index:3; pointer-events:none;
-  background:linear-gradient(90deg,#4b1016,#7a1420 45%,#5a1119); opacity:.55;
-  box-shadow:inset 0 0 60px rgba(0,0,0,.6); }
-.curtain.l{ left:0; border-bottom-right-radius:40% 100%; border-top-right-radius:40% 100%; }
-.curtain.r{ right:0; border-bottom-left-radius:40% 100%; border-top-left-radius:40% 100%; }
-@keyframes fadein{ from{opacity:0;transform:translateY(6px)} to{opacity:1;transform:none} }
-
+/* CRT / 现代影院两套皮肤原本服务于「待机屏保」的大屏外框。
+   屏保按用户要求删除后，这整块约 50 行 CSS 已无任何调用点 ——
+   留着不会报错，但会让后来的人以为放映厅还有屏幕皮肤。
+   .q-text 系列的样式这里也一并清掉了：语录本用的是
+   .quote-card .q-text（见下），自成一套，不依赖本块。 */
 /* 详情内容（两皮肤共用） */
 .detail-wrap{ position:relative; z-index:2; padding:var(--sp-5); }
+/* 选片网格：放映厅未选作品时的入口 */
+.pick-grid{ display:grid; grid-template-columns:repeat(auto-fill,minmax(220px,1fr)); gap:var(--sp-3); }
+.pick-card{
+  display:grid; grid-template-columns:52px minmax(0,1fr); gap:var(--sp-3); align-items:center;
+  padding:var(--sp-3); text-align:left; cursor:pointer;
+  background:var(--panel-2); border:1px solid var(--border); border-radius:var(--r-md);
+  transition:border-color var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease);
+}
+.pick-card:hover{ border-color:var(--accent); background:var(--panel-3); }
+.pick-cover{ display:block; width:52px; aspect-ratio:3/4; border-radius:var(--r-sm); overflow:hidden; background:var(--panel-3); }
+.pick-cover img{ width:100%; height:100%; object-fit:cover; display:block; }
+.pick-body{ display:flex; flex-direction:column; gap:2px; min-width:0; }
+.pick-body b{ font-size:var(--fs-sm); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+/* 播放记录提示：紧跟进度条 */
+.stream-note{
+  display:flex; align-items:center; gap:var(--sp-2);
+  padding:var(--sp-2) var(--sp-3); border-radius:var(--r-sm);
+  background:var(--panel-2); border:1px solid var(--border);
+  font-size:var(--fs-sm); color:var(--text-2);
+}
+/* 数字不用 var(--accent)：像素风的强调色是 #ff004d（深粉），
+   配米色面板只有 3.55:1，达不到正文 4.5:1。
+   改用 --text（面板上的最深色，各套系都过 AA），
+   靠字重而不是颜色来强调 —— 颜色不是唯一的信息载体。 */
+.stream-note b{ color:var(--text); font-weight:700; }
+/* 简介与感想改用原生 details 折叠：详情页上半部要给进度与播放器让位，
+   全文默认铺开会把这块屏幕推得很长。summary 保留 .sec-title 样式以视觉统一。 */
+details > summary{ cursor:pointer; list-style:none; }
+details > summary::-webkit-details-marker{ display:none; }
+details > summary::after{ content:"▾"; margin-left:auto; color:var(--muted); font-size:11px; }
+details[open] > summary::after{ content:"▴"; }
+details > summary:hover{ color:var(--accent); }
 .detail-hero{ display:grid; grid-template-columns:200px minmax(0,1fr); gap:var(--sp-5); }
 @media (max-width:1500px){ .detail-hero{ grid-template-columns:150px minmax(0,1fr); } }
 .detail-cover{ border-radius:var(--r-lg); overflow:hidden; border:1px solid var(--border); background:var(--panel-3); box-shadow:var(--shadow); }
@@ -2583,6 +2571,10 @@ function draftFromCandidate(c, an){
     statusId: "st_want", watchedEpisodes: 0, myScore: null, watchYear: null,
     watchGrade: null, watchChannel: null, rewatchCount: 0,
     favorite: false, masterpiece: false, personalTags: [], reviews: [],
+    /* 在线播放：按作品独立保存，而不是全局一份。
+       原先是 settings.stream_url —— 一部番的片源会覆盖另一部，
+       「不用每次都重新输入」这个需求等于没实现。 */
+    streamUrl: "", streamEp: null, streamUrlAt: "",
     createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
     locked: {}, pending: {}, schemaVersion: SCHEMA_VERSION
   }, an || {}, c || {});
@@ -3314,13 +3306,20 @@ function bindLibraryActions(root){
   });
 }
 async function libraryAction(act, id, root){
+  /* 先处理不依赖具体作品的动作。
+     原来这里写的是 `const a = animeById(id); if(!a) return;` 开头，
+     于是「添加第一部动画」和「清空筛选」这两个按钮（它们没有 data-id）
+     在 animeById(undefined) 返回 null 时就被静默拦掉 —— 按钮能看见、点了没反应。
+     右上角「添加新番」是 box.innerHTML 里另一个按钮，不走这条路径，所以正常，
+     这个不对称正是它难以被发现的原因。 */
+  if(act === "add"){ openSearchModal(); return; }
+  if(act === "reset-filter"){
+    Object.assign(libState, { q:"", statusId:"", decade:"", watchYear:"", watchGrade:"", studio:"", genre:"", flag:"" });
+    rerender(); return;
+  }
   const a = animeById(id);
   if(!a) return;
   switch(act){
-    case "add": openSearchModal(); break;
-    case "reset-filter":
-      Object.assign(libState, { q:"", statusId:"", decade:"", watchYear:"", watchGrade:"", studio:"", genre:"", flag:"" });
-      rerender(); break;
     case "detail": go("theater", id); break;
     case "flip": {
       // 触摸设备没有 hover，翻面按钮是唯一入口；点击卡片本身仍进详情。
@@ -3535,13 +3534,11 @@ function quoteMetaLine(q){
 }
 
 /* ============================================================
-   16. 放映厅（详情页 / 待机屏保）
+   16. 放映厅（作品详情 + 外部播放器）
    ============================================================ */
-let standby = { timer:null, quote:null, snowRaf:null };
-function stopStandby(){
-  if(standby.timer){ clearInterval(standby.timer); standby.timer = null; }
-  if(standby.snowRaf){ cancelAnimationFrame(standby.snowRaf); standby.snowRaf = null; }
-}
+/* 原先这里是 standby 状态对象（语录轮播定时器 + 雪花 rAF）与 stopStandby()。
+   待机屏保按用户要求删除后，两者都失去唯一的调用者 ——
+   留着它们不会报错，但会让后来的人以为放映厅还有屏保逻辑。 */
 let audioCtx = null;
 /* ============================================================
    开机音效：老式电视通电 + 街机 8-bit 主题
@@ -3651,63 +3648,20 @@ function initAudioOnce(){
   const AC = window.AudioContext || window.webkitAudioContext;
   if(!AC) return;
   try{ audioCtx = new AC(); }catch(e){ audioCtx = null; }
-  if(settings.tv_skin === "crt" && settings.crt_power_sound) powerSound();
+  /* 原来这里还要求 tv_skin === "crt"。待机屏保删除后 tv_skin 已无作用对象，
+     若继续用它当前置条件，开机音效会随一个不可见的设置被静默关闭。
+     音效开关只剩 crt_power_sound 一个，语义反而更干净。 */
+  if(settings.crt_power_sound) powerSound();
 }
 window.addEventListener("pointerdown", function once(){
   window.removeEventListener("pointerdown", once);
   initAudioOnce();
 }, { once:true });
 
-/* CRT 雪花：低分辨率生成 + 放大铺满。
- *
- * 旧实现对全屏尺寸逐帧 createImageData + 逐像素写入 192 万像素，
- * 也就是每秒约 830 万次内存写入 + 分配一个 8MB 的 ImageData。
- * 雪花本身就是低频噪声，肉眼看不出 1/4 分辨率的差别，
- * 但开销降到 1/16 —— 而且 ImageData 只分配一次，循环里复用。 */
-const SNOW_Q = 4;              // 1/4 分辨率
-const SNOW_FPS = 24;           // 24fps 已足够，旧雪花的 60fps 只是白烧 CPU
-function drawSnow(canvas){
-  const ctx = canvas && canvas.getContext ? canvas.getContext("2d") : null;
-  if(!ctx || !ctx.createImageData) return () => {};
-  const cw = canvas.clientWidth || canvas.offsetWidth || 640;
-  const ch = canvas.clientHeight || canvas.offsetHeight || 400;
-  // 放大后按像素渲染，避免浏览器插值把噪点抹成灰糊
-  ctx.imageSmoothingEnabled = false;
-
-  const w = Math.max(2, Math.ceil(cw / SNOW_Q));
-  const h = Math.max(2, Math.ceil(ch / SNOW_Q));
-  canvas.width = w;
-  canvas.height = h;
-
-  const img = ctx.createImageData(w, h);
-  const d = img.data;
-  for(let i = 0; i < d.length; i += 4){
-    const v = Math.random() * 255;
-    d[i] = v; d[i+1] = v; d[i+2] = v; d[i+3] = 255;
-  }
-  ctx.putImageData(img, 0, 0);
-  // 用 CSS 尺寸把低分辨率画布拉满，噪点自然变成 4×4 的像素块 —— 更像真 CRT 雪花
-  canvas.style.width = "100%";
-  canvas.style.height = "100%";
-  canvas.style.imageRendering = "pixelated";
-
-  if(reduceMotion() || !settings.crt_snow) return () => {};
-  let raf = 0, last = 0, alive = true;
-  const loop = (ts) => {
-    if(!alive) return;
-    if(ts - last >= 1000 / SNOW_FPS){
-      last = ts;
-      for(let i = 0; i < d.length; i += 4){
-        const v = Math.random() * 255;
-        d[i] = v; d[i+1] = v; d[i+2] = v;
-      }
-      ctx.putImageData(img, 0, 0);
-    }
-    raf = requestAnimationFrame(loop);
-  };
-  raf = requestAnimationFrame(loop);
-  return () => { alive = false; cancelAnimationFrame(raf); };
-}
+/* CRT 雪花渲染（drawSnow，1/4 分辨率 + 24fps + ImageData 复用）原本只服务待机屏保。
+   屏保删除后已无调用点，随之移除。把这行记在这里，是为了不让后来者重新踩
+   「全分辨率逐帧 createImageData 写 192 万像素 ≈ 每秒 830 万次内存写入」的坑 —
+   那正是本函数当初被降采样的原因。 */
 
 /* ============================================================
    17. 放映厅 · 外部播放器
@@ -3865,56 +3819,122 @@ function mountStreamPlayer(mountEl, raw, statusEl){
   return () => { clear(); try{ frame.src = "about:blank"; }catch(e){} };
 }
 
-/* 播放器输入区。URL 持久化到 settings.stream_url —— 用户的收藏片源不该每次重打。 */
-function renderStreamLauncher(){
-  const u = settings.stream_url || "";
-  return '<div class="panel mt-4"><div class="panel-head">' + ic("film",16) +
-    "<h3>外部播放器</h3><span class=\"hint\">直接在其他网站播放</span></div>" +
+/* 外部播放器区。
+ *
+ * 数据归属（这是本轮最关键的改动）：
+ *   原先存在 settings.stream_url —— 全局一份，于是「给 A 番粘的片源」
+ *   会在打开 B 番时被当成 B 番的片源。用户的原话是「不用每次都输入
+ *   这部番的链接」，全局一份在语义上根本满足不了。
+ *   现在按作品存：a.streamUrl（片源）+ a.streamEp（看到第几集）。
+ *   settings.stream_url 保留为「无作品时的临时片源」，不删以免旧数据失效。
+ *
+ * 集数记录的现实约束：B 站分 P 用 ?p=，YouTube 用 &start=（秒），
+ * 两者无法统一换算。所以只做「用户自己声明看到第几集」的轻量记录，
+ * 不假装能从播放进度反推 —— 那需要跨域读取播放器内部状态，做不到。
+ */
+function streamURLOf(a){
+  if(a && a.streamUrl) return a.streamUrl;
+  return settings.stream_url || "";
+}
+/* 把声明的集数写回地址。分 P 制（B 站）能对上就改 p=，
+ * 其余平台原样返回 —— 改不了总比改错好。 */
+function applyEpToURL(raw, ep){
+  const u = normalizeStreamURL(raw);
+  if(!u || ep == null) return u;
+  try{
+    const url = new URL(u);
+    if(/(^|\.)bilibili\.com$/i.test(url.hostname)){
+      url.searchParams.set("p", String(ep));
+      return url.href;
+    }
+  }catch(e){}
+  return u;
+}
+function renderStreamLauncher(a){
+  const u = streamURLOf(a);
+  const has = !!u;
+  const ep = a && a.streamEp != null ? a.streamEp : null;
+  return '<div class="panel stream-panel mt-4"><div class="panel-head">' + ic("film",16) +
+    "<h3>外部播放器</h3>" +
+    '<span class="hint">' + (a ? "片源按这部作品保存，换番不会互相覆盖" : "临时片源（未选作品）") + "</span></div>" +
     '<p class="small muted mb-3">粘一个播放网址（YouTube / 哔哩哔哩 / Vimeo，或任意允许嵌入的网站）。' +
-    "本应用会自动把常见分享链接转换成播放器地址。</p>" +
+    "本应用会自动把常见分享链接转换成播放器地址；保存后下次打开这部作品直接续播。</p>" +
     '<div class="row gap-2" style="flex-wrap:wrap">' +
       '<div class="search-wrap" style="flex:1 1 320px;max-width:none">' + ic("link",16) +
         '<input class="input" id="st-url" type="url" inputmode="url" spellcheck="false" ' +
         'placeholder="https://www.bilibili.com/video/BV... 或 https://youtu.be/..." value="' + attr(u) + '">' +
       "</div>" +
-      '<button class="btn btn-primary" type="button" data-st="play">' + ic("play",14) + "播放</button>" +
-      '<button class="btn" type="button" data-st="open">' + ic("external",14) + "新标签打开</button>" +
-      '<button class="btn btn-sm" type="button" data-st="clear" title="清除已保存的片源" hidden>' + ic("trash",14) + "</button>" +
+      '<div class="field" style="flex:0 0 132px"><label for="st-ep">看到第几集</label>' +
+        '<input class="input" id="st-ep" type="number" inputmode="numeric" min="1" step="1" ' +
+        'placeholder="—" value="' + (ep == null ? "" : ep) + '"></div>' +
     "</div>" +
-    '<div id="st-status" class="note-box is-warn mt-3">' + ic("info",16) +
-      "<span>尚未加载。多数网站禁止被第三方网站嵌入，遇到白屏属正常现象，" +
-      "用「新标签打开」总能观看。</span></div>" +
+    '<div class="row gap-2 mt-3" style="flex-wrap:wrap">' +
+      '<button class="btn btn-primary" type="button" data-st="play">' + ic("play",14) + "播放</button>" +
+      '<button class="btn" type="button" data-st="save">' + ic("check",14) + "保存片源与进度</button>" +
+      '<button class="btn" type="button" data-st="open">' + ic("external",14) + "新标签打开</button>" +
+      '<button class="btn btn-sm" type="button" data-st="clear" title="清除已保存的片源"' + (has ? "" : " hidden") + ">" + ic("trash",14) + "</button>" +
+    "</div>" +
+    (has && ep != null
+      ? '<div class="note-box is-ok mt-3">' + ic("check",16) + "<span>已保存：第 " + esc(String(ep)) + " 集</span></div>"
+      : '<div id="st-status" class="note-box is-warn mt-3">' + ic("info",16) +
+        "<span>" + (has ? "已保存片源，直接点「播放」续上次的进度。" : "尚未保存。多数网站禁止被第三方网站嵌入，遇到白屏属正常现象，用「新标签打开」总能观看。") + "</span></div>") +
     '<div id="st-mount" class="stream-mount mt-3" hidden></div>' +
   "</div>";
 }
-/* 清除按钮的显示不能只看渲染那一刻的 settings.stream_url：
-   用户常常是「先粘网址 → 点播放 → 才存进设置」，此时页面并未重渲染，
-   按钮就永远不出现。改为始终渲染，由 syncStreamLauncher 显隐。 */
+/* 清除按钮的显示不能只看渲染那一刻的持久化状态：
+   用户常常是「先粘网址 → 才想到保存」，此时页面并未重渲染，
+   按钮就永远不出现。改为依据输入框实时取值。 */
 function syncStreamLauncher(root){
+  const input = root.querySelector("#st-url");
   const open = root.querySelector('[data-st="open"]');
   const clear = root.querySelector('[data-st="clear"]');
-  const has = !!(settings.stream_url || (root.querySelector("#st-url") || {}).value);
+  const has = !!(input && input.value.trim());
   if(open) open.disabled = !has;
   if(clear) clear.hidden = !has;
 }
-function bindStreamLauncher(root){
+function bindStreamLauncher(root, a){
   const input = root.querySelector("#st-url");
+  const epInput = root.querySelector("#st-ep");
   const mount = root.querySelector("#st-mount");
-  const status = root.querySelector("#st-status");
   if(!input || !mount) return;
   let cleanup = null;
 
+  /* 提示条不能只在渲染时抓一次引用：面板有两种形态 ——
+     「未保存」态带 id="st-status"，「已保存」态只有 .note-box（无 id）。
+     若把 status 存成常量，保存过一次后所有后续提示都会写进 null，
+     用户点了没反应却什么也看不到。改为每次现查。 */
+  function statusEl(){
+    return root.querySelector("#st-status") || root.querySelector(".stream-panel .note-box");
+  }
   function setStatus(kind, text){
-    if(!status) return;
-    status.className = "note-box mt-3 " + (kind === "ok" ? "is-ok" : kind === "warn" ? "is-warn" : "is-err");
-    status.innerHTML = (kind === "ok" ? ic("check",16) : kind === "warn" ? ic("warning",16) : ic("info",16)) +
+    const el = statusEl();
+    if(!el) return;
+    el.className = "note-box mt-3 " + (kind === "ok" ? "is-ok" : kind === "warn" ? "is-warn" : "is-err");
+    el.innerHTML = (kind === "ok" ? ic("check",16) : kind === "warn" ? ic("warning",16) : ic("info",16)) +
       "<span>" + text + "</span>";
   }
   function showError(msg){ if(cleanup){ cleanup(); cleanup = null; } mount.hidden = true; mount.innerHTML = ""; setStatus("err", msg); }
+  function readEp(){
+    const v = epInput ? epInput.value.trim() : "";
+    if(v === "") return null;
+    const n = Number(v);
+    if(!Number.isInteger(n) || n < 1) return NaN;   // NaN = 用户填了非法值，需要提示
+    return n;
+  }
+  function effectiveURL(){
+    const ep = readEp();
+    return applyEpToURL(input.value, ep != null && !isNaN(ep) ? ep : null);
+  }
 
   function play(){
-    const raw = input.value;
-    if(!raw.trim()){ showError("请先填一个播放网址"); return; }
+    const typed = input.value.trim();
+    /* 先判「用户到底填了什么」，再判归一化后的地址。
+       反过来写会有洞：applyEpToURL 对 javascript: 这类伪协议会归一化成空串，
+       于是 `!raw` 为真但 `!input.value.trim()` 为假 —— 条件放行了它，
+       提示语还会对着非空输入说「请先填一个播放网址」，用户完全看不懂哪里错了。 */
+    if(!typed){ showError("请先填一个播放网址"); return; }
+    const raw = effectiveURL();
+    if(!raw){ showError("网址无效：只接受 http / https 开头的地址"); return; }
     const res = resolveEmbed(raw);
     if(!res.ok){ showError(res.reason); return; }
     mount.hidden = false;
@@ -3923,33 +3943,52 @@ function bindStreamLauncher(root){
     setStatus("warn", "正在加载 " + res.rule.name + " 播放器…");
     cleanup = mountStreamPlayer(mount, raw, status);
   }
+  /* 保存：不整页重渲染。rerender() 会把 iframe 销毁掉，
+     正在播的视频会被打断 —— 保存只是存数据，没必要牺牲播放状态。 */
+  async function save(){
+    const raw = input.value.trim();
+    const ep = readEp();
+    if(isNaN(ep)){ showError("集数必须是大于 0 的整数"); return; }
+    if(raw && !resolveEmbed(raw).ok){ showError("网址无法识别，未保存"); return; }
+    if(!a){ showError("请先从片库打开一部作品，再保存片源"); return; }
+    a.streamUrl = raw;
+    a.streamEp = ep;
+    a.streamUrlAt = raw ? new Date().toISOString() : "";
+    await saveAnime(a);
+    setStatus("ok", raw
+      ? "已保存" + (ep != null ? "，下次从第 " + ep + " 集续播" : "")
+      : "已清除片源");
+    syncStreamLauncher(root);
+    toast(raw ? "片源已保存" : "已清除片源", "ok");
+  }
 
   root.querySelectorAll("[data-st]").forEach(b => b.addEventListener("click", () => {
     const act = b.dataset.st;
-    if(act === "play"){
-      // 播放成功解析后才持久化，避免把无效链接存进设置
-      if(resolveEmbed(input.value).ok){ settings.stream_url = input.value.trim(); saveSettings(); }
-      syncStreamLauncher(root);
-      play();
-      return;
-    }
+    if(act === "play"){ play(); return; }
+    if(act === "save"){ save(); return; }
     if(act === "open"){
-      const u = normalizeStreamURL(input.value);
+      const u = normalizeStreamURL(effectiveURL());
       if(!u){ setStatus("err", "网址无效，无法打开"); return; }
       window.open(u, "_blank", "noopener,noreferrer");
       return;
     }
     if(act === "clear"){
-      settings.stream_url = ""; saveSettings();
       if(cleanup){ cleanup(); cleanup = null; }
       mount.hidden = true; mount.innerHTML = "";
       input.value = "";
+      if(epInput) epInput.value = "";
+      if(a){
+        a.streamUrl = ""; a.streamEp = null; a.streamUrlAt = "";
+        saveAnime(a);
+      }else{
+        settings.stream_url = ""; saveSettings();
+      }
       syncStreamLauncher(root);
       setStatus("warn", "已清除保存的片源。");
     }
   }));
   input.addEventListener("keydown", e => {
-    if(e.key === "Enter"){ e.preventDefault(); root.querySelector('[data-st="play"]').click(); }
+    if(e.key === "Enter"){ e.preventDefault(); play(); }
   });
   input.addEventListener("input", debounce(() => {
     syncStreamLauncher(root);
@@ -3960,53 +3999,50 @@ function bindStreamLauncher(root){
   window.addEventListener("pagehide", () => { if(cleanup) cleanup(); }, { once:true });
 }
 
+/* 未选作品时的放映厅。
+ *
+ * 原先是「语录待机屏保」（CRT 雪花 + 8 秒轮播台词）。用户明确要求去掉 ——
+ * 理由站得住：待机的唯一功能是让人路过时看一句台词，但代价是
+ * 打开放映厅第一眼看到的不是「要看什么」，而是装饰。
+ * 现在直接给一个选片入口，把「选一部」放在第一位。
+ * 顶部那颗大屏留给详情页的进度条，比语录有信息量。 */
 function renderStandby(root){
-  stopStandby();
-  const crt = settings.tv_skin === "crt";
-  const q = pickRandomQuote(null);
-  standby.quote = q;
-  const inner = q
-    ? '<div class="crt-quote"><div class="q-text" id="q-text">' + esc(q.text) + "</div>" +
-      '<div class="q-src" id="q-src">' + esc(quoteMetaLine(q)) + "</div></div>"
-    : '<div class="crt-quote"><div class="q-text">还没有收录语录</div><div class="q-src">到「语录本」添加第一条童年台词吧</div></div>';
-  root.innerHTML = '<div class="theater">' + (crt
-      ? '<div class="crt-frame"><div class="crt-screen' + (settings.crt_scanlines ? " scanlines" : "") + (settings.crt_scanlines ? " chroma" : "") + '" id="crt-screen">' +
-          (settings.crt_snow ? '<canvas class="crt-snow" id="crt-snow"></canvas>' : "") +
-          '<div class="crt-vignette"></div><div class="crt-brand">ANIME REWIND</div>' +
-          '<div class="crt-standby">' + inner + "</div></div></div>"
-      : '<div class="modern-frame"><div class="modern-screen" id="modern-screen">' +
-          '<div class="curtain l"></div><div class="curtain r"></div>' +
-          '<div class="modern-quote">' + inner + "</div></div></div>") +
-    '<p class="hint mt-3">放映厅正在待机，语录每 8 秒轮播。从片库打开任意作品即可进入详情。</p></div>' +
-    renderStreamLauncher();
 
-  if(crt && settings.crt_snow){
-    const canvas = $("#crt-snow");
-    if(canvas) standby.snowRaf = drawSnow(canvas);
-  }
-  const rotate = () => {
-    const next = pickRandomQuote(standby.quote);
-    if(!next) return;
-    standby.quote = next;
-    const t = $("#q-text"), s = $("#q-src");
-    if(t) t.textContent = next.text;
-    if(s) s.textContent = quoteMetaLine(next);
-  };
-  if(settings.module_quotes && quotePool().length > 1) standby.timer = setInterval(rotate, 8000);
-  bindStreamLauncher(root);
+  const list = sortAnime(state.anime);
+  root.innerHTML = '<div class="panel">' +
+    '<div class="panel-head">' + ic("theater",16) + "<h3>选一部看</h3>" +
+      '<span class="hint">片源与进度按作品分别保存</span></div>' +
+    (list.length
+      ? '<div class="pick-grid">' + list.map(a => {
+          const n = a.titleCn || a.titleOriginal || "未命名";
+          const ep = a.streamEp != null ? "看到第 " + a.streamEp + " 集" : (a.watchedEpisodes ? "已看 " + a.watchedEpisodes + " 集" : "未开始");
+          return '<button class="pick-card" type="button" data-open="' + attr(a.id) + '">' +
+            '<span class="pick-cover">' + coverThumb(a) + "</span>" +
+            '<span class="pick-body"><b>' + esc(n) + "</b>" +
+            '<span class="small muted">' + esc(ep) + (a.streamUrl ? " · 有片源" : "") + "</span></span></button>";
+        }).join("") + "</div>"
+      : '<div class="state-box">' + ic("library",40) + "<h2>还没有可放映的作品</h2>" +
+        '<p>先到片库添加一部动画、片源与观看进度就会留在这里。</p>' +
+        '<div class="row"><button class="btn btn-primary" type="button" data-act="goto-lib">去片库添加</button></div></div>') +
+    "</div>" +
+    renderStreamLauncher(null);
+  const b = root.querySelector('[data-act="goto-lib"]');
+  if(b) b.addEventListener("click", () => go("library"));
+  root.querySelectorAll(".pick-card").forEach(n =>
+    n.addEventListener("click", () => go("theater", n.dataset.open)));
+  bindStreamLauncher(root, null);
 }
 
 function renderDetail(root, id){
-  stopStandby();
+
   const a = animeById(id);
   if(!a){
     root.innerHTML = '<div class="state-box">' + ic("empty",40) + "<h2>作品不存在</h2>" +
-      '<div class="row"><button class="btn btn-primary" type="button" data-act="back">返回待机</button></div></div>';
+      '<div class="row"><button class="btn btn-primary" type="button" data-act="back">返回放映厅</button></div></div>';
     const b = root.querySelector("[data-act=back]");
     if(b) b.addEventListener("click", () => go("theater"));
     return;
   }
-  const crt = settings.tv_skin === "crt";
   const p = progressOf(a);
   const name = a.titleCn || a.titleOriginal || "未命名";
 
@@ -4021,12 +4057,14 @@ function renderDetail(root, id){
   const pendingKeys = Object.keys(a.pending || {});
   const reviews = (a.reviews || []).slice().sort((x,y) => String(y.date).localeCompare(String(x.date)));
 
-  const html = '<div class="theater">' + (crt
-    ? '<div class="crt-frame"><div class="crt-screen' + (settings.crt_scanlines ? " scanlines chroma" : "") + '"><div class="crt-vignette"></div>'
-    : '<div class="modern-frame"><div class="modern-screen" style="aspect-ratio:auto">') +
+  /* 结构：详情在上、播放器在下（用户指定的布局）。
+     原先整个详情裹在 .crt-frame / .modern-frame 里，而那两层是为
+     「待机屏保的大屏」设计的 —— 详情页并不需要。
+     留下的只有雪花的 canvas 插槽，现在也没用了，一并去掉。 */
+  const html = '<div class="theater">' +
     '<div class="detail-wrap">' +
       '<div class="row gap-3 mb-3">' +
-        '<button class="btn btn-sm" type="button" data-act="back">' + ic("rewind",14) + "返回待机</button>" +
+        '<button class="btn btn-sm" type="button" data-act="back">' + ic("rewind",14) + "返回放映厅</button>" +
         '<span class="badge badge-src">' + esc(sourceLabel(a)) + "</span>" +
         '<div class="row" style="margin-left:auto">' +
           '<button class="btn btn-sm ' + (a.favorite ? "is-on" : "") + '" type="button" data-act="fav">' + ic("heart",14) + (a.favorite ? "已收藏" : "收藏") + "</button>" +
@@ -4056,8 +4094,16 @@ function renderDetail(root, id){
           '<div class="progress" style="height:10px"><i style="width:' + p + '%"></i></div>' +
           '<div class="small muted mt-3">已看 ' + (a.watchedEpisodes||0) + " / " + a.totalEpisodes + " 集 · 重看 " + (a.rewatchCount||0) + " 次</div>") +
 
-      (a.summary ? '<div class="mt-4"><div class="sec-title">' + ic("film",16) + "<span>简介</span></div>" +
-        '<div class="summary-box scroll">' + esc(a.summary) + "</div></div>" : "") +
+      /* 播放记录紧跟进度条：用户到放映厅就是为了「接着看」，
+   让它出现在进度条旁边比藏在下面更符合意图。 */
+      (a.streamEp != null
+        ? '<div class="stream-note mt-3">' + ic("play",14) +
+          "<span>片源进度：看到第 <b>" + esc(String(a.streamEp)) + "</b> 集" +
+          (a.streamUrlAt ? "（记录于 " + esc(String(a.streamUrlAt).slice(0,10)) + "）" : "") + "</span></div>"
+        : "") +
+
+      (a.summary ? '<details class="mt-4"><summary class="sec-title">' + ic("film",16) + "<span>简介</span></summary>" +
+        '<div class="summary-box scroll mt-2">' + esc(a.summary) + "</div></details>" : "") +
 
       ((a.personalTags||[]).length ? '<div class="mt-4"><div class="sec-title">' + ic("grid",16) + "<span>我的标签</span></div>" +
         '<div class="tag-list">' + a.personalTags.map(t => '<span class="chip">' + esc(t) + "</span>").join("") + "</div></div>" : "") +
@@ -4071,14 +4117,16 @@ function renderDetail(root, id){
             '<button class="btn btn-sm btn-primary" type="button" data-pend="use" data-k="' + attr(k) + '">采用新值</button>' +
           "</div></div>").join("") + "</div></div>" : "") +
 
-      '<div class="mt-4"><div class="sec-title">' + ic("refresh",16) + "<span>重看与感想</span>" +
-        '<button class="btn btn-sm btn-primary" type="button" data-act="rewatch" style="margin-left:auto">' + ic("plus",14) + "记录一次重看</button></div>" +
+      '<details class="mt-4"><summary class="sec-title">' + ic("refresh",16) + "<span>重看与感想</span>" +
+        '<span class="small muted" style="margin-left:auto">' + (reviews.length ? reviews.length + " 条" : "暂无") + "</span></summary>" +
+        '<div class="mt-3">' +
+        '<button class="btn btn-sm btn-primary" type="button" data-act="rewatch">' + ic("plus",14) + "记录一次重看</button>" +
         (reviews.length
-          ? '<div class="review-timeline">' + reviews.map(r =>
+          ? '<div class="review-timeline mt-3">' + reviews.map(r =>
               '<div class="review-item"><div class="review-head"><span class="review-round">第 ' + (r.round||1) + " 次观看</span><span>" + esc(r.date || "") + "</span></div>" +
               (r.content ? '<div class="review-body">' + esc(r.content) + "</div>" : "") + "</div>").join("") + "</div>"
-          : '<div class="small muted">还没有感想。记录一次重看时可以写几句。</div>') +
-      "</div>" +
+          : '<div class="small muted mt-3">还没有感想。记录一次重看时可以写几句。</div>') +
+        "</div></details>" +
 
       '<div class="divider"></div>' +
       '<div class="row">' +
@@ -4086,19 +4134,17 @@ function renderDetail(root, id){
         '<button class="btn btn-danger" type="button" data-act="del">' + ic("trash",16) + "删除作品</button>" +
         '<span class="hint" style="margin-left:auto">最近抓取：' + esc(String(a.fetchedAt || "—").slice(0,10)) + "</span>" +
       "</div>" +
-    "</div></div></div></div>";
+    "</div>" +
+
+    /* 播放器在详情之下 —— 这是本次布局调整的核心。 */
+    renderStreamLauncher(a) +
+  "</div>";
 
   root.innerHTML = html;
-  if(crt && settings.crt_snow){
-    const canvas = document.createElement("canvas");
-    canvas.className = "crt-snow";
-    const screen = root.querySelector(".crt-screen");
-    // 旧代码只把 canvas 插进 DOM，从不调 drawSnow —— 元素是空的，
-    // 白占一份 GPU 纹理缓冲却没有任何画面。现在真正启动，且句柄交给 standby
-    // 统一管理，否则离开详情页时这条 rAF 循环会永远跑下去。
-    if(screen){ screen.insertBefore(canvas, screen.firstChild); standby.snowRaf = drawSnow(canvas); }
-  }
   bindDetailActions(root, a);
+  // 播放器按作品绑定：保存只更新内存与库，不整页重渲染 ——
+  // rerender() 会销毁 iframe，正在播的视频会被打断。
+  bindStreamLauncher(root, a);
 }
 function sourceLabel(a){
   if(a.source === "bangumi") return "Bangumi";
@@ -4145,28 +4191,19 @@ function bindDetailActions(root, a){
 
 registerPage({
   id:"theater", name:"放映厅", icon:"theater", title:"放映厅",
-  sub:"待机时播放语录屏保；从片库进入可查看作品详情",
+  sub:"选中一部作品：详情在上、播放器在下，片源与进度按作品保存",
   actions(box){
-    box.innerHTML =
-      '<div class="seg" role="group" aria-label="皮肤切换">' +
-        '<button type="button" data-skin="crt" aria-pressed="' + (settings.tv_skin === "crt") + '">' + ic("theater",14) + "CRT 老式</button>" +
-        '<button type="button" data-skin="modern" aria-pressed="' + (settings.tv_skin === "modern") + '">' + ic("film",14) + "现代影院</button>" +
-      "</div>" +
-      '<button class="btn btn-sm" type="button" data-act="shuffle">' + ic("refresh",14) + "换一条语录</button>";
-    box.querySelectorAll("[data-skin]").forEach(b => b.addEventListener("click", () => {
-      settings.tv_skin = b.dataset.skin; saveSettings();
-      initAudioOnce();
-      rerender();
-    }));
-    box.querySelector("[data-act=shuffle]").addEventListener("click", () => {
-      const next = pickRandomQuote(standby.quote);
-      if(!next){ toast("还没有语录可换","warn"); return; }
-      standby.quote = next;
-      if(state.routeId) return;
-      const t = $("#q-text"), s = $("#q-src");
-      if(t) t.textContent = next.text;
-      if(s) s.textContent = quoteMetaLine(next);
-    });
+    /* 原先这里是 CRT/现代影院皮肤切换 + 「换一条语录」。
+       两组控件都服务于语录待机屏保 —— 皮肤切换换的是待机大屏的样式，
+       「换一条语录」换的是待机时轮播的台词。待机屏保按用户要求删除后，
+       它们失去了唯一的作用对象，留着就是两个点不动的按钮。
+       开机音效（crt_power_sound）是另一条独立路径，不依赖这里，保留。 */
+    const n = state.anime.length;
+    box.innerHTML = '<span class="hint">' +
+      (n ? "共 " + n + " 部作品 · 点片名进入放映" : "片库为空，先去添加一部") + "</span>" +
+      (n ? '<button class="btn btn-sm" type="button" data-act="pick">' + ic("library",14) + "换一部</button>" : "");
+    const b = box.querySelector('[data-act="pick"]');
+    if(b) b.addEventListener("click", () => go("theater"));
   },
   render(root){
     if(state.routeId) renderDetail(root, state.routeId);
@@ -6172,15 +6209,15 @@ function settingsBodyHTML(){
     html += "</div>";
   }
   if(t === "theater"){
-    html += '<div class="panel"><div class="panel-head"><h3>放映厅</h3></div>';
-    html += setRow("皮肤", "老式 CRT 电视 / 现代影院幕布",
-      '<div class="seg" role="group" aria-label="皮肤">' +
-      [["crt","CRT 老式"],["modern","现代影院"]].map(([v,n]) => '<button type="button" data-set="tv_skin" data-val="' + v + '" aria-pressed="' + (settings.tv_skin === v) + '">' + n + "</button>").join("") + "</div>");
-    html += setRow("CRT 扫描线", "", '<label class="checkline"><input type="checkbox" data-set="crt_scanlines"' + (settings.crt_scanlines ? " checked" : "") + "><span>开启</span></label>");
-    html += setRow("CRT 雪花噪点", "开机与待机时的噪点屏保", '<label class="checkline"><input type="checkbox" data-set="crt_snow"' + (settings.crt_snow ? " checked" : "") + "><span>开启</span></label>");
+    html += '<div class="panel"><div class="panel-head">' + ic("theater",16) + "<h3>放映厅</h3></div>";
+    /* 皮肤 / 扫描线 / 雪花三项原本控制待机屏保。屏保按用户要求删除后，
+       这三项已无作用对象 —— 留在设置里就是三个改了不起任何效果的开关，
+       比删掉更糟（用户会以为坏了）。保留开机音效：它是独立路径。 */
     html += setRow("开机音效", "CRT 通电「啪」+ 街机 8-bit 主题动机，Web Audio 实时合成，首次点击后才允许发声",
       '<label class="checkline"><input type="checkbox" data-set="crt_power_sound"' + (settings.crt_power_sound ? " checked" : "") + "><span>开启</span></label>" +
       '<button class="btn btn-sm" type="button" data-act="sound-test">' + ic("play",14) + "试听</button>");
+    html += setRow("播放地址", "在放映厅的作品详情下方填写。每部作品单独保存，换番不会互相覆盖；「看到第几集」也会一并记录",
+      '<button class="btn btn-sm" type="button" data-act="go-theater">' + ic("film",14) + "去放映厅</button>");
     html += "</div>";
   }
   if(t === "modules"){
@@ -6387,6 +6424,9 @@ async function settingsAction(act, id, root){
     }
     case "sound-test":
       if(!previewPowerSound()) toast("无法播放：请确认开机音效已开启，且浏览器未禁止音频","warn",4000);
+      break;
+    case "go-theater":
+      go("theater");
       break;
     case "st-add": {
       const exists = state.statuses.filter(s => s.matchType === "progress");

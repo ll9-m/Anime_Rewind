@@ -114,7 +114,9 @@ function check(name, cond, detail){
     /无效|无法识别/.test(doc.querySelector("#st-status").textContent) && !doc.querySelector(".stream-frame"),
     doc.querySelector("#st-status").textContent.slice(0, 60));
 
-  // ---------- 10. 真实点击：输入合法 B 站网址 → 生成 iframe 并持久化 ----------
+  // ---------- 10. 真实点击：输入合法 B 站网址 → 生成 iframe ----------
+  /* 不再自动持久化。片源改为按作品保存，且必须显式点「保存」——
+     自动存意味着「点错了播放」也会把错地址写进库。 */
   input.value = "https://www.bilibili.com/video/BV1GJ411x7h7";
   doc.querySelector('[data-st="play"]').click();
   await new Promise(r => setTimeout(r, 300));
@@ -122,7 +124,7 @@ function check(name, cond, detail){
   check("点击播放后创建了 iframe", !!frame);
   check("iframe 指向 B 站播放器", frame && frame.src.includes("player.bilibili.com"), frame ? frame.src : "无");
   check("播放器容器已显示", doc.querySelector("#st-mount").hidden === false);
-  check("片源已持久化到 settings", evSync("settings.stream_url") === "https://www.bilibili.com/video/BV1GJ411x7h7",
+  check("播放本身不写库（须显式保存）", evSync("settings.stream_url") === "",
     String(evSync("settings.stream_url")));
   check("iframe 带 allowfullscreen", frame && frame.hasAttribute("allowfullscreen"));
   check("iframe 带 sandbox（隔离第三方脚本）", frame && frame.hasAttribute("sandbox"), frame ? frame.getAttribute("sandbox") : "");
@@ -136,35 +138,125 @@ function check(name, cond, detail){
   check("连点播放后页面中只有 1 个 iframe", doc.querySelectorAll(".stream-frame").length === 1,
     "实际 " + doc.querySelectorAll(".stream-frame").length);
 
-  // ---------- 12. 清除按钮 ----------
+  // ---------- 12. 清除按钮（此时未保存过片源，应隐藏） ----------
   const clearBtn = doc.querySelector('[data-st="clear"]');
-  check("有片源时清除按钮可见", !!clearBtn && clearBtn.hidden === false, "存在=" + !!clearBtn + " hidden=" + (clearBtn && clearBtn.hidden));
   check("清除按钮始终存在于 DOM（靠 hidden 切换）", !!clearBtn);
-  if (clearBtn && clearBtn.hidden === false) {
-    clearBtn.click();
-    await new Promise(r => setTimeout(r, 250));
-    check("清除后设置被置空", evSync("settings.stream_url") === "", String(evSync("settings.stream_url")));
-    check("清除后播放器容器隐藏", doc.querySelector("#st-mount").hidden === true);
-    check("清除后 iframe 被移除", !doc.querySelector(".stream-frame"));
-    check("清除后输入框清空", doc.querySelector("#st-url").value === "");
-    check("清除后按钮重新隐藏", doc.querySelector('[data-st="clear"]').hidden === true);
-    check("清除后「新标签打开」重新禁用", doc.querySelector('[data-st="open"]').disabled === true);
-  }
+  check("未保存片源时清除按钮隐藏", clearBtn && clearBtn.hidden === true,
+    "存在=" + !!clearBtn + " hidden=" + (clearBtn && clearBtn.hidden));
 
-  // ---------- 13. 设置持久化后重新进入页面能恢复 ----------
-  await ev('settings.stream_url = "https://youtu.be/dQw4w9WgXcQ"; saveSettings(); go("home"); go("theater");');
-  await new Promise(r => setTimeout(r, 350));
-  check("重新进入放映厅时片源已回填",
-    doc.querySelector("#st-url").value === "https://youtu.be/dQw4w9WgXcQ",
+  // ---------- 13. 未选作品时不能保存（否则写去哪？） ----------
+  doc.querySelector('[data-st="save"]').click();
+  await new Promise(r => setTimeout(r, 250));
+  check("未选作品点保存 → 明确拒绝而不是静默失败",
+    /先从片库打开一部作品/.test(doc.querySelector("#st-status").textContent),
+    doc.querySelector("#st-status").textContent.slice(0, 50));
+
+  // ================= 以下为「按作品保存片源与进度」 =================
+  // 这部分是本轮的核心需求：片源不能再是全局一份。
+  await ev(`
+    state.anime = [draftFromCandidate({ id:"an_test1", titleCn:"漆黑的子弹", totalEpisodes:13 })];
+    saveSettings();
+    go("theater", "an_test1");
+  `);
+  await new Promise(r => setTimeout(r, 400));
+
+  check("详情页渲染出片名", /漆黑的子弹/.test(doc.querySelector("#view").textContent));
+  check("详情页含外部播放器面板", !!doc.querySelector(".stream-panel"));
+  check("详情页有集数输入框", !!doc.querySelector("#st-ep"));
+  check("详情页结构：详情在上、播放器在下",
+    (() => {
+      const wrap = doc.querySelector(".detail-wrap"), panel = doc.querySelector(".stream-panel");
+      if (!wrap || !panel) return "缺元素";
+      // 同一父容器内，详情块的 DOM 位置必须在前
+      return wrap.compareDocumentPosition(panel) & win.Node.DOCUMENT_POSITION_FOLLOWING ? true : "顺序相反";
+    })(),
+    "详情与播放器的先后顺序");
+  check("详情页不再有语录待机屏保", !doc.querySelector(".crt-quote") && !doc.querySelector(".modern-quote"));
+  check("详情页不再有 CRT 外框", !doc.querySelector(".crt-frame") && !doc.querySelector(".modern-frame"));
+
+  // 填 URL + 集数 → 点保存
+  const in2 = doc.querySelector("#st-url"), ep2 = doc.querySelector("#st-ep");
+  in2.value = "https://www.bilibili.com/video/BV1kx411k7VB";
+  ep2.value = "7";
+  doc.querySelector('[data-st="save"]').click();
+  await new Promise(r => setTimeout(r, 400));
+  const a1 = evSync('animeById("an_test1")');
+  check("保存后 URL 落到该作品上", a1 && a1.streamUrl === "https://www.bilibili.com/video/BV1kx411k7VB",
+    String(a1 && a1.streamUrl));
+  check("保存后集数落到该作品上", a1 && a1.streamEp === 7, String(a1 && a1.streamEp));
+  check("保存不影响全局 settings.stream_url", evSync("settings.stream_url") === "", String(evSync("settings.stream_url")));
+  check("保存后 iframe 未被销毁（不整页重渲染）", !!doc.querySelector(".stream-mount"));
+
+  // 关键隔离性测试：另一部作品不应看到这份片源
+  await ev('state.anime.push(draftFromCandidate({ id:"an_test2", titleCn:"另一部番" })); go("theater", "an_test2");');
+  await new Promise(r => setTimeout(r, 400));
+  check("换一部作品 → 片源输入框为空（不串号）", doc.querySelector("#st-url").value === "",
     doc.querySelector("#st-url").value);
-  check("回填后「新标签打开」可用", doc.querySelector('[data-st="open"]').disabled === false);
+  check("换一部作品 → 集数为空", doc.querySelector("#st-ep").value === "",
+    doc.querySelector("#st-ep").value);
 
-  // ---------- 14. 回车键触发播放 ----------
-  const inp2 = doc.querySelector("#st-url");
-  inp2.value = "https://www.bilibili.com/video/BV1GJ411x7h7";
-  inp2.dispatchEvent(new win.KeyboardEvent("keydown", { key:"Enter", bubbles:true }));
+  // 回到第一部：应回填
+  await ev('go("theater", "an_test1");');
+  await new Promise(r => setTimeout(r, 400));
+  check("回到第一部 → 片源已回填",
+    doc.querySelector("#st-url").value === "https://www.bilibili.com/video/BV1kx411k7VB",
+    doc.querySelector("#st-url").value);
+  check("回到第一部 → 集数已回填", doc.querySelector("#st-ep").value === "7",
+    doc.querySelector("#st-ep").value);
+  check("详情页显示「看到第 7 集」", /第\s*7\s*集/.test(doc.querySelector(".stream-note").textContent),
+    doc.querySelector(".stream-note") ? doc.querySelector(".stream-note").textContent.slice(0, 40) : "无 .stream-note");
+
+  // 集数写回 B 站分 P
+  const applied = evSync('applyEpToURL("https://www.bilibili.com/video/BV1kx411k7VB", 12)');
+  check("集数写回 B 站分 P 参数", applied && applied.includes("p=12"), String(applied));
+  const appliedY = evSync('applyEpToURL("https://youtu.be/dQw4w9WgXcQ", 12)');
+  check("YouTube 不乱改地址（无法换算就原样返回）", appliedY === "https://youtu.be/dQw4w9WgXcQ", String(appliedY));
+
+  // 非法集数必须被拦
+  const ep3 = doc.querySelector("#st-ep");
+  ep3.value = "0";
+  doc.querySelector('[data-st="save"]').click();
   await new Promise(r => setTimeout(r, 300));
-  check("回车键可触发播放", !!doc.querySelector(".stream-frame"));
+  check("集数填 0 → 拒绝保存并给出可执行提示",
+    /大于 0 的整数/.test(doc.querySelector(".stream-panel .note-box").textContent),
+    doc.querySelector(".stream-panel .note-box").textContent.slice(0, 50));
+  check("集数非法时不污染已存值", evSync('animeById("an_test1").streamEp') === 7,
+    String(evSync('animeById("an_test1").streamEp')));
+
+  // 清除
+  const clr2 = doc.querySelector('[data-st="clear"]');
+  check("已保存片源时清除按钮可见", clr2 && clr2.hidden === false,
+    "hidden=" + (clr2 && clr2.hidden));
+  clr2.click();
+  await new Promise(r => setTimeout(r, 300));
+  const a2 = evSync('animeById("an_test1")');
+  check("清除后该作品片源被置空", a2 && a2.streamUrl === "" && a2.streamEp === null,
+    JSON.stringify({ u: a2 && a2.streamUrl, e: a2 && a2.streamEp }));
+  check("清除后播放器容器隐藏", doc.querySelector("#st-mount").hidden === true);
+  check("清除后「新标签打开」重新禁用", doc.querySelector('[data-st="open"]').disabled === true);
+
+  // 未选作品时 = 选片页
+  await ev('go("theater");');
+  await new Promise(r => setTimeout(r, 400));
+  check("未选作品时显示选片入口", !!doc.querySelector(".pick-card") && doc.querySelectorAll(".pick-card").length === 2,
+    "选片卡 " + doc.querySelectorAll(".pick-card").length + " 张");
+  check("未选作品时无待机语录屏保", !doc.querySelector(".crt-quote") && !doc.querySelector(".modern-quote"));
+  check("未选作品时播放区标注为临时片源",
+    /临时片源/.test(doc.querySelector(".stream-panel .panel-head").textContent),
+    doc.querySelector(".stream-panel .panel-head").textContent.slice(0, 40));
+
+  // 点选片卡 → 进入详情
+  doc.querySelector(".pick-card").click();
+  await new Promise(r => setTimeout(r, 400));
+  check("点选片卡进入该作品详情", !!doc.querySelector(".detail-wrap") && !!doc.querySelector(".stream-panel"));
+
+  // 页头不应再有失效的 CRT 皮肤切换 / 换一条语录
+  // 断言只扫用户可见元素：JS 注释里提到「换一条语录」是解释删除原因，
+  // 用 body.textContent 会把这些注释当成文案，报出假失败。
+  const visibleText = Array.from(doc.querySelectorAll("button, h1, h2, h3, summary, label, .seg, .hint"))
+    .map(n => n.textContent).join(" | ");
+  check("放映厅页头不再有「换一条语录」按钮", !/换一条语录/.test(visibleText), visibleText.slice(0, 60));
+  check("放映厅页头不再有 CRT/现代影院皮肤切换", !/现代影院/.test(visibleText), visibleText.slice(0, 60));
 
   console.log("\n通过 " + pass + " / " + (pass + fail));
   if (errs.length) { console.log("\n失败项："); errs.forEach(e => console.log("  · " + e)); }

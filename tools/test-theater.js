@@ -330,6 +330,29 @@ function check(name, cond, detail){
     evSync('applyEpToURL("https://www.bilibili.com/video/BV1GJ411x7h7", 5)').indexOf("p=5") > 0,
     evSync('applyEpToURL("https://www.bilibili.com/video/BV1GJ411x7h7", 5)'));
 
+  // ---------- N. 死设置清理 ----------
+  /* 放映厅待机屏保与皮肤切换删除后，tv_skin / crt_scanlines / crt_snow
+     已无作用对象。这条断言防止它们（或同类死键）被重新加回 DEFAULT_SETTINGS：
+     死设置最坑的地方不是「占一行」，而是它看起来还能用 ——
+     用户找不到开关，音效却因为一个不可见的键被静默关掉。
+     只查 DEFAULT_SETTINGS 的键，不查全文：老备份兼容代码里出现键名是合理的。 */
+  const defaults = (() => {
+    const i = html.indexOf("const DEFAULT_SETTINGS = {");
+    const j = html.indexOf("let settings =", i);
+    return html.slice(i, j);
+  })();
+  ["tv_skin", "crt_scanlines", "crt_snow"].forEach(k => {
+    check("死设置已从 DEFAULT_SETTINGS 移除：" + k,
+      defaults.indexOf(k + ":") < 0);
+  });
+  /* 反向：开机音必须还在，且是唯一条件 —— 曾经它被 tv_skin 挡在前面。 */
+  check("开机音仍在默认设置里（不能连它一起清掉）",
+    defaults.indexOf("crt_power_sound:") > 0);
+  check("开机音不再被任何已删除的键挡在前面",
+    /if\(settings\.crt_power_sound\)\s*powerSound\(\)/.test(
+      html.slice(html.indexOf("function initAudioOnce"), html.indexOf("function initAudioOnce") + 800)
+    ));
+
   console.log("\n通过 " + pass + " / " + (pass + fail));
   if (errs.length) { console.log("\n失败项："); errs.forEach(e => console.log("  · " + e)); }
   process.exit(fail ? 1 : 0);

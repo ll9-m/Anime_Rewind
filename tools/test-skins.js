@@ -28,8 +28,12 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
   const evSync = code => win.eval(code);
 
   // ---------- 1. 常量与默认值 ----------
-  check("UI_SKINS 含三套", JSON.stringify(await ev("return UI_SKINS;")) === '["archive","pixel","holo"]',
-    JSON.stringify(await ev("return UI_SKINS;")));
+  /* 断言「包含这三套」而不是「恰好是这三套」——
+     写死长度会让每加一套系都要改这里，改不动就会有人把断言删掉。
+     本轮加了第四套 tv（TV 影院），下面的专项断言在 test-tv-skin.js。 */
+  const skins = await ev("return UI_SKINS;");
+  check("UI_SKINS 至少含原有三套",
+    ["archive","pixel","holo"].every(k => skins.indexOf(k) >= 0), JSON.stringify(skins));
   check("默认套系是 archive", (await ev("return DEFAULT_SETTINGS.ui_skin;")) === "archive");
   check("html 标签带 data-skin", /<html[^>]*data-skin="archive"/.test(html));
   check("CSS 定义了三种 data-skin",
@@ -148,17 +152,22 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
   check("像素套系下按钮仍有文字（不是被 ::after 吞掉）",
     Array.from(doc.querySelectorAll("#view .btn")).some(b => b.textContent.trim().length > 0));
 
-  // ---------- 9. 三套 × 三主题不报错 ----------
+  /* ---------- 9. 全部套系 × 三主题不报错 ----------
+     这里遍历 UI_SKINS 本身而不是写死数组：写死的话加了新套系
+     这条测试照样绿，组合爆炸出问题的地方恰好是没人测的那几格。 */
+  const allSkins = await ev("return UI_SKINS;");
   let crashed = 0;
-  for (const skin of ["archive", "pixel", "holo"]) {
+  const combos = [];
+  for (const skin of allSkins) {
     for (const theme of ["dark", "light", "glass"]) {
       try {
-        await ev(`settings.ui_skin = "${skin}"; settings.theme = "${theme}"; applyAppearance(); go("home");`);
-        await sleep(120);
-      } catch (e) { crashed++; }
+        await ev(`settings.ui_skin = "${skin}"; settings.theme = "${theme}"; applyAppearance(); go("library");`);
+        await sleep(110);
+      } catch (e) { crashed++; combos.push(skin + "/" + theme + ": " + e.message); }
     }
   }
-  check("3 套系 × 3 主题 = 9 种组合均不抛异常", crashed === 0, crashed + " 种组合崩溃");
+  check("全部 " + allSkins.length + " 套系 × 3 主题均不抛异常",
+    crashed === 0, crashed + " 种组合崩溃：" + combos.slice(0, 2).join(" | "));
 
   // ---------- 10. 套系随设置持久化 ----------
   await ev('settings.ui_skin = "pixel"; saveSettings();');

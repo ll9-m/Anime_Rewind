@@ -1674,6 +1674,242 @@ details > summary:hover{ color:var(--accent); }
 [data-skin="archive"] .btn::after{ display:none; }
 [data-skin="archive"] .holo-switch{ display:none; }
 
+/* ============================================================
+   TV 套系（参考 Izuko_TV 的电视端布局）
+   ------------------------------------------------------------
+   与前三套的根本差别不在配色，在「信息密度与滚动方向」：
+   档案馆是文档式的纵向长页，TV 是图像式的横向卡行。
+   所以这里改的是布局几何，不是换皮。
+
+   底色用深灰 #2C2C2E 而不是纯黑 —— 这条来自 Izuko_TV 的实测结论：
+   Apple TV App 在 Android TV 上的页面底色是 (44,44,46)，
+   而网页版 tv.apple.com 的 #1F1F1F 在电视上与纯黑分不出来。
+   深浅两套都要跟着调，浅色同理不能纯白（大片亮底刺眼）。 */
+[data-skin="tv"]{
+  --sidebar-w:48px;                /* 收起态占位宽：与内容左缘对齐 */
+  --card-min:118px;                /* 海报卡最小宽，对应「一屏 6 张」 */
+  --rail-w:48px;
+  --rail-w-open:216px;
+  --tv-scrim:180px;
+  --tv-bleed:64px;                 /* 下出血 */
+  --tv-card-radius:8px;
+  --tv-gap:20px;
+  --tv-secondary:.5;               /* 次要文字淡一档，与轻抬起配比 */
+  --r-lg:var(--tv-card-radius);
+  --r-xl:12px;
+}
+[data-skin="tv"][data-theme="dark"]{
+  --bg:#2C2C2E; --bg-deep:#232325;
+  --panel:#333336; --panel-2:#3A3A3D; --panel-3:#434347;
+  --text:#F2F2F7; --text-2:#C7C7CC; --muted:#98989D;
+  --border:rgba(255,255,255,.1); --border-2:rgba(255,255,255,.18);
+  --hairline:rgba(255,255,255,.08);
+}
+[data-skin="tv"][data-theme="light"]{
+  /* 浅色不是纯白：Izuko_TV 用 #BFC4C7，理由是电视上大片亮底刺眼。
+     muted 压到 #4E4E54 —— 原先的 #5A5A60 在 #BFC4C7 上只有 3.89:1，
+     达不到 WCAG AA 的 4.5:1。换底色就得重算，不能沿用档案馆套系的结论。 */
+  --bg:#BFC4C7; --bg-deep:#B4B9BD;
+  --panel:#CDD2D5; --panel-2:#D6DBDE; --panel-3:#DFE3E6;
+  --text:#141416; --text-2:#3A3A3E; --muted:#4E4E54;
+  --border:rgba(0,0,0,.12); --border-2:rgba(0,0,0,.2);
+  --hairline:rgba(0,0,0,.1);
+}
+[data-skin="tv"][data-theme="glass"]{
+  --bg:#2A2A2C; --bg-deep:#202022;
+  --panel:rgba(58,58,62,.72); --panel-2:rgba(66,66,70,.66); --panel-3:rgba(76,76,80,.6);
+  --text:#F2F2F7; --text-2:#C7C7CC; --muted:#98989D;
+  --border:rgba(255,255,255,.13); --border-2:rgba(255,255,255,.22);
+}
+
+/* 侧栏：收起态只留图标，聚焦/悬停时右侧浮出文字并压一层羽化遮罩。
+   内容整体右移让开收起宽度，不重排 —— 重排会在浮出的瞬间抖动。 */
+[data-skin="tv"] #sidebar{
+  width:var(--rail-w);
+  overflow:hidden;
+  transition:width var(--dur) var(--ease);
+  background:var(--panel);
+}
+[data-skin="tv"] #sidebar:hover,
+[data-skin="tv"] #sidebar:focus-within{
+  width:var(--rail-w-open);
+}
+[data-skin="tv"] #sidebar::after{
+  /* 右缘羽化：前82% 纯色，末段渐隐到透明。用固定层而非 box-shadow，
+     因为要渐隐到全透明，阴影做不到。 */
+  content:""; position:absolute; top:0; right:0; bottom:0; width:var(--tv-scrim);
+  pointer-events:none; opacity:0;
+  background:linear-gradient(to right, var(--panel) 0%, var(--panel) 72%, transparent 100%);
+  transition:opacity var(--dur) var(--ease);
+}
+[data-skin="tv"] #sidebar:hover::after,
+[data-skin="tv"] #sidebar:focus-within::after{ opacity:1; }
+[data-skin="tv"] #sidebar .brand-text,
+[data-skin="tv"] #sidebar .nav-item span,
+[data-skin="tv"] #sidebar .side-honor span,
+[data-skin="tv"] #sidebar .side-stat{
+  opacity:0; transition:opacity var(--dur-fast) var(--ease);
+  white-space:nowrap;
+}
+[data-skin="tv"] #sidebar:hover .brand-text,
+[data-skin="tv"] #sidebar:hover .nav-item span,
+[data-skin="tv"] #sidebar:focus-within .nav-item span,
+[data-skin="tv"] #sidebar:hover .side-honor span,
+[data-skin="tv"] #sidebar:hover .side-stat{ opacity:1; }
+/* 导航图标块：32px 方块 + 6px 圆角，取自 TvNavigationSideRail */
+[data-skin="tv"] .nav-item{
+  width:32px; height:32px; border-radius:6px; justify-content:flex-start;
+  padding:0; margin:2px auto; flex:0 0 auto;
+}
+[data-skin="tv"] .nav-item span{ margin-left:var(--sp-3); }
+/* 品牌区收起时只留mark：文字被隐藏但仍占位会让图标偏移 */
+[data-skin="tv"] .brand{ justify-content:center; padding:var(--sp-3) 0; }
+[data-skin="tv"] .brand-mark{ width:28px; height:28px; }
+
+/* 海报卡：两行定高番名。
+   一行番名也占两行高 —— 换焦点时排版不跳，这条极易漏，做了就明显。 */
+[data-skin="tv"] .card{ border-radius:var(--tv-card-radius); }
+[data-skin="tv"] .fc-face{
+  border-radius:var(--tv-card-radius);
+  border:1px solid rgba(255,255,255,.08);
+  overflow:hidden;
+}
+[data-skin="tv"] .fc-caption{ padding:var(--sp-2) var(--sp-2) var(--sp-3); }
+[data-skin="tv"] .fc-name{
+  min-height:calc(2 * 1.5em);      /* 两行定高 */
+  line-height:1.5;
+  font-size:var(--fs-sm);
+}
+[data-skin="tv"] .fc-orig,
+[data-skin="tv"] .fc-sub{ opacity:var(--tv-secondary); }
+/* 静止投影 + 聚焦抬起，两层交叉淡入。
+   抬起幅度与文字淡度要配比：抬起大就文字全亮，抬起小就该淡一档。 */
+[data-skin="tv"] .card .fc-face{ box-shadow:0 1px 4px rgba(0,0,0,.4); }
+[data-skin="tv"] .card:hover .fc-face,
+[data-skin="tv"] .card:focus-visible .fc-face{
+  transform:scale(1.06);
+  box-shadow:0 12px 34px rgba(0,0,0,.55);
+  z-index:2;
+}
+[data-skin="tv"] .card:focus-visible{ outline:2px solid var(--accent); outline-offset:3px; }
+/* 进度条贴封面底缘，两端内缩圆角半径 */
+[data-skin="tv"] .fc-prog .progress{ height:3px; border-radius:2px; }
+
+/* 片库网格：列数由 JS 按 (宽 +间距) / (最小卡宽 + 间距) 算，
+   写死列数会在某些宽度下出现「空一列」或卡片挤成一条。 */
+[data-skin="tv"] .wall{
+  grid-template-columns:repeat(var(--tv-cols, 6), minmax(0, 1fr));
+  gap:var(--tv-gap);
+}
+[data-skin="tv"] .wall{ padding-bottom:var(--tv-bleed); }
+
+/* 横滑卡行（「组标题 + 横滑行」的 TV 结构） */
+.tv-row{ margin-bottom:var(--sp-5); }
+.tv-row-head{
+  display:flex; align-items:baseline; gap:var(--sp-3);
+  padding:0 var(--sp-4) var(--sp-3);
+}
+.tv-row-head h3{
+  margin:0; font-size:var(--fs-lg); font-weight:600; color:var(--text);
+}
+.tv-row-head .hint{ font-size:var(--fs-sm); }
+.tv-row-scroll{
+  display:flex; gap:var(--tv-gap);
+  overflow-x:auto; overflow-y:hidden;
+  padding:0 var(--sp-4) var(--sp-4);
+  scroll-snap-type:x proximity;
+  scrollbar-width:thin;
+}
+.tv-row-scroll > *{ scroll-snap-align:start; flex:0 0 auto; }
+.tv-row-scroll .card{ width:var(--card-min); }
+/* 「更多」玻璃卡：模糊小图 + 玻璃色 + 左上斜向高光 + 中央圆钮加号。
+   取自 TvNativeCardView 的 TV_NATIVE_MORE_GLASS_DARK。 */
+.tv-more{
+  width:var(--card-min); aspect-ratio:2/3;
+  border-radius:var(--tv-card-radius);
+  display:flex; flex-direction:column; align-items:center; justify-content:center; gap:var(--sp-3);
+  background:var(--panel-2);
+  border:1px solid rgba(255,255,255,.12);
+  color:var(--text-2); cursor:pointer;
+  position:relative; overflow:hidden;
+  transition:transform var(--dur-fast) var(--ease), box-shadow var(--dur-fast) var(--ease);
+}
+.tv-more::before{
+  content:""; position:absolute; inset:0;
+  background:linear-gradient(135deg, rgba(255,255,255,.16) 0%, transparent 60%);
+}
+.tv-more:hover{ transform:scale(1.06); box-shadow:0 12px 34px rgba(0,0,0,.55); }
+.tv-more-icon{
+  width:34px; height:34px; border-radius:50%;
+  display:inline-flex; align-items:center; justify-content:center;
+  background:rgba(255,255,255,.16); border:1px solid rgba(255,255,255,.35);
+  color:var(--text);
+}
+.tv-more span{ font-size:var(--fs-sm); }
+
+/* 剧集卡行（详情页）：16:9 剧照 + 集号集名 + 3px 进度条 */
+.tv-ep-row{
+  display:flex; gap:var(--sp-3); overflow-x:auto; padding:0 var(--sp-4) var(--sp-3);
+  scrollbar-width:thin;
+}
+.tv-ep{
+  flex:0 0 auto; width:200px;
+  border-radius:6px; overflow:hidden; cursor:pointer; text-align:left;
+  border:1px solid rgba(255,255,255,.1);
+  background:var(--panel-2); color:var(--text); padding:0;
+  position:relative;
+  transition:transform var(--dur-fast) var(--ease), box-shadow var(--dur-fast) var(--ease);
+}
+.tv-ep:hover{ transform:scale(1.04); box-shadow:0 8px 22px rgba(0,0,0,.5); }
+.tv-ep:focus-visible{ outline:2px solid var(--accent); outline-offset:2px; }
+.tv-ep-still{
+  aspect-ratio:16/9; width:100%;
+  background:var(--panel-3) center/cover no-repeat;
+  position:relative;
+  display:flex; align-items:flex-end; padding:var(--sp-2);
+}
+/* 剧照底部压暗起0.5 → alpha .85，取自 EPISODE_STILL_SCRIM_* */
+.tv-ep-still::after{
+  content:""; position:absolute; left:0; right:0; bottom:0; height:70%;
+  background:linear-gradient(to top, rgba(0,0,0,.85) 0%, transparent 100%);
+  pointer-events:none;
+}
+.tv-ep-no{
+  position:relative; z-index:1;
+  font-family:var(--font-mono); font-size:var(--fs-sm); color:#fff; opacity:.85;
+}
+.tv-ep-body{ padding:var(--sp-2); }
+.tv-ep-name{
+  font-size:var(--fs-xs); opacity:.85; line-height:1.4;
+  display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden;
+  min-height:calc(2 * 1.4em);   /* 两行定高，换焦点不跳 */
+}
+.tv-ep-prog{ height:3px; border-radius:2px; background:rgba(255,255,255,.3); margin-top:var(--sp-2); }
+.tv-ep-prog i{ display:block; height:100%; border-radius:2px; background:var(--accent); }
+/* 四态：看过的一律压暗，在播的保留高亮 */
+.tv-ep.is-watched .tv-ep-still::after{ background:linear-gradient(to top, rgba(0,0,0,.45) 0%, transparent 100%); }
+.tv-ep.is-watched{ opacity:.45; }
+.tv-ep.is-playing{ border-color:var(--accent); }
+
+/* 顶栏：玻璃胶囊。失焦比得焦更快（90ms vs 150ms）——
+   焦点离开的那个比新拿到焦点的先落回去，漏掉会觉得「焦点黏黏的」。 */
+[data-skin="tv"] #topbar{
+  background:rgba(255,255,255,.05);
+  backdrop-filter:blur(20px) saturate(150%);
+  border-bottom:1px solid rgba(255,255,255,.08);
+}
+[data-skin="tv"] .topbar-actions .btn{
+  background:rgba(255,255,255,.1); border:1px solid rgba(255,255,255,.1);
+}
+[data-skin="tv"] .topbar-actions .btn:hover{ background:rgba(255,255,255,.2); }
+
+/* TV 套系不需要全息装饰与故障按钮 */
+[data-skin="tv"] .btn::before,
+[data-skin="tv"] .btn::after{ display:none; }
+[data-skin="tv"] .holo-field .hf-glow,
+[data-skin="tv"] .holo-field .hf-edge{ display:none; }
+[data-skin="tv"] .holo-switch{ display:none; }
+
 </style>
 </head>
 <body>
@@ -1780,9 +2016,21 @@ const GRADES = ["学前","小学一年级","小学二年级","小学三年级","
   "初一","初二","初三","高一","高二","高三","大学","已工作"];
 const CHANNELS = ["电视","碟片(VCD/DVD/蓝光)","网络视频","电影院","其他"];
 /* UI 套系：与配色主题正交的形态层。
-   archive = 现有的档案馆风格（默认）；pixel = 像素风；holo = 科技感。
+   archive = 现有的档案馆风格（默认）；pixel = 像素风；holo = 科技感；
+   tv = 参考 Izuko_TV 的电视端布局（大图横滑卡行 + 可折叠侧栏 + 深灰底）。
    新增套系只需加一段 [data-skin="..."] 覆盖，不需动任何布局代码。 */
-const UI_SKINS = ["archive", "pixel", "holo"];
+const UI_SKINS = ["archive", "pixel", "holo", "tv"];
+/* TV 套系的几何常量。来源是 Izuko_TV 的 TvPosterWall.kt，
+   不是自己拟的数值 —— 那些数字是照Apple TV 一屏 6 张反推出来的，
+   改成别的会连带破坏「一屏 6 张」的观感。 */
+const TV_LAYOUT = {
+  railCollapsed: 48,      /* 收起态占位宽，让内容左缘与详情页对齐 */
+  railScrim: 180,         /* 展开时右侧羽化遮罩宽 */
+  cardMinWidth: 118,      /* 不是 124：留余量防边界抖动掉到 5 列 */
+  columnSpacing: 20,
+  bottomBleed: 64,        /* 下出血：焦点走过去时按位置跑动画，不闪现 */
+  bgTone: "#2C2C2E"       /* 深灰而非纯黑 —— 纯黑在屏幕上与深灰分不出来 */
+};
 const ACCENTS = [  {key:"cyan",name:"放映青",demo:"#22d3ee"},
   {key:"amber",name:"胶片琥珀",demo:"#f0a63c"},
   {key:"magenta",name:"霓虹品红",demo:"#ef6ba8"},
@@ -2465,6 +2713,28 @@ function applyAppearance(){
   root.setAttribute("data-bg", useBg ? "on" : "off");
   layer.style.display = "block";
   overlay.style.display = "block";
+  /* TV 套系的列数必须在 DOM 就位后算：applyAppearance 早于首屏渲染，
+     此时 .wall 还不存在。留到下一帧再算。 */
+  if(settings.ui_skin === "tv") requestAnimationFrame(updateTvColumns);
+}
+/* 列数公式，直译 Izuko_TV 的 TvPosterWall.tvPosterWallColumns：
+     列数 = floor((可用宽 + 间距) / (最小卡宽 + 间距))
+   +间距 是把最后一个间隙也算进分子，否则边界上会少算一列
+   （1080p 实测：848px → (848+20)/(118+20) ≈ 6.3 → 6 列）。
+   写死列数不可取：窄窗口下卡片被压到不可点，超宽下又留大片空白。 */
+function tvColumnCount(availPx){
+  const gap = TV_LAYOUT.columnSpacing;
+  return Math.max(1, Math.floor((availPx + gap) / (TV_LAYOUT.cardMinWidth + gap)));
+}
+function updateTvColumns(){
+  if(settings.ui_skin !== "tv") return;
+  document.querySelectorAll(".wall").forEach(grid => {
+    /* 用内容区实测宽而不是视口宽：侧栏、滚动条、内边距都在里面，
+       用视口算会多出一两列，卡片被挤到边缘。 */
+    const avail = grid.clientWidth || (grid.parentElement && grid.parentElement.clientWidth) || 0;
+    if(avail <= 0) return;
+    grid.style.setProperty("--tv-cols", String(tvColumnCount(avail)));
+  });
 }
 async function refreshBgImage(){
   bgImageUrl = "";
@@ -2558,7 +2828,12 @@ function renderRoute(){
 function refreshIfVisible(pageId){
   if(state.route === pageId) renderRoute(); else updateSidebarInfo();
 }
-function rerender(){ renderRoute(); }
+function rerender(){
+  renderRoute();
+  /* TV 套系的列数依赖渲染后的实测宽度，必须每次重渲染后重算。
+     放这里而不是 applyAppearance：那里 DOM 还是旧的。 */
+  if(settings.ui_skin === "tv") updateTvColumns();
+}
 /* 科技感按钮的故障层用 content:attr(data-label) 复制按钮文字。
    CSS 拿不到元素的文本内容，所以每次渲染后统一把可见文本写进 data-label。
    必须在 renderRoute 之后调用：此时新 DOM 才存在。 */
@@ -7705,10 +7980,10 @@ function settingsBodyHTML(){
       '<div class="seg" role="group" aria-label="主题">' +
       [["dark","深色"],["light","浅色"],["glass","液态玻璃"]].map(([v,n]) =>
         '<button type="button" data-set="theme" data-val="' + v + '" aria-pressed="' + (settings.theme === v) + '">' + n + "</button>").join("") + "</div>");
-    /* UI 套系与主题正交：主题控制配色，套系控制形状与材质。 */
-    html += setRow("UI 套系", "档案馆（现有）· 像素 8-bit · 科技全息。切换后全局生效",
+    /* UI 套系与主题正交：主题控制配色，套系控制形状与材质与布局。 */
+    html += setRow("UI 套系", "档案馆（现有）· 像素 8-bit · 科技全息 · TV 影院。TV 影院为大图横滑卡排布，可折叠侧栏",
       '<div class="seg" role="group" aria-label="UI 套系">' +
-      [["archive","档案馆"],["pixel","像素 8-bit"],["holo","科技全息"]].map(([v,n]) =>
+      [["archive","档案馆"],["pixel","像素 8-bit"],["holo","科技全息"],["tv","TV 影院"]].map(([v,n]) =>
         '<button type="button" data-set="ui_skin" data-val="' + v + '" aria-pressed="' + (settings.ui_skin === v) + '">' + n + "</button>").join("") + "</div>");
     html += setRow("强调色", "4–6 个预设，不提供自由取色以保证可读性",
       ACCENTS.map(a => '<button class="swatch" type="button" data-set="accent_color" data-val="' + a.key + '" aria-pressed="' + (settings.accent_color === a.key) + '" title="' + esc(a.name) + '" aria-label="' + esc(a.name) + '" style="background:' + a.demo + '"></button>').join(""));
@@ -8336,6 +8611,14 @@ async function boot(){
   const order = ["home","library","chronicle","wheel","theater","quotes","settings"];
   PAGES.sort((a,b) => order.indexOf(a.id) - order.indexOf(b.id));
   buildNav();
+  /* 窗口变宽变窄都要重算 TV 套系的列数。
+     用 rAF 节流：resize 在拖窗口时每秒能触发几十次，
+     每次都读 clientWidth 强制重排，手感会明显发涩。 */
+  let tvColsRaf = 0;
+  window.addEventListener("resize", () => {
+    if(settings.ui_skin !== "tv" || tvColsRaf) return;
+    tvColsRaf = requestAnimationFrame(() => { tvColsRaf = 0; updateTvColumns(); });
+  }, { passive:true });
   const honorBtn = $("#side-honor");
   if(honorBtn) honorBtn.addEventListener("click", () => openHonorWall());
   renderRoute();

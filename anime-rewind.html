@@ -421,6 +421,154 @@ input[type="range"]{ accent-color:var(--accent); width:100%; }
 }
 .stream-mount[hidden]{ display:none; }
 .stream-frame{ position:absolute; inset:0; width:100%; height:100%; border:0; display:block; background:#000; }
+
+/* ============================================================
+   播放器（原生 video 层）
+   ------------------------------------------------------------
+   几何取自 Izuko_TV 的 TvPlayerControls.kt，不是我自己拟的：
+     底部 scrim 380px / alpha .72，顶部 scrim 180px / alpha .64，
+     按钮 48px 圆钮，图标 20px，控制层 5 秒自动隐藏。
+   两层 scrim 而不是一块 —— 底部要压住进度条与按钮的可读性，
+   顶部只压标题，两者需要的强度不同，合成一层会出现
+   「顶部也跟着变暗」或「底部压不够」。
+
+   为什么原生 video 而不是继续用 iframe：
+     iframe 里的播放器我们读不到 currentTime，也控制不了倍速与续播。
+     进度续播、片尾自动下一集这两件事必须能读时间轴，
+     所以直链走 <video>，只有站点拒绝直连时才退回 iframe。 */
+.vplayer{
+  position:absolute; inset:0; width:100%; height:100%;
+  background:#000; display:block;
+  outline:none;
+}
+.vplayer-scrim{
+  position:absolute; left:0; right:0; pointer-events:none;
+  opacity:1; transition:opacity var(--dur) var(--ease);
+}
+.vplayer-scrim-top{ top:0; height:180px; background:linear-gradient(to bottom, rgba(0,0,0,.64), transparent); }
+.vplayer-scrim-bot{
+  bottom:0; padding:0 var(--sp-5) var(--sp-4);
+  background:linear-gradient(to top, rgba(0,0,0,.72), rgba(0,0,0,.35) 55%, transparent);
+  display:flex; flex-direction:column; gap:var(--sp-3);
+}
+.vplayer.is-idle .vplayer-scrim{ opacity:0; }
+/* 隐藏时必须连点击一起关掉，否则不可见的控制条仍会吃掉点击，
+   表现为「点了没反应」。pointer-events 不是可选项。 */
+.vplayer.is-idle .vplayer-scrim-bot{ pointer-events:none; }
+
+.vplayer-title{
+  position:absolute; top:0; left:0; right:0;
+  display:flex; align-items:center; gap:var(--sp-3);
+  padding:var(--sp-4) var(--sp-5);
+  pointer-events:none;
+}
+.vplayer-title b{ color:#fff; font-size:var(--fs-lg); font-weight:600; }
+.vplayer-title span{ color:rgba(255,255,255,.72); font-size:var(--fs-sm); }
+
+.vplayer-bar{
+  display:flex; align-items:center; gap:var(--sp-3);
+  height:38px;
+}
+/* 进度条：可点可拖。padding 让点击区比视觉高度大，
+   3px 的条直接给 pointer 目标会难点中。 */
+.vplayer-track{
+  position:relative; flex:1; height:20px; cursor:pointer;
+  display:flex; align-items:center;
+}
+.vplayer-track-rail{ position:absolute; left:0; right:0; height:4px; border-radius:2px; background:rgba(255,255,255,.28); }
+.vplayer-track-buf{ position:absolute; left:0; height:4px; border-radius:2px; background:rgba(255,255,255,.42); }
+.vplayer-track-fill{ position:absolute; left:0; height:4px; border-radius:2px; background:var(--accent); }
+.vplayer-knob{
+  position:absolute; width:13px; height:13px; border-radius:50%;
+  background:var(--accent); transform:translateX(-50%);
+  box-shadow:0 1px 4px rgba(0,0,0,.5);
+  transition:width var(--dur-fast) var(--ease), height var(--dur-fast) var(--ease);
+}
+.vplayer-track:hover .vplayer-knob{ width:17px; height:17px; }
+.vplayer-time{ color:rgba(255,255,255,.9); font-size:var(--fs-sm); font-variant-numeric:tabular-nums; min-width:104px; text-align:right; }
+
+.vplayer-btns{ display:flex; align-items:center; gap:var(--sp-1); flex-wrap:wrap; }
+.vplayer-btn{
+  width:38px; height:38px; border-radius:50%;
+  display:inline-flex; align-items:center; justify-content:center;
+  border:1px solid transparent; background:rgba(255,255,255,.1);
+  color:#fff; cursor:pointer; padding:0;
+  transition:background var(--dur-fast) var(--ease), transform var(--dur-fast) var(--ease);
+}
+.vplayer-btn:hover{ background:rgba(255,255,255,.22); }
+.vplayer-btn:active{ transform:scale(.94); }
+.vplayer-btn:focus-visible{ outline:2px solid var(--accent); outline-offset:2px; }
+.vplayer-btn.is-on{ background:var(--accent); color:var(--accent-ink); }
+/* 文字型按钮（倍速 / 选源）：宽度放开，按文字长度走 */
+.vplayer-btn-text{
+  width:auto; min-width:52px; padding:0 var(--sp-3); border-radius:var(--r-pill);
+  font-size:var(--fs-sm); font-family:var(--font-mono); font-variant-numeric:tabular-nums;
+}
+.vplayer-badge{
+  position:absolute; left:50%; top:50%; transform:translate(-50%,-50%);
+  padding:var(--sp-2) var(--sp-4); border-radius:var(--r-md);
+  background:rgba(0,0,0,.68); color:#fff; font-size:var(--fs-lg);
+  pointer-events:none; opacity:0; transition:opacity var(--dur-fast) var(--ease);
+}
+.vplayer-badge.is-on{ opacity:1; }
+/* 中心大播放键：暂停时出现，Izuko_TV 也有同构的「确认键启停」 */
+.vplayer-center{
+  position:absolute; left:50%; top:50%; transform:translate(-50%,-50%);
+  width:76px; height:76px; border-radius:50%;
+  background:rgba(0,0,0,.55); color:#fff; border:0; cursor:pointer;
+  display:inline-flex; align-items:center; justify-content:center;
+  transition:opacity var(--dur) var(--ease), transform var(--dur) var(--ease);
+}
+.vplayer-center[hidden]{ display:none; }
+/* 倍速斜坡提示（长按加速时用） */
+.vplayer-rate{
+  position:absolute; left:var(--sp-5); bottom:96px;
+  padding:var(--sp-2) var(--sp-3); border-radius:var(--r-pill);
+  background:rgba(0,0,0,.72); color:#fff; font-family:var(--font-mono);
+  font-size:var(--fs-sm); pointer-events:none; opacity:0;
+  transition:opacity var(--dur-fast) var(--ease);
+}
+.vplayer-rate.is-on{ opacity:1; }
+
+/* 选源面板：从底部浮出，条目吸附底部。Izuko_TV 的 TvPlayerPanels
+   高度取「顶部信息下缘与胶囊行上缘的实测间距」，不锁死小窗。 */
+.vplayer-panel{
+  position:absolute; left:0; right:0; bottom:0; max-height:min(62%, 420px);
+  background:rgba(16,20,26,.96); border-top:1px solid rgba(255,255,255,.12);
+  transform:translateY(101%); transition:transform var(--dur) var(--ease);
+  display:flex; flex-direction:column; z-index:3;
+}
+.vplayer-panel.is-open{ transform:translateY(0); }
+.vplayer-panel-head{
+  display:flex; align-items:center; gap:var(--sp-2);
+  padding:var(--sp-3) var(--sp-4); border-bottom:1px solid rgba(255,255,255,.09);
+  flex:0 0 auto;
+}
+.vplayer-panel-head h4{ margin:0; font-size:var(--fs-md); color:#fff; }
+.vplayer-panel-body{ overflow-y:auto; padding:var(--sp-2) var(--sp-3) var(--sp-4); }
+/* 线路胶囊行：横向可滚，聚焦/选中有明确视觉差。
+   Izuko_TV 用胶囊而不是卡片网格，注释写明「InputChip 的聚焦指示看不清」——
+   网页上这一点同样成立，胶囊的高对比描边比卡片阴影更容易看出焦点。 */
+.vsrc-row{ display:flex; gap:var(--sp-2); flex-wrap:wrap; padding:var(--sp-1) 0; }
+.vsrc{
+  display:inline-flex; align-items:center; gap:var(--sp-2);
+  padding:var(--sp-2) var(--sp-3); border-radius:var(--r-pill);
+  background:rgba(255,255,255,.08); color:#fff; cursor:pointer;
+  border:1px solid transparent; font-size:var(--fs-sm); text-align:left;
+  transition:background var(--dur-fast) var(--ease), transform var(--dur-fast) var(--ease);
+}
+.vsrc:hover{ background:rgba(255,255,255,.16); }
+.vsrc.is-on{ background:var(--accent); color:var(--accent-ink); border-color:var(--accent); }
+/* 禁用态：Izuko_TV 用 alpha = 1 - 0.618 ≈ 0.382，不是 0.5。
+   0.5 在深色底上仍会误读成「可点」，0.382 才是明确的「暂不可用」。 */
+.vsrc.is-off{ opacity:.382; cursor:not-allowed; }
+.vsrc.is-off:hover{ background:rgba(255,255,255,.08); }
+.vsrc-dot{ width:7px; height:7px; border-radius:50%; background:currentColor; flex:0 0 auto; }
+.vsrc-meta{ color:inherit; opacity:.72; font-size:var(--fs-xs); font-family:var(--font-mono); }
+.vsrc-reason{
+  display:block; width:100%; color:var(--warn); opacity:.9;
+  font-size:var(--fs-xs); margin-top:2px;
+}
 .mb-3{ margin-bottom:var(--sp-3); }
 
 /* 内联提示条：解析结果、导入诊断用。左侧 2px 色条承担语义，
@@ -2075,6 +2223,12 @@ function migrateRecord(rec, kind){
     // seriesId 缺失/null 统一成空串，避免 undefined 参与相等判断
     if(rec.seriesId == null) rec.seriesId = DEFAULT_SERIES_ID;
     else rec.seriesId = String(rec.seriesId);
+    /* 播放源：旧结构（streamUrl 单值）迁成 sources 数组。
+       这里只做内存迁移，不回写存储 —— 回写由 boot 里的
+       「迁移后立即落盘」统一做，避免 migrateRecord 带副作用
+       （它现在是纯函数，被导入预览等只读路径共用）。 */
+    migrateSources(rec);
+    rec.activeSourceId = String(rec.activeSourceId || "");
   }
   if(kind === "quote"){
     rec.id = rec.id || uid("q");
@@ -2699,9 +2853,14 @@ function draftFromCandidate(c, an){
        一部动画常有多季/剧场版，靠这个字段把它们聚在一起。 */
     seriesId: DEFAULT_SERIES_ID,
     favorite: false, masterpiece: false, personalTags: [], reviews: [],
-    /* 在线播放：按作品独立保存，而不是全局一份。
+    /* 在线播放：按作品独立保存多条线路，而不是全局一份。
        原先是 settings.stream_url —— 一部番的片源会覆盖另一部，
-       「不用每次都重新输入」这个需求等于没实现。 */
+       「不用每次都重新输入」这个需求等于没实现。
+       sources 是多线路数组（旧数据由 migrateSources 迁来），
+       activeSourceId 记「上次用的是哪条」，选源算法靠它做记忆优先。 */
+    sources: [], activeSourceId: "",
+    /* 旧字段保留在默认对象里：migrateSources 要读它们做迁移，
+       且用户从旧备份导入时这两个字段会被原样带进来。 */
     streamUrl: "", streamEp: null, streamUrlAt: "",
     createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
     locked: {}, pending: {}, schemaVersion: SCHEMA_VERSION
@@ -4208,13 +4367,290 @@ async function mountStreamPlayer(mountEl, raw, statusEl){
   return () => { clear(); try{ frame.src = "about:blank"; }catch(e){} };
 }
 
+/* ============================================================
+   16.5 播放源体系（数据模型 + 选源算法）
+   ------------------------------------------------------------
+   参考 Izuko_TV / Animeko 的 MediaSelector 体系，直译成纯函数。
+
+   为什么要有「多线路」：原先一条作品只存一个 streamUrl，
+   用户要换线路只能覆盖，之前的线路就没了。Izuko_TV 的做法是
+   一个条目下并存多个源，播放时再挑。
+
+   为什么筛选要三态（included / excluded + 原因）：
+   直接把不合适的资源丢掉，用户只会看到「搜不到」，
+   不知道是分辨率不对还是字幕缺失。携带原因排到最后，
+   界面上能写清「为什么没选它」，用户也能手动挑回来。
+
+   为什么选源是 DFS 而不是加权求和：
+   加权求和会让「4K 无字幕」压过「1080P 有字幕」——
+   数字算出来是 4K 分高，但用户其实想要字幕。
+   DFS 是字典序：分辨率 → 字幕 → 字幕组 → 线路，
+   每一层内部穷尽后才下降，且某层匹配不到时不下降
+   （字幕组匹配不到不代表该换更差的字幕语言）。
+   ============================================================ */
+
+/* 分辨率档位：从高到低。用于 DFS 的第一层，也是唯一的排序依据。
+   不看文件大小 —— Izuko_TV 的原始注释里明确「质量优先而非大小优先」，
+   4K 体积是 1080P 的十倍，掺进评分就成了噪音。 */
+const RESOLUTION_ORDER = ["2160P","1440P","1080P","720P","480P"];
+const SUBTITLE_ORDER    = ["CHS","CHT","JPY","ENG"];
+/* 字幕形态。网页端只有「外挂字幕轨」是真正可用的，
+   内封在 <video> 上无法切换，硬字幕烧进画面更无法处理。
+   所以 UNSUPPORTED 不是缺陷陈述，是能力边界。 */
+const SUBTITLE_KINDS = ["EXTERNAL","CLOSED","EMBEDDED"];
+
+function resolutionRank(res){
+  const s = String(res || "").toUpperCase().trim();
+  const i = RESOLUTION_ORDER.indexOf(s);
+  return i < 0 ? RESOLUTION_ORDER.length : i;   // 未知分辨率排在所有已知之后
+}
+function subtitleRank(lang, wanted){
+  if(!wanted) return 0;                                   // 没偏好语言要求时不构成筛选条件
+  const i = SUBTITLE_ORDER.indexOf(String(lang || "").toUpperCase());
+  return i < 0 ? SUBTITLE_ORDER.length : i;
+}
+
+/* 把一条线路补全成完整结构。
+   缺字段必须给确定的默认值而不是 undefined ——
+   下游的排序比较全部是数值比较，undefined 会让比较结果变成 NaN，
+   而 NaN 参与 sort 的后果是顺序不确定且不报错，极难排查。 */
+function normalizeSource(s, idx, nowIso){
+  if(!s) return null;
+  const url = String(s.url || s.streamUrl || "").trim();
+  if(!url) return null;
+  const kind = SUBTITLE_KINDS.indexOf(String(s.subtitleKind || "").toUpperCase()) >= 0
+    ? String(s.subtitleKind).toUpperCase()
+    /* 拿不到就当外挂：这是网页端唯一真正可用的形态，
+       标成硬字幕会让所有线路都被判「平台不支持」而一个都不剩。 */
+    : "EXTERNAL";
+  return {
+    /* id 必须在多次保存之间稳定 —— 选源结果按 id 记忆「上次用的是哪条」，
+       id 每次变的话记忆永远落空，表现为「每次都选第一条」。 */
+    id: String(s.id || ("src-" + idx + "-" + hashish(url))),
+    name: String(s.name || ("线路 " + (idx + 1))),
+    url: url,
+    ep: s.ep == null || s.ep === "" ? null : Number(s.ep),
+    resolution: String(s.resolution || "").toUpperCase() || null,
+    subtitleKind: kind,
+    /* 语言可能是数组也可能是单值，统一成数组 */
+    subtitles: Array.isArray(s.subtitles)
+      ? s.subtitles.map(x => String(x || "").toUpperCase()).filter(Boolean)
+      : (s.subtitle ? [String(s.subtitle).toUpperCase()] : []),
+    tier: Number.isFinite(Number(s.tier)) ? Number(s.tier) : 2,
+    savedAt: s.savedAt || nowIso || ""
+  };
+}
+/* 轻量字符串哈希，用于生成稳定 id。不追求分布性，只求稳定。 */
+function hashish(str){
+  let h = 5381;
+  const s = String(str || "");
+  for(let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) >>> 0;
+  return h.toString(36);
+}
+
+/* ---- 迁移：旧数据 → 多线路 ----
+   旧结构是 a.streamUrl（单条）+ a.streamEp + a.streamUrlAt。
+   迁移必须幂等：已经迁过的数据再迁一次结果不变。
+   这一点很重要 —— 启动流程、导入流程、备份恢复都会调用迁移，
+   只要有一处重复调用就会产生第二条重复线路。 */
+function migrateSources(a){
+  if(!a) return a;
+  const now = new Date().toISOString();
+  const raw = Array.isArray(a.sources) ? a.sources : [];
+  const list = raw.map((s, i) => normalizeSource(s, i, now)).filter(Boolean);
+  if(list.length){ a.sources = list; return a; }
+  /* 没有 sources 但有旧字段 → 迁一条。 */
+  if(a.streamUrl){
+    const migrated = normalizeSource({
+      url: a.streamUrl, ep: a.streamEp, name: "原线路", savedAt: a.streamUrlAt
+    }, 0, now);
+    if(migrated) a.sources = [migrated];
+  }
+  if(!Array.isArray(a.sources)) a.sources = [];
+  return a;
+}
+
+/* 取出该作品的全部线路（未保存任何线路时给一条临时线路）。
+   settings.stream_url 是历史兜底：早期版本只有全局一份，
+   直接丢掉会让老用户的片源凭空消失。 */
+function sourcesOf(a){
+  const own = Array.isArray(a && a.sources) ? a.sources.filter(s => s && s.url) : [];
+  if(own.length) return own;
+  if(a && a.streamUrl) return migrateSources(a).sources;
+  const legacy = String(settings.stream_url || "").trim();
+  return legacy ? [normalizeSource({ url: legacy, name: "临时片源" }, 0, new Date().toISOString())] : [];
+}
+/* 当前应当使用的那条：优先用户上次选的，其次列表第一条。 */
+function activeSourceOf(a){
+  const list = sourcesOf(a);
+  if(!list.length) return null;
+  const want = a && a.activeSourceId;
+  return list.find(s => s.id === want) || list[0];
+}
+
+/* ---- 三态筛选 ----
+   直译 MaybeExcludedMedia：被排除的资源不丢弃，携带原因排到最后。 */
+const EXCLUDE_REASONS = {
+  episode_mismatch: "集数不匹配",
+  no_subtitle:      "无字幕",
+  subtitle_kind:    "字幕形态不支持",
+  invalid_url:      "网址无效"
+};
+function excludeSource(src, reason){
+  return { state:"excluded", src:null, original:src, reason:reason, reasonText:EXCLUDE_REASONS[reason] || reason };
+}
+function includeSource(src, meta){
+  return { state:"included", src:src, original:src, reason:null,
+           reasonText:null, similarity: meta && meta.similarity != null ? meta.similarity : 100 };
+}
+/* 筛选：返回有序的三态列表（included 在前，按 sortSource 排；excluded 附后）。
+   ctx = { wantEp, wantSubtitle, showExcluded } */
+function filterSources(list, ctx){
+  ctx = ctx || {};
+  const out = [];
+  (list || []).forEach(s => {
+    if(!s || !normalizeStreamURL(s.url)){
+      out.push(excludeSource(s, "invalid_url")); return;
+    }
+    /* 集数匹配：source.ep 是用户声明的「这条源对应第几集」。
+       为空表示「整季通用」，此时不该被判为不匹配 ——
+       大量站点一条链接覆盖整季，误杀等于让用户白填。
+       同理 wantEp 为空时不做这项筛选：用户没声明在看哪集。 */
+    const ep = s.ep == null || s.ep === "" ? null : Number(s.ep);
+    if(ctx.wantEp != null && ep != null && ep !== Number(ctx.wantEp)){
+      out.push(excludeSource(s, "episode_mismatch")); return;
+    }
+    const subs = srcSubs(s);
+    if(ctx.wantSubtitle && String(s.subtitleKind || "").toUpperCase() === "EMBEDDED"){
+      /* 硬字幕不可关闭，要求外挂字幕时排除。 */
+      out.push(excludeSource(s, "subtitle_kind")); return;
+    }
+    if(ctx.wantSubtitle && subs.length && !subs.includes(String(ctx.wantSubtitle).toUpperCase())){
+      out.push(excludeSource(s, "no_subtitle")); return;
+    }
+    out.push(includeSource(s));
+  });
+  return out.filter(x => x.state === "included" || ctx.showExcluded)
+            .sort(compareSourceResult);
+}
+function compareSourceResult(x, y){
+  if(x.state !== y.state) return x.state === "included" ? -1 : 1;
+  /* 排除项之间不排序，交给 sort 的稳定性保持原始顺序。
+     这里必须显式早返回：excluded 项的 src 是 null，
+     继续往下走会在 compareSourceQuality 里读 null.subtitles 抛错。
+     被排除的项保持数据源给出的顺序，比给它们编一个排序规则更有用 ——
+     数据源的查询顺序本身就反映了「相关性」。 */
+  if(x.state === "excluded") return 0;
+  return compareSourceQuality(x.src, y.src);
+}
+/* 七级排序，直译 sortMediaList。稳定排序由 Array.prototype.sort 保证。
+   全部字段读取都走读取器而不是直接取属性：排序层会被喂进
+   未经 normalizeSource 的对象（导入的旧备份、手写构造的线路），
+   直接读 a.subtitles[0] 会在 undefined 上取下标直接抛错，
+   而 sort 回调抛错的表现是「整个列表排不出来」，定位成本极高。 */
+function srcSubs(s){ return Array.isArray(s && s.subtitles) ? s.subtitles : []; }
+function srcNum(v, d){ const n = Number(v); return Number.isFinite(n) ? n : d; }
+function compareSourceQuality(a, b){
+  if(!a || !b) return 0;
+  const ra = resolutionRank(a.resolution), rb = resolutionRank(b.resolution);
+  if(ra !== rb) return ra - rb;                            /* ① 分辨率 */
+  const pa = subtitleRank(srcSubs(a)[0], true), pb = subtitleRank(srcSubs(b)[0], true);
+  if(pa !== pb) return pa - pb;                            /* ② 字幕语言 */
+  const ta = srcNum(a.tier, 2), tb = srcNum(b.tier, 2);
+  if(ta !== tb) return ta - tb;                            /* ③ 线路优先级 */
+  return String(a.name || "").localeCompare(String(b.name || "")); /* ④ 名称稳定序 */
+}
+
+/* ---- 偏好 DFS ----
+   直译 MediaSelectionDecider.findByPreference。
+   四层字典序：分辨率 → 字幕语言 → 字幕组 → 线路。
+   关键：某层匹配不到时在**当前层**继续穷尽，而不是下降到下一层。
+   字幕组匹配不到就换更差的字幕语言，是这个算法最容易写错的地方。 */
+function pickByPreference(included, pref){
+  pref = pref || {};
+  const cand = included.filter(x => x.state === "included").map(x => x.src);
+  if(!cand.length) return null;
+  const resSeq = pref.resolution
+    ? [pref.resolution].concat(pref.fallbackResolutions || [])
+    : (pref.fallbackResolutions || RESOLUTION_ORDER.slice());
+  const langSeq = pref.subtitleLanguage
+    ? [pref.subtitleLanguage].concat(pref.fallbackSubtitleLanguages || [])
+    : [null];   /* 没偏好语言 → 只有一层，占位任意 */
+  const allianceSeq = pref.alliance ? [pref.alliance] : [null];
+  const srcSeq = pref.sourceId ? [pref.sourceId] : [null];
+
+  for(let i = 0; i < resSeq.length; i++){
+    for(let j = 0; j < langSeq.length; j++){
+      /* 字幕组层：匹配不到时不下降语言层，
+         而是在同一语言下把线路层再跑一遍（srcSeq 的外层）。 */
+      const afterAlliance = (function tryAlliance(){
+        for(let k = 0; k < allianceSeq.length; k++){
+          for(let l = 0; l < srcSeq.length; l++){
+            const hit = cand.find(s =>
+              resolutionOf(s, resSeq[i]) &&
+              langOf(s, langSeq[j]) &&
+              allianceOf(s, allianceSeq[k]) &&
+              sourceOfId(s, srcSeq[l]));
+            if(hit) return hit;
+          }
+        }
+        return null;
+      })();
+      if(afterAlliance) return afterAlliance;
+    }
+  }
+  /* 偏好全部落空 → 退回排序最优，不让用户面对空列表。 */
+  return cand.slice().sort(compareSourceQuality)[0] || null;
+}
+/* 通配判定：序列里该项为 null 表示「任意」，一律通过。 */
+function resolutionOf(s, want){ return !want || (s.resolution || "").toUpperCase() === String(want).toUpperCase(); }
+function langOf(s, want){
+  if(!want) return true;
+  return s.subtitles.some(x => x === String(want).toUpperCase());
+}
+function allianceOf(s, want){ return !want || s.name === want; }
+function sourceOfId(s, want){ return !want || s.id === want; }
+
+/* ---- 分阶段自动选源 ----
+   直译 MediaAutoSelector 的四阶段。网页端是本地数据，没有网络请求，
+   所以「时间预算」退化为「时间预算」仍然有意义：
+   用户可能在等，用户也可能在改主意。真正的价值是**记忆优先**——
+   上次能用的线路先用，不合适再换，避免每次都重新试。 */
+const AUTO_SELECT_STAGES = [
+  { id:"preferred", label:"上次用的线路" },
+  { id:"instant",   label:"优先线路" },
+  { id:"exact",     label:"精确匹配" },
+  { id:"fuzzy",     label:"全部候选" }
+];
+function autoSelect(entries, ctx){
+  ctx = ctx || {};
+  const included = entries.filter(x => x.state === "included");
+  if(!included.length) return { source:null, stage:"none", reason:"没有可用线路" };
+  const prefId = ctx.preferredSourceId;
+  if(prefId){
+    const hit = included.find(x => x.src.id === prefId);
+    if(hit) return { source:hit.src, stage:"preferred", reason:"上次用的线路仍可用" };
+  }
+  if(ctx.fastSelect){
+    const instant = included.find(x => x.src.tier <= 0);
+    if(instant) return { source:instant.src, stage:"instant", reason:"优先线路已就绪" };
+  }
+  const exact = included.filter(x => resolutionOf(x.src, ctx.wantResolution));
+  if(exact.length){
+    const best = exact.slice().sort(compareSourceQuality)[0];
+    return { source:best, stage:"exact", reason:"按分辨率与线路优先级选定" };
+  }
+  const fuzzy = included.slice().sort(compareSourceQuality)[0];
+  return { source:fuzzy.src, stage:"fuzzy", reason:"没有精确匹配，取质量最优" };
+}
+
 /* 外部播放器区。
  *
  * 数据归属（这是本轮最关键的改动）：
  *   原先存在 settings.stream_url —— 全局一份，于是「给 A 番粘的片源」
  *   会在打开 B 番时被当成 B 番的片源。用户的原话是「不用每次都输入
  *   这部番的链接」，全局一份在语义上根本满足不了。
- *   现在按作品存：a.streamUrl（片源）+ a.streamEp（看到第几集）。
+ *   现在按作品存：a.sources（多线路）+ a.activeSourceId（当前用哪条），
  *   settings.stream_url 保留为「无作品时的临时片源」，不删以免旧数据失效。
  *
  * 集数记录的现实约束：B 站分 P 用 ?p=，YouTube 用 &start=（秒），
@@ -4222,8 +4658,484 @@ async function mountStreamPlayer(mountEl, raw, statusEl){
  * 不假装能从播放进度反推 —— 那需要跨域读取播放器内部状态，做不到。
  */
 function streamURLOf(a){
-  if(a && a.streamUrl) return a.streamUrl;
-  return settings.stream_url || "";
+  if(!a) return settings.stream_url || "";
+  const act = activeSourceOf(a);
+  return act ? act.url : "";
+}
+
+/* ============================================================
+   17.5 原生视频播放器
+   ------------------------------------------------------------
+   双轨设计：
+     直链（mp4 / webm / m4v 等浏览器能自己解的）→ <video>，
+     需要联网换算或站点只允许嵌入 → 沿用 iframe。
+   不用「一律 iframe」的原因：iframe 里读不到 currentTime，
+   续播与片尾自动下一集都无从谈起 —— 这两件事都要时间轴。
+
+   键盘语义照 Izuko_TV 的 TvEpisodeScreen：
+     ← →        快退 / 快进 5 秒（不唤出控制层）
+     ↑ ↓        显示控制层
+     空格/回车  播放暂停
+     长按空格   临时倍速（松开恢复），默认 2.5×
+     F          全屏
+   长按加速的斜坡与短片保护也照搬 scrubStepMillis：
+     按住越久走得越快（8 发加一档，12× 到顶），
+     但用 总时长/60 压一道上限 —— 12 倍对两小时电影合适，
+     对 3 分钟 PV 却是一发就冲到头。 */
+const VP = {
+  seekStepMs: 5000,
+  holdSpeed: 2.5,
+  maxRampSpeed: 12,
+  rampRepeats: 8,
+  minRepeatsAcross: 60,
+  autoHideMs: 5000,
+  finishThresholdMs: 5000
+};
+/* 斜坡步长：直译 scrubStepMillis。 */
+function scrubStepMillis(totalMs, repeats){
+  if(!Number.isFinite(totalMs) || totalMs <= 0) return VP.seekStepMs;
+  const speedup = Math.min(1 + Math.max(0, repeats - 1) / VP.rampRepeats, VP.maxRampSpeed);
+  const ramped = VP.seekStepMs * speedup;
+  const cap = Math.max(totalMs / VP.minRepeatsAcross, VP.seekStepMs);
+  return Math.min(ramped, cap);
+}
+function fmtClock(sec){
+  if(!Number.isFinite(sec) || sec < 0) sec = 0;
+  const s = Math.floor(sec % 60), m = Math.floor(sec / 60) % 60, h = Math.floor(sec / 3600);
+  const two = n => String(n).padStart(2, "0");
+  return h > 0 ? (h + ":" + two(m) + ":" + two(s)) : (m + ":" + two(s));
+}
+/* 浏览器能否自己播这个地址。
+   mp4/webm/m4v/ogg 是确定能解的；m3u8 原生 Safari 能解、其他浏览器不能。
+   不做嗅探式尝试 —— 判断错一次的代价是黑屏加一段无意义的等待。 */
+function isDirectPlayable(url){
+  const u = String(url || "").toLowerCase();
+  if(!u) return false;
+  if(/\.(mp4|webm|m4v|mov|ogv|ogg|mp3|m4a|aac|flac)(\?|#|$)/.test(u)) return true;
+  return false;
+}
+
+/* 挂载原生播放器。返回清理函数。
+   a 可以为 null（未选作品的临时片源），此时不落盘进度。 */
+function mountVideoPlayer(mountEl, srcObj, a, onLineChange){
+  const video = document.createElement("video");
+  video.className = "vplayer";
+  video.setAttribute("playsinline", "");
+  video.setAttribute("preload", "metadata");
+  video.setAttribute("crossorigin", "anonymous");
+  video.src = srcObj.url;
+  video.volume = 0.85;
+
+  const scrimTop = document.createElement("div");
+  scrimTop.className = "vplayer-scrim vplayer-scrim-top";
+  const title = document.createElement("div");
+  title.className = "vplayer-title";
+  title.innerHTML = "<b>" + esc(srcObj.name || "播放") + "</b>" +
+    (srcObj.resolution ? "<span>" + esc(srcObj.resolution) + "</span>" : "");
+  const scrimBot = document.createElement("div");
+  scrimBot.className = "vplayer-scrim vplayer-scrim-bot";
+
+  /* 进度条 */
+  const bar = document.createElement("div");
+  bar.className = "vplayer-bar";
+  const btnPlay = document.createElement("button");
+  btnPlay.className = "vplayer-btn"; btnPlay.type = "button";
+  btnPlay.title = "播放 / 暂停"; btnPlay.setAttribute("aria-label", "播放或暂停");
+  const track = document.createElement("div");
+  track.className = "vplayer-track"; track.setAttribute("role", "slider");
+  track.setAttribute("aria-label", "播放进度");
+  const rail = document.createElement("div"); rail.className = "vplayer-track-rail";
+  const buf = document.createElement("div"); buf.className = "vplayer-track-buf";
+  const fill = document.createElement("div"); fill.className = "vplayer-track-fill";
+  const knob = document.createElement("div"); knob.className = "vplayer-knob";
+  track.append(rail, buf, fill, knob);
+  const time = document.createElement("div");
+  time.className = "vplayer-time"; time.textContent = "0:00 / 0:00";
+  const btnMute = document.createElement("button");
+  btnMute.className = "vplayer-btn"; btnMute.type = "button";
+  btnMute.title = "静音"; btnMute.setAttribute("aria-label", "静音开关");
+  bar.append(btnPlay, track, time, btnMute);
+
+  /* 图标行 */
+  const btns = document.createElement("div");
+  btns.className = "vplayer-btns";
+  const mk = (label, title2, cls) => {
+    const b = document.createElement("button");
+    b.className = "vplayer-btn " + (cls || ""); b.type = "button";
+    b.title = title2; b.setAttribute("aria-label", title2); b.dataset.vp = label;
+    return b;
+  };
+  const bBack = mk("back", "后退 5 秒");
+  const bFwd = mk("fwd", "前进 5 秒");
+  const bRate = mk("rate", "倍速", "vplayer-btn-text");
+  bRate.textContent = "1.0×";
+  const bFull = mk("full", "全屏");
+  const bSrc = mk("source", "选源", "vplayer-btn-text");
+  bSrc.textContent = "选源";
+  const grow = document.createElement("div"); grow.className = "grow";
+  const bOpen = mk("open", "新标签打开");
+  btns.append(bBack, bFwd, bRate, grow, bSrc, bOpen, bFull);
+  scrimBot.append(bar, btns);
+
+  const center = document.createElement("button");
+  center.className = "vplayer-center"; center.type = "button";
+  center.setAttribute("aria-label", "播放");
+  const badge = document.createElement("div"); badge.className = "vplayer-badge";
+  const rateHint = document.createElement("div"); rateHint.className = "vplayer-rate";
+
+  /* 选源面板 */
+  const panel = document.createElement("div");
+  panel.className = "vplayer-panel";
+  panel.innerHTML = '<div class="vplayer-panel-head">' + ic("film", 16) +
+    "<h4>播放源</h4><span class=\"hint\" id=\"vp-src-hint\"></span>" +
+    '<div class="grow"></div>' +
+    '<button class="btn btn-sm" type="button" data-vp="panel-close">收起</button></div>' +
+    '<div class="vplayer-panel-body" id="vp-src-body"></div>';
+
+  mountEl.innerHTML = "";
+  mountEl.append(video, scrimTop, title, scrimBot, center, badge, rateHint, panel);
+
+  /* ---- 状态 ---- */
+  let idleTimer = null, badgeTimer = null, rateTimer = null;
+  let rateBack = null;          /* 长按加速前的倍速，松开要还回去 */
+  let dragging = false;
+  let interacted = false;       /* 是否已经发生过真实播放，用于 ended 守卫 */
+  let savedPosSec = null;
+
+  function showBadge(text){
+    badge.textContent = text;
+    badge.classList.add("is-on");
+    if(badgeTimer) clearTimeout(badgeTimer);
+    badgeTimer = setTimeout(() => badge.classList.remove("is-on"), 620);
+  }
+  function wake(){
+    mountEl.classList.remove("is-idle");
+    if(idleTimer) clearTimeout(idleTimer);
+    /* 正在拖动或面板打开时不自动隐藏 ——
+       Izuko_TV 用 openPopupCount 引用计数做同一件事。 */
+    if(!dragging && !panel.classList.contains("is-open")){
+      idleTimer = setTimeout(() => mountEl.classList.add("is-idle"), VP.autoHideMs);
+    }
+  }
+  function sleep(){ if(idleTimer) clearTimeout(idleTimer); }
+  function togglePlay(){
+    if(video.paused){
+      /* play() 返回的 Promise 会因自动播放策略而 reject，
+         不接住就是一个 Uncaught Promise Rejection。 */
+      const pr = video.play();
+      if(pr && typeof pr.catch === "function") pr.catch(() => {
+        showBadge("浏览器拦截了自动播放，请再点一次");
+      });
+      center.hidden = true;
+      interacted = true;
+    }else{
+      video.pause();
+      center.hidden = false;
+    }
+    wake();
+  }
+  function seekBy(ms){
+    if(!Number.isFinite(video.duration)) return;
+    video.currentTime = Math.max(0, Math.min(video.duration, video.currentTime + ms / 1000));
+    showBadge((ms > 0 ? "快进 " : "快退 ") + Math.round(Math.abs(ms) / 1000) + " 秒");
+    wake();
+  }
+  function setRate(r, hint){
+    video.playbackRate = r;
+    if(bRate) bRate.textContent = r.toFixed(1) + "×";
+    if(hint !== false) showBadge(r.toFixed(1) + "×");
+    wake();
+  }
+  /* 长按加速斜坡。
+     斜坡的作用是「按得越久走得越快」，用固定的 90ms 定时器推进，
+     而不是依赖 keydown 的重复事件 —— 系统给的重复间隔在不同机器上
+     从 30ms 到 200ms 不等，会让加速曲线完全走样。
+     上限由 scrubStepMillis 的短片保护决定：3 分钟 PV 上不加速，
+     两小时电影上能到 12×。 */
+  function startRamp(){
+    if(rateBack != null) return;
+    rateBack = video.playbackRate;
+    let repeats = 0;
+    rateTimer = setInterval(() => {
+      repeats++;
+      const step = scrubStepMillis((video.duration || 0) * 1000, repeats);
+      /* 步长封顶时长即意味着「再按也走不动了」，
+         用它反推倍速上限：长片能到 12×，短片停在起步倍率。 */
+      const speedup = Math.min(step / VP.seekStepMs, VP.maxRampSpeed);
+      const r = Math.max(rateBack, Math.min(rateBack * speedup, rateBack * VP.holdSpeed));
+      video.playbackRate = r;
+      if(bRate) bRate.textContent = r.toFixed(1) + "×";
+      rateHint.textContent = "加速 " + r.toFixed(1) + "×（松开恢复）";
+      rateHint.classList.add("is-on");
+    }, 90);
+  }
+  function endRamp(){
+    if(rateTimer){ clearInterval(rateTimer); rateTimer = null; }
+    if(rateBack != null){ video.playbackRate = rateBack; setRate(rateBack, false); rateBack = null; }
+    rateHint.classList.remove("is-on");
+    wake();
+  }
+
+  /* ---- 进度同步 ---- */
+  function paint(){
+    const d = video.duration;
+    const pct = Number.isFinite(d) && d > 0 ? (video.currentTime / d) * 100 : 0;
+    fill.style.width = pct + "%";
+    knob.style.left = pct + "%";
+    let buffered = 0;
+    try{ if(video.buffered.length) buffered = video.buffered.end(video.buffered.length - 1); }catch(e){}
+    const bpct = Number.isFinite(d) && d > 0 ? (buffered / d) * 100 : 0;
+    buf.style.width = bpct + "%";
+    time.textContent = fmtClock(video.currentTime) + " / " + (Number.isFinite(d) ? fmtClock(d) : "--:--");
+    track.setAttribute("aria-valuenow", String(Math.round(video.currentTime)));
+    track.setAttribute("aria-valuemax", String(Number.isFinite(d) ? Math.round(d) : 0));
+  }
+  video.addEventListener("timeupdate", paint);
+  video.addEventListener("progress", paint);
+  video.addEventListener("loadedmetadata", () => {
+    paint();
+    /* 续播：只在有记录且记录位置离结尾还远时恢复。
+       靠得太近就恢复的话，一播出来就立刻结束并触发自动下一集，
+       用户看到的是「刚点播放就被跳走」。Animeko 在 EpisodeHistory
+       里也是同一个判断（isFinished 就当没看过）。 */
+    if(a && Number.isFinite(savedPosSec) && savedPosSec > 5){
+      const d = video.duration;
+      if(!(Number.isFinite(d) && d - savedPosSec < VP.finishThresholdMs)){
+        try{ video.currentTime = savedPosSec; showBadge("已续播到 " + fmtClock(savedPosSec)); }catch(e){}
+      }
+    }
+  });
+  video.addEventListener("play", () => { center.hidden = true; interacted = true; wake(); });
+  video.addEventListener("pause", () => { center.hidden = false; wake(); });
+  video.addEventListener("volumechange", () => {
+    btnMute.classList.toggle("is-on", video.muted || video.volume === 0);
+  });
+  video.addEventListener("error", () => {
+    const err = video.error;
+    const msg = err && err.code === 4
+      ? "这个地址不是浏览器能直接播放的格式（或跨域被拒）。用「选源」换一条，或点「新标签打开」。"
+      : "播放失败。请换一条线路，或用「新标签打开」在站外观看。";
+    showBadge("播放失败");
+    if(onLineChange) onLineChange({ failed:true, message:msg });
+  });
+
+  /* 片尾自动下一集。
+     守卫「必须已经 interacted」不可省：<video> 在首次加载时会派发一次
+     ended（duration 尚未就绪），不过滤就会一打开就跳走。 */
+  video.addEventListener("ended", () => {
+    if(!interacted || !a) return;
+    const d = video.duration;
+    if(!(Number.isFinite(d) && d - video.currentTime < VP.finishThresholdMs * 2)) return;
+    const total = Number(a.totalEpisodes) || 0;
+    /* 集数以「当前线路声明的集数」为准，没有才回落到已看集数 ——
+       用 a.watchedEpisodes 直接推会在「声明看到第 3 集但已看 12 集」时跳到 13，
+       而用户此刻正在看第 3 集的下一步。 */
+    const curLine = activeSourceOf(a);
+    const curEp = curLine && curLine.ep != null ? Number(curLine.ep)
+      : (a.streamEp != null ? Number(a.streamEp) : (a.watchedEpisodes || 0));
+    const next = curEp + 1;
+    if(next <= total){
+      showBadge("即将播放第 " + next + " 集");
+      if(onLineChange) onLineChange({ autonext:next });
+    }
+  });
+
+  /* ---- 交互 ---- */
+  btnPlay.addEventListener("click", togglePlay);
+  center.addEventListener("click", togglePlay);
+  btnMute.addEventListener("click", () => {
+    video.muted = !video.muted;
+    wake();
+  });
+  bBack.addEventListener("click", () => seekBy(-VP.seekStepMs));
+  bFwd.addEventListener("click", () => seekBy(VP.seekStepMs));
+  bRate.addEventListener("click", () => {
+    /* 连续区间而非离散档位：0.5 – 2.5 步进 0.25。
+       Animeko 用连续区间是刻意的，离散档位在 1.0 附近会跳得很难受。 */
+    const steps = [0.5,0.75,1,1.25,1.5,1.75,2,2.5];
+    const i = steps.findIndex(x => Math.abs(x - video.playbackRate) < 0.01);
+    setRate(steps[(i + 1) % steps.length]);
+  });
+  bFull.addEventListener("click", () => {
+    if(document.fullscreenElement) document.exitFullscreen();
+    else if(mountEl.requestFullscreen) mountEl.requestFullscreen().catch(() => {});
+    wake();
+  });
+  bOpen.addEventListener("click", () => {
+    window.open(srcObj.url, "_blank", "noopener,noreferrer");
+  });
+
+  function posFromEvent(e){
+    const r = track.getBoundingClientRect();
+    const x = (e.touches ? e.touches[0].clientX : e.clientX) - r.left;
+    const ratio = Math.max(0, Math.min(1, x / Math.max(1, r.width)));
+    return ratio;
+  }
+  function seekTo(ratio){
+    if(!Number.isFinite(video.duration)) return;
+    video.currentTime = ratio * video.duration;
+    paint();
+    wake();
+  }
+  track.addEventListener("pointerdown", e => {
+    dragging = true;
+    sleep();
+    try{ track.setPointerCapture(e.pointerId); }catch(err){}
+    seekTo(posFromEvent(e));
+  });
+  track.addEventListener("pointermove", e => {
+    if(!dragging) return;
+    const ratio = posFromEvent(e);
+    /* 拖动时只改填充不 seek：每动一下就跳一次，音画会反复重同步。 */
+    fill.style.width = (ratio * 100) + "%";
+    knob.style.left = (ratio * 100) + "%";
+    if(Number.isFinite(video.duration)) time.textContent = fmtClock(ratio * video.duration) + " / " + fmtClock(video.duration);
+  });
+  track.addEventListener("pointerup", e => {
+    if(!dragging) return;
+    dragging = false;
+    try{ track.releasePointerCapture(e.pointerId); }catch(err){}
+    seekTo(posFromEvent(e));
+    wake();
+  });
+  track.addEventListener("keydown", e => {
+    if(e.key === "ArrowRight"){ seekBy(VP.seekStepMs); e.preventDefault(); }
+    if(e.key === "ArrowLeft"){ seekBy(-VP.seekStepMs); e.preventDefault(); }
+  });
+
+  /* 空格的两段语义：轻点启停，按住临时加速。
+     关键在时序：keydown 先记住时刻并开始加速计时，keyup 时看按了多久 ——
+     短于阈值算「点一下」执行启停，长于阈值则已经在加速，只恢复倍速不再启停。
+     若把启停放在 keydown，长按加速的起点会先跳一下播放状态，手感是断的；
+     若放在 keyup 且不看时长，则按住不放永远等不到启停。
+     阈值取 250ms：短于它时用户主观上就是「点」，长于它主观上就是「按住」。 */
+  const SPACE_HOLD_MS = 250;
+  let spaceDownAt = 0;
+  mountEl.addEventListener("keydown", e => {
+    const k = e.key;
+    if(k === "ArrowRight"){ seekBy(VP.seekStepMs); e.preventDefault(); }
+    else if(k === "ArrowLeft"){ seekBy(-VP.seekStepMs); e.preventDefault(); }
+    else if(k === "ArrowUp" || k === "ArrowDown"){ wake(); e.preventDefault(); }
+    else if(k === " "){
+      if(!e.repeat && spaceDownAt === 0){ spaceDownAt = Date.now(); startRamp(); }
+      e.preventDefault();
+    }
+    else if(k === "Enter"){ togglePlay(); e.preventDefault(); }
+    else if(k === "f" || k === "F"){ bFull.click(); }
+    else if(k === "Escape" && panel.classList.contains("is-open")){ panel.classList.remove("is-open"); bSrc.classList.remove("is-on"); }
+  });
+  mountEl.addEventListener("keyup", e => {
+    if(e.key !== " " || spaceDownAt === 0) return;
+    const held = Date.now() - spaceDownAt;
+    spaceDownAt = 0;
+    endRamp();
+    if(held < SPACE_HOLD_MS) togglePlay();
+  });
+  /* 焦点离开时清掉按住状态：否则用户按住空格切走窗口，
+     回来再松开会被判成一次「点」，莫名暂停。 */
+  mountEl.addEventListener("blur", () => {
+    if(spaceDownAt !== 0){ spaceDownAt = 0; endRamp(); }
+  });
+
+  /* 鼠标移动唤出、静止后自动隐藏 */
+  mountEl.addEventListener("mousemove", wake);
+  mountEl.addEventListener("mouseleave", () => {
+    if(!video.paused && !panel.classList.contains("is-open")){
+      mountEl.classList.add("is-idle");
+    }
+  });
+
+  /* ---- 选源面板 ---- */
+  function renderSourcePanel(){
+    const list = sourcesOf(a);
+    const cur = list.find(s => {
+      const act = activeSourceOf(a);
+      return act && s.id === act.id;
+    }) || null;
+    /* 集数筛选以当前线路声明为准；没有声明就不筛 ——
+       整季通用的线路不该因为用户在看第 5 集而被判「集数不匹配」。 */
+    const wantEp = cur && cur.ep != null ? cur.ep : null;
+    const entries = filterSources(list, { showExcluded:true, wantEp:wantEp });
+    const body = panel.querySelector("#vp-src-body");
+    const hint = panel.querySelector("#vp-src-hint");
+    if(hint) hint.textContent = list.length ? ("共 " + entries.filter(x => x.state === "included").length + " / " + list.length + " 条可用") : "尚未添加线路";
+    if(!list.length){
+      body.innerHTML = '<p class="small muted" style="padding:var(--sp-3)">还没有播放源。在下方「播放地址」里粘一个网址即可添加。</p>';
+      return;
+    }
+    body.innerHTML = '<div class="vsrc-row">' + entries.map(x => {
+      if(x.state === "excluded"){
+        return '<span class="vsrc is-off" title="' + attr(x.reasonText || "不可用") + '">' +
+          '<span class="vsrc-dot"></span>' + esc(x.original.name || "未命名") +
+          '<span class="vsrc-reason">' + esc(x.reasonText || "不可用") + "</span></span>";
+      }
+      const s = x.src;
+      const on = cur && s.id === cur.id;
+      const meta = [s.resolution, s.ep != null ? ("第 " + s.ep + " 集") : null]
+        .filter(Boolean).join(" · ");
+      return '<button class="vsrc' + (on ? " is-on" : "") + '" type="button" data-src-id="' + attr(s.id) + '">' +
+        '<span class="vsrc-dot"></span>' + esc(s.name || "线路") +
+        (meta ? '<span class="vsrc-meta">' + esc(meta) + "</span>" : "") + "</button>";
+    }).join("") + "</div>";
+    body.querySelectorAll("[data-src-id]").forEach(b => b.addEventListener("click", () => {
+      const id = b.dataset.srcId;
+      const target = list.find(s => s.id === id);
+      if(!target || !a) return;
+      a.activeSourceId = id;
+      saveAnime(a);
+      panel.classList.remove("is-open");
+      bSrc.classList.remove("is-on");
+      if(onLineChange) onLineChange({ switchTo:target });
+      toast("已切到「" + (target.name || "线路") + "」", "ok");
+    }));
+  }
+  bSrc.addEventListener("click", () => {
+    const open = !panel.classList.contains("is-open");
+    panel.classList.toggle("is-open", open);
+    bSrc.classList.toggle("is-on", open);
+    if(open) renderSourcePanel();
+    wake();
+  });
+  panel.querySelector('[data-vp="panel-close"]').addEventListener("click", () => {
+    panel.classList.remove("is-open");
+    bSrc.classList.remove("is-on");
+    wake();
+  });
+
+  /* 初始呈现 */
+  btnMute.classList.toggle("is-on", video.muted || video.volume === 0);
+  setRate(1, false);
+  paint();
+  wake();
+  if(savedPosSec) showBadge("按播放继续");
+
+  return {
+    video:video,
+    /* 切线路：不停整个播放器，只换 src 并保留进度语义。 */
+    switchTo:function(next){
+      try{ video.pause(); }catch(e){}
+      video.src = next.url;
+      title.querySelector("b").textContent = next.name || "播放";
+      const metaEl = title.querySelector("span");
+      if(metaEl) metaEl.textContent = next.resolution || "";
+      interacted = false;
+      center.hidden = true;
+      video.load();
+      /* 换源后自动起播：用户点「切线路」就是想看它，站在这不动是错的。 */
+      const pr = video.play();
+      if(pr && typeof pr.catch === "function") pr.catch(() => {});
+    },
+    getPositionSec:() => video.currentTime,
+    destroy:function(){
+      if(idleTimer) clearTimeout(idleTimer);
+      if(badgeTimer) clearTimeout(badgeTimer);
+      endRamp();
+      try{ video.pause(); }catch(e){}
+      video.removeAttribute("src");
+      try{ video.load(); }catch(e){}
+      mountEl.innerHTML = "";
+    }
+  };
 }
 /* 把声明的集数写回地址。分 P 制（B 站）能对上就改 p=，
  * 其余平台原样返回 —— 改不了总比改错好。 */
@@ -4242,61 +5154,146 @@ function applyEpToURL(raw, ep){
   return u;
 }
 function renderStreamLauncher(a){
-  const u = streamURLOf(a);
-  const has = !!u;
-  const ep = a && a.streamEp != null ? a.streamEp : null;
+  const list = sourcesOf(a);
+  const act = activeSourceOf(a);
+  const has = !!act;
+  const ep = act && act.ep != null ? act.ep : null;
+  /* 线路一览：让「有几条、哪条在用」一眼可见。
+     只存不看等于把选择成本从「保存时一次」推到「每次播放时一次」——
+     用户根本记不清自己上次存的是哪条。 */
+  const lineList = list.length > 1
+    ? '<div class="note-box is-ok mt-3">' + ic("grid",16) +
+      "<span>已保存 " + list.length + " 条线路，当前使用「" +
+      esc(act ? (act.name || "线路") : "—") + "」。播放时点控制条上的「选源」可随时切换。</span></div>"
+    : "";
   return '<div class="panel stream-panel mt-4"><div class="panel-head">' + ic("film",16) +
-    "<h3>外部播放器</h3>" +
-    '<span class="hint">' + (a ? "片源按这部作品保存，换番不会互相覆盖" : "临时片源（未选作品）") + "</span></div>" +
+    "<h3>播放源</h3>" +
+    '<span class="hint">' + (a ? "按这部作品保存，换番不会互相覆盖" : "临时片源（未选作品）") + "</span></div>" +
     '<p class="small muted mb-3">粘一个播放网址（YouTube / 哔哩哔哩 / Vimeo，或任意允许嵌入的网站）。' +
+    "直链（mp4 / webm）会在站内原生播放，支持续播、倍速与键盘控制；其余站点走内嵌播放器。" +
     "B 站的番剧播放页（<code>bilibili.com/bangumi/play/...</code>）会自动换算成可播放地址。" +
-    "保存后下次打开这部作品直接续播；网址随时可以改。</p>" +
+    "同一部作品可以存多条线路，播放时一键切换。</p>" +
     '<div class="row gap-2" style="flex-wrap:wrap">' +
       '<div class="search-wrap" style="flex:1 1 320px;max-width:none">' + ic("link",16) +
         '<input class="input" id="st-url" type="url" inputmode="url" spellcheck="false" ' +
-        'placeholder="番剧页 / 视频页 / youtu.be 链接都可以" value="' + attr(u) + '">' +
+        'placeholder="番剧页 / 视频页 / youtu.be 链接都可以" value="">' +
       "</div>" +
       '<div class="field" style="flex:0 0 132px"><label for="st-ep">看到第几集</label>' +
         '<input class="input" id="st-ep" type="number" inputmode="numeric" min="1" step="1" ' +
         'placeholder="—" value="' + (ep == null ? "" : ep) + '"></div>' +
+      '<div class="field" style="flex:0 0 152px"><label for="st-name">线路名称</label>' +
+        '<input class="input" id="st-name" type="text" maxlength="24" placeholder="留空按网址命名"></div>' +
     "</div>" +
     '<div class="row gap-2 mt-3" style="flex-wrap:wrap">' +
-      '<button class="btn btn-primary" type="button" data-st="play">' + ic("play",14) + "播放</button>" +
-      '<button class="btn" type="button" data-st="save">' + ic("check",14) + "保存片源与进度</button>" +
-      '<button class="btn" type="button" data-st="open">' + ic("external",14) + "新标签打开</button>" +
-      '<button class="btn btn-sm" type="button" data-st="clear" title="清除已保存的片源"' + (has ? "" : " hidden") + ">" + ic("trash",14) + "</button>" +
-    "</div>" +
-    (has && ep != null
-      ? '<div class="note-box is-ok mt-3">' + ic("check",16) + "<span>已保存：第 " + esc(String(ep)) + " 集</span></div>"
+      '<button class="btn btn-primary" type="button" data-st="add">' + ic("plus",14) + "添加线路</button>" +
+      (has ? '<button class="btn" type="button" data-st="play">' + ic("play",14) + "播放</button>" : "") +
+      (has ? '<button class="btn" type="button" data-st="open">' + ic("external",14) + "新标签打开</button>" : "") +
+      (list.length > 1 ? '<button class="btn" type="button" data-st="clear-one">清除当前线路</button>' : "") +
+      (list.length > 1 ? '<button class="btn btn-sm" type="button" data-st="clear">清除全部</button>' : "") +
+    "</div>" + lineList +
+    /* 状态条在两种形态下都必须存在（带 id="st-status"）：
+       bindStreamLauncher 的 setStatus 只往这个 id 写。
+       缺了它，用户看到的就只有静态提示，出错了也不知道。 */
+    (has
+      ? '<div id="st-status" class="note-box is-ok mt-3">' + ic("check",16) + "<span>当前线路：" + esc(act.name || "线路") +
+        (ep != null ? " · 第 " + esc(String(ep)) + " 集" : "") + "</span></div>"
       : '<div id="st-status" class="note-box is-warn mt-3">' + ic("info",16) +
-        "<span>" + (has ? "已保存片源，直接点「播放」续上次的进度。" : "尚未保存。多数网站禁止被第三方网站嵌入，遇到白屏属正常现象，用「新标签打开」总能观看。") + "</span></div>") +
+        "<span>尚未保存。多数网站禁止被第三方网站嵌入，遇到白屏属正常现象，用「新标签打开」总能观看。</span></div>") +
     '<div id="st-mount" class="stream-mount mt-3" hidden></div>' +
   "</div>";
 }
 /* 清除按钮的显示不能只看渲染那一刻的持久化状态：
-   用户常常是「先粘网址 → 才想到保存」，此时页面并未重渲染，
+   用户常常是「先粘网址 → 才想到添加」，此时页面并未重渲染，
    按钮就永远不出现。改为依据输入框实时取值。 */
 function syncStreamLauncher(root){
   const input = root.querySelector("#st-url");
-  const open = root.querySelector('[data-st="open"]');
-  const clear = root.querySelector('[data-st="clear"]');
+  const addBtn = root.querySelector('[data-st="add"]');
   const has = !!(input && input.value.trim());
-  if(open) open.disabled = !has;
-  if(clear) clear.hidden = !has;
+  if(addBtn) addBtn.disabled = false;
+  /* 没有已保存线路时，「播放」不该可点：点了只能靠输入框里的临时值，
+     播完就没了，用户会以为保存失败。 */
+  ["play","open"].forEach(k => {
+    const b = root.querySelector('[data-st="' + k + '"]');
+    if(b) b.disabled = !has && k === "open";
+  });
+}
+/* 把输入框内容追加为一条新线路（不覆盖已有线路）。 */
+async function addSourceFromInput(root, a){
+  const input = root.querySelector("#st-url");
+  const epInput = root.querySelector("#st-ep");
+  const nameInput = root.querySelector("#st-name");
+  if(!input) return null;
+  const raw = input.value.trim();
+  if(!raw){ showLauncherError(root, "请先填一个播放网址"); return null; }
+  const epRaw = epInput ? epInput.value.trim() : "";
+  let ep = null;
+  if(epRaw !== ""){
+    ep = Number(epRaw);
+    if(!Number.isInteger(ep) || ep < 1){ showLauncherError(root, "集数必须是大于 0 的整数"); return null; }
+  }
+  const norm = normalizeStreamURL(raw);
+  /* 这里只校验「是不是安全的 http(s) 网址」，绝不能要求 resolveEmbed 成功 ——
+     存网址和能不能在页内播放是两件事。把前者绑死在后者上，
+     等于因为播放器不支持而剥夺用户保存自己资料的能力。
+     用户明确说过「连保存都不行」。 */
+  if(!norm){ showLauncherError(root, "网址无效：只接受 http / https 开头的地址"); return null; }
+  if(!a){ showLauncherError(root, "请先从片库打开一部作品，再添加播放源"); return null; }
+  migrateSources(a);
+  const now = new Date().toISOString();
+  /* 同址不重复添加：反复点「添加」会攒出一串一模一样的线路，
+     选源面板里全是重复项。提示已有而不是静默跳过。 */
+  const dup = (a.sources || []).find(s => s.url === norm && (s.ep == null || ep == null || s.ep === ep));
+  if(dup){
+    a.activeSourceId = dup.id;
+    await saveAnime(a);
+    input.value = "";
+    if(nameInput) nameInput.value = "";
+    if(epInput) epInput.value = "";
+    return { duplicate:true, source:dup };
+  }
+  const name = (nameInput && nameInput.value.trim()) || "";
+  const src = normalizeSource({ url:norm, ep:ep, name:name, savedAt:now }, (a.sources || []).length, now);
+  if(!src) { showLauncherError(root, "网址无效"); return null; }
+  a.sources.push(src);
+  a.activeSourceId = src.id;
+  /* 兼容旧字段：详情页与待机屏仍有读streamEp 的地方。
+     不写的话「看到第几集」会在换页后丢一次，用户会以为没保存。 */
+  a.streamUrl = src.url;
+  a.streamEp = src.ep;
+  a.streamUrlAt = now;
+  await saveAnime(a);
+  input.value = "";
+  if(nameInput) nameInput.value = "";
+  if(epInput) epInput.value = "";
+  return { source:src, duplicate:false };
+}
+function showLauncherError(root, msg){
+  const el = root.querySelector("#st-status");
+  if(!el) return;
+  el.className = "note-box mt-3 is-err";
+  el.innerHTML = ic("warning",16) + "<span>" + esc(msg) + "</span>";
 }
 function bindStreamLauncher(root, a){
   const input = root.querySelector("#st-url");
-  const epInput = root.querySelector("#st-ep");
   const mount = root.querySelector("#st-mount");
   if(!input || !mount) return;
+  /* vp = 原生播放器句柄；cleanup = iframe 降级路径的清理函数。
+     两者互斥：同一时刻只有一种播放形态挂在页面上。 */
+  let vp = null;
   let cleanup = null;
-
-  /* 提示条不能只在渲染时抓一次引用：面板有两种形态 ——
-     「未保存」态带 id="st-status"，「已保存」态只有 .note-box（无 id）。
-     若把 status 存成常量，保存过一次后所有后续提示都会写进 null，
-     用户点了没反应却什么也看不到。改为每次现查。 */
+  const dropPlayer = () => {
+    if(vp){ vp.destroy(); vp = null; }
+    if(cleanup){ cleanup(); cleanup = null; }
+  };
+  /* 状态条定位。
+     原先靠 `querySelector(".stream-panel .note-box")` 兜底 ——
+     多线路版里面板有多个 note-box（「已保存 N 条线路」「当前线路：…」），
+     取第一个会把状态文字写到「当前线路」那条静态提示上，
+     于是用户填错集数时看到的仍是「当前线路：线路 1 · 第 7 集」，
+     完全看不出哪里错了。兜底必须选对元素，不能选第一个。
+     现在状态条在两种形态下都带 id="st-status"，不再需要猜。 */
   function statusEl(){
-    return root.querySelector("#st-status") || root.querySelector(".stream-panel .note-box");
+    return root.querySelector("#st-status");
   }
   function setStatus(kind, text){
     const el = statusEl();
@@ -4305,38 +5302,61 @@ function bindStreamLauncher(root, a){
     el.innerHTML = (kind === "ok" ? ic("check",16) : kind === "warn" ? ic("warning",16) : ic("info",16)) +
       "<span>" + text + "</span>";
   }
-  function showError(msg){ if(cleanup){ cleanup(); cleanup = null; } mount.hidden = true; mount.innerHTML = ""; setStatus("err", msg); }
   function readEp(){
-    const v = epInput ? epInput.value.trim() : "";
+    const el = root.querySelector("#st-ep");
+    const v = el ? el.value.trim() : "";
     if(v === "") return null;
     const n = Number(v);
-    if(!Number.isInteger(n) || n < 1) return NaN;   // NaN = 用户填了非法值，需要提示
-    return n;
+    return (!Number.isInteger(n) || n < 1) ? NaN : n;
   }
   function effectiveURL(){
     const ep = readEp();
     return applyEpToURL(input.value, ep != null && !isNaN(ep) ? ep : null);
   }
-
   async function play(){
     const typed = input.value.trim();
     /* 先判「用户到底填了什么」，再判归一化后的地址。
        反过来写会有洞：applyEpToURL 对 javascript: 这类伪协议会归一化成空串，
-       于是 `!raw` 为真但 `!input.value.trim()` 为假 —— 条件放行了它，
+       于是 !raw 为真但 !typed 为假 —— 条件放行了它，
        提示语还会对着非空输入说「请先填一个播放网址」，用户完全看不懂哪里错了。 */
-    if(!typed){ showError("请先填一个播放网址"); return; }
-    const raw = effectiveURL();
-    if(!raw){ showError("网址无效：只接受 http / https 开头的地址"); return; }
+    const raw = typed ? effectiveURL() : normalizeStreamURL((activeSourceOf(a) || {}).url);
+    /* 播放必须能用已保存的线路，不能要求输入框里还有东西。
+       输入框的语义是「待添加的新线路」，添加成功后会被清空；
+       若播放只认输入框，用户就永远得再粘一次同一个网址才能看片 ——
+       那样「保存片源」这个需求等于没实现。 */
+    if(!raw){ setStatus("err", typed ? "网址无效：只接受 http / https 开头的地址" : "还没有可播放的线路。请先在上面填一个网址并点「添加线路」。"); return; }
     mount.hidden = false;
-    // 每次播放前先清掉上一个 iframe 的网络与计时器，否则快速连点会叠出多个播放器
-    if(cleanup) cleanup();
-    setStatus("warn", "正在解析播放地址…");
-    /* 番剧链接要现查接口换 bvid+cid，所以这里必须 await。
+    dropPlayer();
+    setStatus("warn", "正在准备播放…");
+    /* 直链走原生播放器：能读时间轴，所以续播、倍速、片尾自动下一集都能做。 */
+    if(isDirectPlayable(raw)){
+      const act = activeSourceOf(a) || normalizeSource({ url:raw }, 0, new Date().toISOString());
+      vp = mountVideoPlayer(mount, act, a, evt => {
+        if(evt.failed && evt.message) setStatus("err", evt.message);
+        if(evt.switchTo && vp){ vp.switchTo(evt.switchTo); }
+        if(evt.autonext != null){
+          /* 自动下一集：只改声明的集数并重挂，
+             换源是用户的选择，不该由系统替他决定。 */
+          const cur = activeSourceOf(a);
+          if(a && cur){
+            cur.ep = evt.autonext;
+            a.streamEp = evt.autonext;
+            a.watchedEpisodes = Math.max(a.watchedEpisodes || 0, evt.autonext);
+            saveAnime(a).then(() => {
+              toast("已切到第 " + evt.autonext + " 集的声明", "ok");
+              rerender();
+            });
+          }
+        }
+      });
+      setStatus("ok", "已就绪。空格播放/暂停，←→ 快退进 5 秒，F 全屏。");
+      return;
+    }
+    /* 非直链：番剧要现查接口换 bvid+cid，必须 await。
        不 await 会让 cleanup 在 iframe 建好之前就返回，播放器永远挂不上去。 */
-    const fn = await mountStreamPlayer(mount, raw, status);
+    const fn = await mountStreamPlayer(mount, raw, setStatus);
     /* 换不出来时（典型是 file:// 打开、origin=null 被接口拒绝），
-       与其留一个空面板，不如直接把用户送到官方页面 ——
-       这是用户明确要求过的兜底：「不能站内播就自动跳转官方」。 */
+       与其留一个空面板，不如直接把用户送到官方页面。 */
     if(fn && fn.needOfficial && fn.official){
       mount.hidden = true;
       try{ window.open(fn.official, "_blank", "noopener,noreferrer"); }catch(e){}
@@ -4345,55 +5365,47 @@ function bindStreamLauncher(root, a){
     }
     cleanup = fn;
   }
-  /* 保存：不整页重渲染。rerender() 会把 iframe 销毁掉，
-     正在播的视频会被打断 —— 保存只是存数据，没必要牺牲播放状态。 */
-  async function save(){
-    const raw = input.value.trim();
-    const ep = readEp();
-    if(isNaN(ep)){ showError("集数必须是大于 0 的整数"); return; }
-    /* 这里只校验「是不是一个安全的 http(s) 网址」，
-       绝不能要求 resolveEmbed 成功。
-       原先写的是 `if(raw && !resolveEmbed(raw).ok) 拒绝保存`，
-       后果是：任何一时无法内嵌的链接（包括番剧页、需要登录的站点、
-       对方临时改版的页面）都存不下来。用户明确说过「连保存都不行」——
-       存网址和能不能在页内播放是两件事，把前者绑死在后者上，
-       等于因为播放器不支持而剥夺了用户保存自己资料的能力。 */
-    if(raw && !normalizeStreamURL(raw)){ showError("网址无效：只接受 http / https 开头的地址"); return; }
-    if(!a){ showError("请先从片库打开一部作品，再保存片源"); return; }
-    a.streamUrl = raw;
-    a.streamEp = ep;
-    a.streamUrlAt = raw ? new Date().toISOString() : "";
-    await saveAnime(a);
-    setStatus("ok", raw
-      ? "已保存" + (ep != null ? "，下次从第 " + ep + " 集续播" : "")
-      : "已清除片源");
-    syncStreamLauncher(root);
-    toast(raw ? "片源已保存" : "已清除片源", "ok");
-  }
-
   root.querySelectorAll("[data-st]").forEach(b => b.addEventListener("click", async () => {
     const act = b.dataset.st;
+    if(act === "add"){
+      const r = await addSourceFromInput(root, a);
+      if(r){
+        setStatus("ok", r.duplicate
+          ? "这条线路已经存过了，已切到它。"
+          : "已添加线路「" + (r.source.name || "线路") + "」。");
+        if(!r.duplicate) rerender();
+      }
+      return;
+    }
     if(act === "play"){ await play(); return; }
-    if(act === "save"){ await save(); return; }
     if(act === "open"){
-      const u = normalizeStreamURL(effectiveURL());
+      const u = normalizeStreamURL(effectiveURL()) || (activeSourceOf(a) || {}).url;
       if(!u){ setStatus("err", "网址无效，无法打开"); return; }
       window.open(u, "_blank", "noopener,noreferrer");
       return;
     }
-    if(act === "clear"){
-      if(cleanup){ cleanup(); cleanup = null; }
+    if(act === "clear-one" || act === "clear"){
+      dropPlayer();
       mount.hidden = true; mount.innerHTML = "";
-      input.value = "";
-      if(epInput) epInput.value = "";
-      if(a){
-        a.streamUrl = ""; a.streamEp = null; a.streamUrlAt = "";
-        saveAnime(a);
+      if(!a){ settings.stream_url = ""; saveSettings(); syncStreamLauncher(root); setStatus("warn", "已清除临时片源。"); return; }
+      migrateSources(a);
+      const cur = activeSourceOf(a);
+      if(act === "clear-one" && cur){
+        a.sources = a.sources.filter(s => s.id !== cur.id);
+        setStatus("ok", "已清除「" + (cur.name || "线路") + "」。");
       }else{
-        settings.stream_url = ""; saveSettings();
+        a.sources = [];
+        a.activeSourceId = "";
+        a.streamUrl = ""; a.streamEp = null; a.streamUrlAt = "";
+        setStatus("warn", "已清除全部线路。");
       }
-      syncStreamLauncher(root);
-      setStatus("warn", "已清除保存的片源。");
+      const nx = activeSourceOf(a);
+      /* 旧字段跟着当前线路走，否则详情页会显示已删线路的集数。 */
+      a.streamUrl = nx ? nx.url : "";
+      a.streamEp = nx ? nx.ep : null;
+      await saveAnime(a);
+      rerender();
+      return;
     }
   }));
   input.addEventListener("keydown", e => {
@@ -4404,16 +5416,16 @@ function bindStreamLauncher(root, a){
     const v = input.value.trim();
     if(!v) return;
     /* 提示改用「能否归一化」而不是「能否内嵌」——
-       后者会让番剧页这类合法地址被误报成无法识别。
-       番剧需要换算，交给播放时提示。 */
+       后者会让番剧页这类合法地址被误报成无法识别。 */
     if(!normalizeStreamURL(v)){ setStatus("err", "这个地址无法识别，只接受 http / https 开头的网址。"); return; }
-    if(resolveEmbed(v).ok) setStatus("warn", "地址可识别，按「播放」开始。");
-    else if(bilibiliSeasonId(normalizeStreamURL(v))) setStatus("warn", "已识别为 B 站番剧，按「播放」自动换算播放地址。");
+    if(isDirectPlayable(normalizeStreamURL(v))) setStatus("ok", "识别为直链，可在站内原生播放（支持续播与倍速）。");
+    else if(resolveEmbed(v).ok) setStatus("warn", "地址可识别，按「添加线路」保存，点「播放」开始。");
+    else if(bilibiliSeasonId(normalizeStreamURL(v))) setStatus("warn", "已识别为 B 站番剧，播放时会自动换算地址。");
     else setStatus("warn", "网址已记录。该网站可能禁止被嵌入，播放无画面时请用「新标签打开」。");
   }, 350));
   syncStreamLauncher(root);
-  // 切走时务必断开 iframe，否则外部站点的音频/视频会继续在后台播放
-  window.addEventListener("pagehide", () => { if(cleanup) cleanup(); }, { once:true });
+  /* 切走时务必断开播放器，否则外部站点的音视频会继续在后台播放 */
+  window.addEventListener("pagehide", dropPlayer, { once:true });
 }
 
 /* 未选作品时的放映厅。
@@ -4432,11 +5444,20 @@ function renderStandby(root){
     (list.length
       ? '<div class="pick-grid">' + list.map(a => {
           const n = a.titleCn || a.titleOriginal || "未命名";
-          const ep = a.streamEp != null ? "看到第 " + a.streamEp + " 集" : (a.watchedEpisodes ? "已看 " + a.watchedEpisodes + " 集" : "未开始");
+          /* 集数与线路数都读当前线路：多线路并存后，
+             片库里一眼能看出「这部有 3 条线路」比只写「有片源」有用得多。 */
+          const lines = sourcesOf(a);
+          const act = activeSourceOf(a);
+          const ep = act && act.ep != null ? "看到第 " + act.ep + " 集"
+            : (a.streamEp != null ? "看到第 " + a.streamEp + " 集"
+            : (a.watchedEpisodes ? "已看 " + a.watchedEpisodes + " 集" : "未开始"));
+          const srcTag = lines.length
+            ? " · " + lines.length + " 条线路"
+            : "";
           return '<button class="pick-card" type="button" data-open="' + attr(a.id) + '">' +
             '<span class="pick-cover">' + coverThumb(a) + "</span>" +
             '<span class="pick-body"><b>' + esc(n) + "</b>" +
-            '<span class="small muted">' + esc(ep) + (a.streamUrl ? " · 有片源" : "") + "</span></span></button>";
+            '<span class="small muted">' + esc(ep) + srcTag + "</span></span></button>";
         }).join("") + "</div>"
       : '<div class="state-box">' + ic("library",40) + "<h2>还没有可放映的作品</h2>" +
         '<p>先到片库添加一部动画、片源与观看进度就会留在这里。</p>' +
@@ -4517,12 +5538,20 @@ function renderDetail(root, id){
           '<div class="small muted mt-3">已看 ' + (a.watchedEpisodes||0) + " / " + a.totalEpisodes + " 集 · 重看 " + (a.rewatchCount||0) + " 次</div>") +
 
       /* 播放记录紧跟进度条：用户到放映厅就是为了「接着看」，
-   让它出现在进度条旁边比藏在下面更符合意图。 */
-      (a.streamEp != null
-        ? '<div class="stream-note mt-3">' + ic("play",14) +
-          "<span>片源进度：看到第 <b>" + esc(String(a.streamEp)) + "</b> 集" +
-          (a.streamUrlAt ? "（记录于 " + esc(String(a.streamUrlAt).slice(0,10)) + "）" : "") + "</span></div>"
-        : "") +
+         让它出现在进度条旁边比藏在下面更符合意图。
+         读当前线路而不是 a.streamEp：多线路并存后，
+         不同线路声明的集数可能不同，只有当前线路才是正在看的。 */
+      (function(){
+        const line = activeSourceOf(a);
+        const ep = line && line.ep != null ? line.ep : a.streamEp;
+        if(ep == null) return "";
+        const when = line && line.savedAt ? line.savedAt : a.streamUrlAt;
+        const n = (a.sources || []).length;
+        return '<div class="stream-note mt-3">' + ic("play",14) +
+          "<span>片源进度：看到第 <b>" + esc(String(ep)) + "</b> 集" +
+          (n > 1 ? "（共 " + n + " 条线路，当前「" + esc(line.name || "线路") + "」）" : "") +
+          (when ? "（记录于 " + esc(String(when).slice(0,10)) + "）" : "") + "</span></div>";
+      })() +
 
       (a.summary ? '<details class="mt-4"><summary class="sec-title">' + ic("film",16) + "<span>简介</span></summary>" +
         '<div class="summary-box scroll mt-2">' + esc(a.summary) + "</div></details>" : "") +
@@ -7270,6 +8299,18 @@ async function boot(){
       orphan.forEach(a => { a.seriesId = DEFAULT_SERIES_ID; });
       await Promise.all(orphan.map(a => Repo.put("anime", a).catch(() => {})));
       console.warn("已把 " + orphan.length + " 部作品的系列归回默认系列（原系列已不存在）");
+    }
+    /* 播放源迁移的落盘。
+       走 Repo.put 而非 saveAnime：saveAnime 会 touch() 改 updatedAt，
+       迁移是数据形态升级不是用户编辑，改了时间戳会让
+       「最近添加」排序把所有老作品顶到最前面。
+       判据用「有旧字段却没有 sources」——只有真正需要迁移的才写，
+       免得每次启动都把全库重写一遍。 */
+    const needSourceMigrate = state.anime.filter(a =>
+      (a.streamUrl || !Array.isArray(a.sources) || !a.sources.length));
+    if(needSourceMigrate.length){
+      await Promise.all(needSourceMigrate.map(a => Repo.put("anime", a).catch(() => {})));
+      console.info("已把 " + needSourceMigrate.length + " 部作品的播放源迁移为多线路");
     }
   }catch(e){
     console.warn("数据读取失败", e);

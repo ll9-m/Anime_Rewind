@@ -96,35 +96,79 @@ function check(name, cond, detail){
   await ev('settings.module_theater = true; go("theater");');
   await new Promise(r => setTimeout(r, 300));
   check("放映厅有片源输入框", !!doc.querySelector("#st-url"));
-  check("放映厅有播放按钮", !!doc.querySelector('[data-st="play"]'));
-  check("放映厅有新标签打开按钮", !!doc.querySelector('[data-st="open"]'));
+  /* 无片源时「播放」「新标签打开」整个按钮不渲染，而不是渲染出来禁用。
+     禁用按钮仍可聚焦、仍占位，读起来像「有但不能按」；
+     不渲染则明确表达「先存一条线路」。这轮改多线路时一并改了这里的形态。 */
+  check("无片源时不渲染播放按钮", !doc.querySelector('[data-st="play"]'));
+  check("无片源时不渲染「新标签打开」按钮", !doc.querySelector('[data-st="open"]'));
+  check("无片源时仍有「添加线路」按钮", !!doc.querySelector('[data-st="add"]'));
   check("放映厅有状态诊断条", !!doc.querySelector("#st-status"));
   check("播放器容器默认隐藏", doc.querySelector("#st-mount").hidden === true);
-  check("无片源时「新标签打开」禁用", doc.querySelector('[data-st="open"]').disabled === true);
   check("状态条说明了嵌入限制（不是空白）",
     /禁止被第三方网站嵌入/.test(doc.querySelector("#st-status").textContent),
     doc.querySelector("#st-status").textContent.slice(0, 60));
 
   // ---------- 9. 真实点击：输入非法网址 → 报错，不崩 ----------
   const input = doc.querySelector("#st-url");
+  const addBtn = () => doc.querySelector('[data-st="add"]');
   input.value = "javascript:alert(1)";
-  doc.querySelector('[data-st="play"]').click();
+  addBtn().click();
   await new Promise(r => setTimeout(r, 200));
-  check("输入 javascript: 后点播放 → 报错且不创建 iframe",
+  check("输入 javascript: 后点添加 → 报错且不创建 iframe",
     /无效|无法识别/.test(doc.querySelector("#st-status").textContent) && !doc.querySelector(".stream-frame"),
     doc.querySelector("#st-status").textContent.slice(0, 60));
 
-  // ---------- 10. 真实点击：输入合法 B 站网址 → 生成 iframe ----------
-  /* 不再自动持久化。片源改为按作品保存，且必须显式点「保存」——
-     自动存意味着「点错了播放」也会把错地址写进库。 */
+  // ---------- 10. 真实点击：添加合法 B 站网址 → 成为一条线路 ----------
+  /* 流程在本轮改成「填 → 添加线路 → 播放」：播放按钮只在有线路时渲染。
+     播放本身不再隐式落盘 —— 点错了也写进库不是用户想要的。 */
   input.value = "https://www.bilibili.com/video/BV1GJ411x7h7";
-  doc.querySelector('[data-st="play"]').click();
+  /* 未选作品时添加线路必须被拒绝：播放源是「按作品保存」的，
+     没有归属的线路存到哪里都是错的。所以先建一部作品再测。 */
+  addBtn().click();
+  await new Promise(r => setTimeout(r, 150));
+  check("未选作品时添加线路被拒绝",
+    /请先从片库打开一部作品/.test(doc.querySelector("#st-status").textContent),
+    doc.querySelector("#st-status").textContent.slice(0, 60));
+
+  await ev('state.anime.push(draftFromCandidate({ id:"an_src1", titleCn:"线路测试用", totalEpisodes:12 })); saveAnime(state.anime[state.anime.length-1]); go("theater", "an_src1");');
   await new Promise(r => setTimeout(r, 300));
+  const input2 = doc.querySelector("#st-url");
+  check("进入作品详情后有播放源面板", !!input2);
+  input2.value = "https://www.bilibili.com/video/BV1GJ411x7h7";
+  doc.querySelector('[data-st="add"]').click();
+  await new Promise(r => setTimeout(r, 300));
+  const lineCount = await ev('return String(state.anime.filter(function(x){return x.id==="an_src1";})[0].sources.length)');
+  check("点击添加后线路数变为 1", lineCount === "1", lineCount);
+  const legacyUrl = await ev('return String(state.anime.filter(function(x){return x.id==="an_src1";})[0].streamUrl)');
+  check("添加线路同时兼容写回旧字段 streamUrl",
+    legacyUrl === "https://www.bilibili.com/video/BV1GJ411x7h7", legacyUrl);
+
+  /* 再加一条同名地址：必须去重而不是攒出两条一模一样的线路。 */
+  doc.querySelector("#st-url").value = "https://www.bilibili.com/video/BV1GJ411x7h7";
+  doc.querySelector('[data-st="add"]').click();
+  await new Promise(r => setTimeout(r, 250));
+  const lineCount2 = await ev('return String(state.anime.filter(function(x){return x.id==="an_src1";})[0].sources.length)');
+  check("重复添加同址不会攒出重复线路", lineCount2 === "1", lineCount2);
+
+  /* iframe 属性断言改用 Vimeo 直链：B 站番剧页要联网换算 bvid+cid，
+     测试环境无外网必然换不出来，于是 iframe 根本建不出来，
+     后面每一条iframe 断言都会连带变成「实际 0」——
+     那是环境限制被误读成回归。Vimeo 的规则是纯本地 URL 改写，
+     换不成与成不成只取决于 resolveEmbed 本身，适合做断言靶子。 */
+  doc.querySelector("#st-url").value = "https://vimeo.com/123456789";
+  doc.querySelector('[data-st="add"]').click();
+  await new Promise(r => setTimeout(r, 250));
+  check("可加入第二条线路（Vimeo）",
+    evSync('state.anime.filter(function(x){return x.id==="an_src1";})[0].sources.length') === 2,
+    String(evSync('state.anime.filter(function(x){return x.id==="an_src1";})[0].sources.length')));
+
+  doc.querySelector('[data-st="play"]').click();
+  await new Promise(r => setTimeout(r, 400));
   const frame = doc.querySelector(".stream-frame");
   check("点击播放后创建了 iframe", !!frame);
-  check("iframe 指向 B 站播放器", frame && frame.src.includes("player.bilibili.com"), frame ? frame.src : "无");
+  check("iframe 指向 Vimeo 播放器", frame && frame.src.includes("player.vimeo.com"), frame ? frame.src : "无");
   check("播放器容器已显示", doc.querySelector("#st-mount").hidden === false);
-  check("播放本身不写库（须显式保存）", evSync("settings.stream_url") === "",
+  check("播放本身不额外写全局库（线路已在添加时落盘）", evSync("settings.stream_url") === "",
     String(evSync("settings.stream_url")));
   check("iframe 带 allowfullscreen", frame && frame.hasAttribute("allowfullscreen"));
   check("iframe 带 sandbox（隔离第三方脚本）", frame && frame.hasAttribute("sandbox"), frame ? frame.getAttribute("sandbox") : "");
@@ -138,18 +182,18 @@ function check(name, cond, detail){
   check("连点播放后页面中只有 1 个 iframe", doc.querySelectorAll(".stream-frame").length === 1,
     "实际 " + doc.querySelectorAll(".stream-frame").length);
 
-  // ---------- 12. 清除按钮（此时未保存过片源，应隐藏） ----------
-  const clearBtn = doc.querySelector('[data-st="clear"]');
-  check("清除按钮始终存在于 DOM（靠 hidden 切换）", !!clearBtn);
-  check("未保存片源时清除按钮隐藏", clearBtn && clearBtn.hidden === true,
-    "存在=" + !!clearBtn + " hidden=" + (clearBtn && clearBtn.hidden));
+  // ---------- 12. 多线路时的清除入口 ----------
+  /* 只有一条线路时不给「清除当前线路」：清完就没了，
+     与其给一个清完就空的按钮，不如不给。 */
+  const clearOne = doc.querySelector('[data-st="clear-one"]');
+  const clearAll = doc.querySelector('[data-st="clear"]');
+  check("两条线路时提供「清除当前线路」", !!clearOne);
+  check("两条线路时提供「清除全部」", !!clearAll);
 
-  // ---------- 13. 未选作品时不能保存（否则写去哪？） ----------
-  doc.querySelector('[data-st="save"]').click();
-  await new Promise(r => setTimeout(r, 250));
-  check("未选作品点保存 → 明确拒绝而不是静默失败",
-    /先从片库打开一部作品/.test(doc.querySelector("#st-status").textContent),
-    doc.querySelector("#st-status").textContent.slice(0, 50));
+  // ---------- 13. 未选作品时不能添加（否则写去哪？） ----------
+  /* 上面已验证过一次未选作品被拒绝；这里补一条「线路不会凭空出现」。 */
+  const beforeCount = evSync('state.anime.filter(function(x){return x.id==="an_src1";})[0].sources.length');
+  check("未选作品的添加没有污染任何作品", beforeCount === 2, "线路数=" + beforeCount);
 
   // ================= 以下为「按作品保存片源与进度」 =================
   // 这部分是本轮的核心需求：片源不能再是全局一份。
@@ -174,18 +218,26 @@ function check(name, cond, detail){
   check("详情页不再有语录待机屏保", !doc.querySelector(".crt-quote") && !doc.querySelector(".modern-quote"));
   check("详情页不再有 CRT 外框", !doc.querySelector(".crt-frame") && !doc.querySelector(".modern-frame"));
 
-  // 填 URL + 集数 → 点保存
+  /* 填 URL + 集数 → 点「添加线路」。
+     新流程不再把已保存的地址回填进输入框：输入框是「待添加」的位置，
+     回填会让用户以为可以改它然后点保存—— 实际会新增一条重复线路。
+     已保存的线路改为在面板与播放器选源面板里呈现。 */
   const in2 = doc.querySelector("#st-url"), ep2 = doc.querySelector("#st-ep");
   in2.value = "https://www.bilibili.com/video/BV1kx411k7VB";
   ep2.value = "7";
-  doc.querySelector('[data-st="save"]').click();
+  doc.querySelector('[data-st="add"]').click();
   await new Promise(r => setTimeout(r, 400));
   const a1 = evSync('animeById("an_test1")');
-  check("保存后 URL 落到该作品上", a1 && a1.streamUrl === "https://www.bilibili.com/video/BV1kx411k7VB",
+  check("添加后 URL 落到该作品上", a1 && a1.streamUrl === "https://www.bilibili.com/video/BV1kx411k7VB",
     String(a1 && a1.streamUrl));
-  check("保存后集数落到该作品上", a1 && a1.streamEp === 7, String(a1 && a1.streamEp));
-  check("保存不影响全局 settings.stream_url", evSync("settings.stream_url") === "", String(evSync("settings.stream_url")));
-  check("保存后 iframe 未被销毁（不整页重渲染）", !!doc.querySelector(".stream-mount"));
+  check("添加后集数落到该作品上", a1 && a1.streamEp === 7, String(a1 && a1.streamEp));
+  check("线路进了 sources 数组且带集数",
+    a1 && Array.isArray(a1.sources) && a1.sources.length === 1 && a1.sources[0].ep === 7,
+    JSON.stringify(a1 && a1.sources));
+  check("添加后输入框已清空（避免误以为可改后保存）",
+    doc.querySelector("#st-url").value === "", doc.querySelector("#st-url").value);
+  check("添加不影响全局 settings.stream_url", evSync("settings.stream_url") === "", String(evSync("settings.stream_url")));
+  check("添加后播放器容器仍在（不整页重渲染）", !!doc.querySelector(".stream-mount"));
 
   // 关键隔离性测试：另一部作品不应看到这份片源
   await ev('state.anime.push(draftFromCandidate({ id:"an_test2", titleCn:"另一部番" })); go("theater", "an_test2");');
@@ -194,15 +246,17 @@ function check(name, cond, detail){
     doc.querySelector("#st-url").value);
   check("换一部作品 → 集数为空", doc.querySelector("#st-ep").value === "",
     doc.querySelector("#st-ep").value);
+  check("换一部作品 → 不渲染播放按钮（它没有线路）", !doc.querySelector('[data-st="play"]'));
 
-  // 回到第一部：应回填
+  // 回到第一部：线路应仍在，且详情页显示声明的集数
   await ev('go("theater", "an_test1");');
   await new Promise(r => setTimeout(r, 400));
-  check("回到第一部 → 片源已回填",
-    doc.querySelector("#st-url").value === "https://www.bilibili.com/video/BV1kx411k7VB",
-    doc.querySelector("#st-url").value);
-  check("回到第一部 → 集数已回填", doc.querySelector("#st-ep").value === "7",
-    doc.querySelector("#st-ep").value);
+  check("回到第一部 → 线路仍在",
+    evSync('animeById("an_test1").sources.length') === 1,
+    String(evSync('animeById("an_test1").sources.length')));
+  check("回到第一部 → 集数回填到输入框（便于加下一条线路时沿用）",
+    doc.querySelector("#st-ep").value === "7", doc.querySelector("#st-ep").value);
+  check("回到第一部 → 有播放按钮", !!doc.querySelector('[data-st="play"]'));
   check("详情页显示「看到第 7 集」", /第\s*7\s*集/.test(doc.querySelector(".stream-note").textContent),
     doc.querySelector(".stream-note") ? doc.querySelector(".stream-note").textContent.slice(0, 40) : "无 .stream-note");
 
@@ -213,27 +267,58 @@ function check(name, cond, detail){
   check("YouTube 不乱改地址（无法换算就原样返回）", appliedY === "https://youtu.be/dQw4w9WgXcQ", String(appliedY));
 
   // 非法集数必须被拦
-  const ep3 = doc.querySelector("#st-ep");
-  ep3.value = "0";
-  doc.querySelector('[data-st="save"]').click();
+  /* 校验顺序：先看网址再看集数，是用户实际会遇到的情形 ——
+     用户改了集数但没重新填网址就点添加，此时该报的是「网址为空」，
+     因为那才是他下一步要解决的。两项都非法时报哪一条都可以，
+     但不能什么都不报。 */
+  doc.querySelector("#st-url").value = "";
+  doc.querySelector("#st-ep").value = "0";
+  doc.querySelector('[data-st="add"]').click();
   await new Promise(r => setTimeout(r, 300));
-  check("集数填 0 → 拒绝保存并给出可执行提示",
-    /大于 0 的整数/.test(doc.querySelector(".stream-panel .note-box").textContent),
-    doc.querySelector(".stream-panel .note-box").textContent.slice(0, 50));
+  check("网址与集数同时非法时给出可执行提示",
+    /请先填一个播放网址|大于 0 的整数/.test(doc.querySelector("#st-status").textContent),
+    doc.querySelector("#st-status").textContent.slice(0, 50));
+
+  /* 网址合法、集数非法：必须拦下，且不能把线路加进去。 */
+  doc.querySelector("#st-url").value = "https://www.bilibili.com/video/BV1zz4y1j7bY";
+  doc.querySelector("#st-ep").value = "0";
+  doc.querySelector('[data-st="add"]').click();
+  await new Promise(r => setTimeout(r, 300));
+  check("集数填 0 → 拒绝添加并给出可执行提示",
+    /大于 0 的整数/.test(doc.querySelector("#st-status").textContent),
+    doc.querySelector("#st-status").textContent.slice(0, 50));
+  check("集数非法时没有新增线路",
+    evSync('animeById("an_test1").sources.length') === 1,
+    String(evSync('animeById("an_test1").sources.length')));
   check("集数非法时不污染已存值", evSync('animeById("an_test1").streamEp') === 7,
     String(evSync('animeById("an_test1").streamEp')));
 
-  // 清除
+  // 清除：多线路版里「清除全部」只在 >1 条时渲染，
+  // 所以先补到两条再测「清除当前线路」与「清除全部」两个层级。
+  doc.querySelector("#st-url").value = "https://vimeo.com/987654321";
+  doc.querySelector("#st-ep").value = "";
+  doc.querySelector('[data-st="add"]').click();
+  await new Promise(r => setTimeout(r, 350));
+  check("补第二条线路成功",
+    evSync('animeById("an_test1").sources.length') === 2,
+    String(evSync('animeById("an_test1").sources.length')));
+
+  // 先测「清除当前线路」：只掉一条，另一条还在
+  const clrOne = doc.querySelector('[data-st="clear-one"]');
+  check("两条线路时提供「清除当前线路」", !!clrOne);
+  clrOne.click();
+  await new Promise(r => setTimeout(r, 400));
+  check("清除当前线路后只剩一条",
+    evSync('animeById("an_test1").sources.length') === 1,
+    String(evSync('animeById("an_test1").sources.length')));
+  check("清除一条后仍有线路 → 播放按钮还在",
+    !!doc.querySelector('[data-st="play"]'));
+
+  // 再测「清除全部」
   const clr2 = doc.querySelector('[data-st="clear"]');
-  check("已保存片源时清除按钮可见", clr2 && clr2.hidden === false,
-    "hidden=" + (clr2 && clr2.hidden));
-  clr2.click();
-  await new Promise(r => setTimeout(r, 300));
+  check("只剩一条时不再提供「清除全部」（清完就没了）", !clr2);
   const a2 = evSync('animeById("an_test1")');
-  check("清除后该作品片源被置空", a2 && a2.streamUrl === "" && a2.streamEp === null,
-    JSON.stringify({ u: a2 && a2.streamUrl, e: a2 && a2.streamEp }));
-  check("清除后播放器容器隐藏", doc.querySelector("#st-mount").hidden === true);
-  check("清除后「新标签打开」重新禁用", doc.querySelector('[data-st="open"]').disabled === true);
+  check("清除当前线路后该作品仍有可用片源", a2 && !!a2.streamUrl, String(a2 && a2.streamUrl));
 
   // 未选作品时 = 选片页
   await ev('go("theater");');
@@ -300,7 +385,7 @@ function check(name, cond, detail){
     input.value = "https://www.bilibili.com/bangumi/play/ep102167?spm_id_from=333.337.0.0";
     const ep = document.querySelector("#st-ep");
     ep.value = "2";
-    document.querySelector('[data-st="save"]').click();
+    document.querySelector('[data-st="add"]').click();
     await new Promise(r => setTimeout(r, 400));
     const a = animeById("an_test1");
     return JSON.stringify({ u: a.streamUrl, e: a.streamEp });

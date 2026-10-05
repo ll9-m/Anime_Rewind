@@ -122,14 +122,47 @@ workflow 的 `path:` 是显式清单，不是整个仓库：
 `@media (hover:hover)` 里 —— 移动端浏览器点完会留下「粘住」的 `:hover`，
 不隔离的话静止态卡片会因为残留 hover 把 `pointer-events` 交给背面，手指再点正面就点不动。
 
-### 双 UI 套系
-三套皮肤共用同一份布局与配色令牌，靠 `[data-skin]` 覆盖「形状」：
+### 四 UI 套系
+四套皮肤共用同一份布局与配色令牌，靠 `[data-skin]` 覆盖「形状」：
 
 - `archive` 档案馆 —— 圆角、发丝线、柔和阴影（默认）
 - `pixel` 像素 8-bit —— 0 圆角、3px 硬边框、像素字体、抖动渐变
 - `holo` 科技全息 —— 全息描边、发光、故障按钮、扫描线
+- `tv` TV 影院 —— 电视端形态，几何取自 [Izuko_TV](https://github.com/ll9-m/izuko-tv)
 
-新增皮肤零布局改动，三套样式也不会互相污染。
+新增皮肤零布局改动，四套样式也不会互相污染（`tools/test-tv-skin.js` 有 CSS 泄漏扫描，
+覆盖既有类名的规则必须挂 `[data-skin="tv"]` 前缀）。
+
+#### TV 影院模式
+
+参考 Izuko_TV 的电视端改版。**只在 `tv` 套系下生效**，其余三套维持原样 ——
+桌面浏览器里纵向网格才是对的，横滑卡行在没有「左右走」肌肉记忆的鼠标下是反模式。
+
+几何全部取自 Izuko_TV 的实际值，不是自拟的：
+
+| 项目 | 值 | 出处 |
+|---|---|---|
+| 侧栏收起态宽 | 48px | `TvNavigationSideRail` |
+| 展开遮罩 | 180px 右缘羽化 | 同上 |
+| 海报卡最小宽 | 118px | `TvPosterWall` |
+| 列数 | `floor((可用宽 + 间距) / (最小卡宽 + 间距))` | 同上（1080p 848px 内容区 → 6 列） |
+| 番名区 | `min-height: calc(2 * 1.5em)`（一行番名也占两行高，换焦点不跳） | 同上 |
+| 深灰底 / 浅灰底 | `#2C2C2E` / `#BFC4C7`（不用纯黑纯白，电视上刺眼且分不出层次） | 同上 |
+| 剧集卡 | 256×144（16:9）、圆角 6、进度条 3px、已看压暗 .45 | `FocusEpisodesSection` |
+| 剧照压暗 | 卡底 `.85` → 半高处全透明 | `EPISODE_STILL_SCRIM_*` |
+
+**片库多了「卡行」视图**（该套系下才出现）：`继续观看` 置顶行 + 各系列行 + 兜底行。
+行内横滑，行尾挂「更多」玻璃卡，点开把那一组摊成网格。
+
+- 继续观看的口径：`在看`状态 或 有进度未看完，按最近更新倒序
+- 置顶行里出现过的作品不再在系列行里重复占位（一屏两张一样的卡会被当成 bug）
+
+**详情页多了剧集卡行**：16:9 卡 + 集号 + 3px 进度条，四态区分「已看 / 在播 / 下一集 / 未看」。
+点一张即把该集设为当前集，与播放器面板的「看到第几集」写同一个字段。
+
+> ⚠️ **已知降级**：本项目没有逐集剧照与集名数据（抓取侧只存作品级封面与总集数），
+> 所以剧集卡的剧照位用的是**作品封面**，不是真剧照。渲染成好像有剧照的样子只会误导用户。
+> 要补真数据得动抓取侧（`EpisodeInfo.still` / `name`），那是另一次改动。
 
 ### 其他
 - **三主题**：深色 / 浅色 / 液态玻璃；**六强调色**；**两档密度**
@@ -138,6 +171,29 @@ workflow 的 `path:` 是显式清单，不是整个仓库：
 - **重看轮次**：首次 = 1，重看一次后新增 = 2，取现有最大值 +1，弹窗里可手动修正
 - **CSV 批量导入语录**：表头智能映射，重复自动跳过
 - **放映厅外部播放器**：支持 B 站（自动解析 season）与通用 URL，不会播放时提供跳转官方
+
+### 播放源：多线路 + 选源
+
+一部作品可以存**多条线路**（`sources` 数组 + `activeSourceId`），播放时一键切换。
+选源算法直译 [Animeko](https://github.com/animeko/Animeko)：
+
+- **三态筛选**：被排除的资源不丢弃，携带原因（集数不匹配 / 无字幕 / 字幕形态不支持 / 网址无效）排到末尾
+- **四层 DFS 偏好**：分辨率 → 字幕语言 → 字幕组 → 线路，四层字典序，不是加权求和
+- **分阶段自动选源**：记忆线路 → tier≤0 → 精确匹配 → 全部候选
+
+> 关键坑：字幕组匹配不到时**不下降到更差的字幕语言**；
+> 质量优先而非大小优先（4K 体积是 1080P 十倍，掺进评分成噪音）。
+
+**播放器双轨**：直链（mp4/webm/m4v/ogg）走原生 `<video>`，其余站点沿用 iframe。
+理由是 iframe 里读不到 `currentTime` —— 续播、倍速、片尾自动下一集都要时间轴。
+
+键盘语义照 `TvEpisodeScreen`：←→ 5 秒 / ↑↓ 唤控制层 / F 全屏 /
+空格两段（轻点启停、按住临时加速，250ms 阈值）。长按加速用固定 90ms 定时器推进
+（不用 keydown 的 repeat 事件，系统重复间隔在不同机器上 30–200ms 不等）。
+
+> **硬约束**：Izuko_TV 的自动选源靠原生 HTTP 客户端绕过跨域，浏览器做不到 ——
+> 第三方站点的 m3u8 与搜索页都会被 CORS 拦掉。网页端的「自动搜源」只能是
+> 用户自带源表 + 手动直链。BT / 夸克网盘在网页端完全做不到（P2P），必须放弃。
 
 ---
 
@@ -175,18 +231,21 @@ export NODE_PATH=C:/Users/lxc/.workbuddy/binaries/node/workspace/node_modules
 ```
 
 ```bash
-# 功能测试（共 404 项）
+# 功能测试（共 625 项）
 node tools/smoke.js                  # 125 项 · 启动/入库/七页面/主题/导入导出/3D 卡/触摸端/版权
 node tools/test-csv.js               #  30 项 · CSV 解析与表头映射
 node tools/test-sound.js             #  25 项 · WebAudio 音效
-node tools/test-theater.js           #  94 项 · 放映厅、播放记录、死设置清理
+node tools/test-theater.js           # 108 项 · 放映厅、播放记录、多线路、死设置清理
 node tools/test-honor.js             #  60 项 · 称号计算
 node tools/test-library-actions.js   #  22 项 · 片库卡片动作
 node tools/test-series.js            #  48 项 · 系列归类全链路
+node tools/test-skins.js             #  48 项 · 四套 UI 套系交叉
+node tools/test-source.js            #  37 项 · 迁移幂等、三态筛选、DFS 偏好、分阶段选源
+node tools/test-tv-skin.js           # 111 项 · TV 影院几何、列数公式、CSS 泄漏、卡行分组、剧集卡
 
 # 对比度实测（WCAG AA，退出码非 0 即失败）
 node tools/contrast.js               # 三主题 text/text-2/muted/accent
-node tools/contrast-skins.js         # 两套新皮肤
+node tools/contrast-skins.js         # 像素 / 全息两套新皮肤
 node tools/bg-contrast.js            # 背景图开底后的文字对比度
 node tools/caption-contrast.js       # 封面墙字幕
 node tools/contrast-stream-note.js   # 播放记录提示条
@@ -217,7 +276,7 @@ node tools/e2e-theater-stream.js
 ```
 设计令牌层（主题 / 皮肤 / 强调色 / 密度）
   → 基础组件与布局
-    → UI 套系层（archive / pixel / holo）
+    → UI 套系层（archive / pixel / holo / tv）
       → 存储层 Repo（IndexedDB + localStorage 降级）
         → 状态与工具函数
           → 页面渲染（registerPage 逐个注册）

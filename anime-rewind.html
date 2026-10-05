@@ -1847,13 +1847,15 @@ details > summary:hover{ color:var(--accent); }
 }
 .tv-more span{ font-size:var(--fs-sm); }
 
-/* 剧集卡行（详情页）：16:9 剧照 + 集号集名 + 3px 进度条 */
+/* 剧集卡行（详情页）：16:9 剧照 + 集号集名 + 3px 进度条。
+   尺寸与配比全部取自 FocusEpisodesSection：cellWidth/cellHeight = 256/144
+   （刚好 16:9）、圆角 6、进度条 3px、已看卡压暗到 .45。 */
 .tv-ep-row{
   display:flex; gap:var(--sp-3); overflow-x:auto; padding:0 var(--sp-4) var(--sp-3);
   scrollbar-width:thin;
 }
 .tv-ep{
-  flex:0 0 auto; width:200px;
+  flex:0 0 auto; width:256px;
   border-radius:6px; overflow:hidden; cursor:pointer; text-align:left;
   border:1px solid rgba(255,255,255,.1);
   background:var(--panel-2); color:var(--text); padding:0;
@@ -1868,10 +1870,13 @@ details > summary:hover{ color:var(--accent); }
   position:relative;
   display:flex; align-items:flex-end; padding:var(--sp-2);
 }
-/* 剧照底部压暗起0.5 → alpha .85，取自 EPISODE_STILL_SCRIM_* */
+/* 剧照底部压暗：卡底 .85 的黑渐变到半高处全透明，
+   取自 FocusEpisodesSection 的 EPISODE_STILL_SCRIM_ALPHA(.85) /
+   _START(.5)。这里用渐变 stop 写 50% 而不是用元素 height 凑 ——
+   height 只能控制压暗区的总高，写70% 的话卡底亮一截、集号读不清。 */
 .tv-ep-still::after{
-  content:""; position:absolute; left:0; right:0; bottom:0; height:70%;
-  background:linear-gradient(to top, rgba(0,0,0,.85) 0%, transparent 100%);
+  content:""; position:absolute; inset:0;
+  background:linear-gradient(to top, rgba(0,0,0,.85) 0%, rgba(0,0,0,0) 50%);
   pointer-events:none;
 }
 .tv-ep-no{
@@ -1886,10 +1891,15 @@ details > summary:hover{ color:var(--accent); }
 }
 .tv-ep-prog{ height:3px; border-radius:2px; background:rgba(255,255,255,.3); margin-top:var(--sp-2); }
 .tv-ep-prog i{ display:block; height:100%; border-radius:2px; background:var(--accent); }
-/* 四态：看过的一律压暗，在播的保留高亮 */
-.tv-ep.is-watched .tv-ep-still::after{ background:linear-gradient(to top, rgba(0,0,0,.45) 0%, transparent 100%); }
-.tv-ep.is-watched{ opacity:.45; }
+/* 四态：看过的一律压暗，在播的保留高亮 —— 与上游 isWatched / isPlaying 一致。
+   压暗值 .45 对齐 EPISODE_PAST_CARD_DIM_ALPHA。 */
+.tv-ep.is-watched .tv-ep-still::after{ background:linear-gradient(to top, rgba(0,0,0,.45) 0%, rgba(0,0,0,0) 50%); }
+.tv-ep.is-watched{ opacity:var(--tv-ep-dim, .45); }
 .tv-ep.is-playing{ border-color:var(--accent); }
+/* 「下一集」：正在播的那一集之后、还没看的那一集。
+   上游用 isPicked 表达「你选中的那一集」，这里对齐成「下一集待看」——
+   电视上一步要跨几集才能找到，标出来省得数格子。 */
+.tv-ep.is-next{ border-color:var(--accent); border-style:dashed; }
 
 /* 顶栏：玻璃胶囊。失焦比得焦更快（90ms vs 150ms）——
    焦点离开的那个比新拿到焦点的先落回去，漏掉会觉得「焦点黏黏的」。 */
@@ -2030,6 +2040,26 @@ const TV_LAYOUT = {
   columnSpacing: 20,
   bottomBleed: 64,        /* 下出血：焦点走过去时按位置跑动画，不闪现 */
   bgTone: "#2C2C2E"       /* 深灰而非纯黑 —— 纯黑在屏幕上与深灰分不出来 */
+};
+
+/* 横滑卡行与剧集卡的额度，数值全部来自 Izuko_TV，不是自拟：
+     watchNextLimit  ← TvHomeChannels.WATCH_NEXT_LIMIT
+     seriesRowLimit  ← 主屏频道一屏放不下的行数，超出的走「更多」卡
+     epCardWidth     ← FocusEpisodesSection 的 cellWidth（dp）
+     epCardHeight    ← 同文件 cellHeight，恰好 16:9
+     epDimAlpha      ← EPISODE_PAST_CARD_DIM_ALPHA（已看卡整体压暗到 .45）
+     epProgressH     ← EPISODE_PROGRESS_BAR_HEIGHT
+   epRowLimit 不是抄来的：抓取侧只存作品级封面与总集数，
+   一部 1000 集的长番按集号铺开能把页面卡死，所以自己封了顶。 */
+const TV_ROW = {
+  watchNextLimit: 10,
+  seriesRowLimit: 12,
+  epCardWidth: 256,
+  epCardHeight: 144,
+  epDimAlpha: 0.45,
+  epProgressH: 3,
+  epRowLimit: 60,
+  moreThreshold: 8      /* 行内卡片少于这个数就不挂「更多」卡，空行尾反而是噪音 */
 };
 const ACCENTS = [  {key:"cyan",name:"放映青",demo:"#22d3ee"},
   {key:"amber",name:"胶片琥珀",demo:"#f0a63c"},
@@ -3664,7 +3694,12 @@ const libState = {
      「未筛选」和「筛选默认系列」，两者永远无法区分 ——
      用户选「默认系列」会看到全部作品，以为筛选器坏了。 */
   seriesId: null,
-  flag: ""
+  flag: "",
+  /* 从卡行「更多」进来时要摊平的那一组（系列 id 或 ROW_CONTINUE）。
+     空串 = 没展开，网格显示正常筛选结果。
+     它不属于筛选器体系：库里没有「有进度未看完」这个筛选维度，
+     硬塞进 filterAnime 只会在筛选栏多出一个语义不清的下拉项。 */
+  rowExpanded: ""
 };
 const SORTS = [
   { key:"createdAt_desc", name:"添加时间（新→旧）" },
@@ -3854,6 +3889,125 @@ function cardHTML(a){
   "</article>";
 }
 
+/* ============================================================
+   13.5 TV 影院：横滑卡行 + 剧集卡行
+   ------------------------------------------------------------
+   Izuko_TV 的片库不是纵向网格，是「组标题 + 横滑行」：
+   每一行有自己的标题与横向滚动的卡组，行尾挂一张「更多」玻璃卡。
+   为什么非得这样：电视是十米外观看，纵向网格一屏塞满几十张小卡，
+   每张都认不出来；横滑行一屏 6 张、看得清，且方向键左右走是电视的肌肉记忆。
+
+   这一段只在 ui_skin === "tv" 下生效，其余套系的片库维持原网格 ——
+   桌面浏览器里纵向网格才是对的，横滑卡行在鼠标下是反模式。 */
+
+/* 「继续观看」的口径照 TvHomeChannels.WATCH_NEXT 的三条：
+     ① 在看（statusId = st_watching）
+     ② 有进度且没看完
+     ③ 按最近记录时间倒序（用 updatedAt，不用 streamUrlAt ——
+        后者只在加了播放源时才有值，混合两个时间戳排序会得到
+        「看了一半但没存线路」的作品永远沉底）
+   上限取 WATCH_NEXT_LIMIT = 10。
+
+   注意②不能用 progressOf 判：它在 totalEpisodes 为 null 时返回 null，
+   于是「总集数未知但已经看了 4 集」的作品会被整条漏掉 ——
+   恰恰是这类最该出现在「继续观看」里（用户都记不清它有多少集了）。
+
+   limit 只给「置顶显示」用：上游的 10 是系统 launcher 的一行容量，
+   而网页里的行能横滑，用户想看完所有在看的。所以卡行视图调用时传 0
+   表示不截断 —— 否则「更多」卡永远算不出 rest，
+   变成一段永远不执行的分支（10 < tvRowHTML 的 moreLimit 20）。 */
+function continueWatchingList(list, limit){
+  const rows = list.filter(a => {
+    if(a.statusId === "st_watching") return true;
+    const p = progressOf(a);
+    if(p !== null) return p > 0 && p < 100;
+    return (Number(a.watchedEpisodes) || 0) > 0;
+  });
+  rows.sort((x, y) => String(y.updatedAt || "").localeCompare(String(x.updatedAt || "")));
+  const cap = limit == null ? TV_ROW.watchNextLimit : limit;
+  return cap > 0 ? rows.slice(0, cap) : rows;
+}
+
+/* 按系列分组，每系列一行。行内按首播年排 ——
+   「第一季 / 第二季 / 剧场版」在横滑行里必须按年份挨着，
+   否则用户看到的是随机顺序的同系列作品，得靠记忆拼。 */
+function seriesRowGroups(list){
+  const map = new Map();
+  list.forEach(a => {
+    const k = a.seriesId || DEFAULT_SERIES_ID;
+    if(!map.has(k)) map.set(k, []);
+    map.get(k).push(a);
+  });
+  return Array.from(map.entries())
+    .map(([id, items]) => {
+      items.sort((x, y) => String(x.airDate || "9999").localeCompare(String(y.airDate || "9999")));
+      return { id, name: seriesNameOf({ seriesId:id }), items };
+    })
+    .sort((a, b) => b.items.length - a.items.length);
+}
+
+function tvRowHTML(title, items, opts){
+  opts = opts || {};
+  if(!items.length) return "";
+  /* 行内只渲染前 moreLimit 张，其余靠行尾「更多」卡进完整列表。
+     一行铺 300 张的话，横向滚动条会变成一条看不出范围的细线。 */
+  const moreLimit = opts.moreLimit || 20;
+  const shown = items.slice(0, moreLimit);
+  const rest = items.length - shown.length;
+  /* moreKey 必须是「这一行的身份」（系列 id / ROW_CONTINUE）而不是标题 ——
+     标题可能重名（两个系列都叫「剧场版」），拿它去筛会命中错的组。 */
+  const moreKey = attr(opts.moreKey || "");
+  /* 「更多」卡只在真的还有内容时才挂：卡片数少于阈值就挂，
+     点进去还是同一批，纯噪音。 */
+  const moreCard = (rest > 0 && items.length >= TV_ROW.moreThreshold)
+    ? '<button class="tv-more" type="button" data-row-more="' + moreKey + '" ' +
+      'aria-label="查看' + attr(title) + '的全部 ' + items.length + ' 部">' +
+      '<span class="tv-more-icon">' + ic("grid",18) + "</span><span>更多 " + rest + " 部</span></button>"
+    : "";
+  return '<section class="tv-row">' +
+    '<div class="tv-row-head"><h3>' + esc(title) + "</h3>" +
+      (opts.hint ? '<span class="hint">' + esc(opts.hint) + "</span>" : "") +
+    "</div>" +
+    '<div class="tv-row-scroll">' + shown.map(cardHTML).join("") + moreCard + "</div>" +
+  "</section>";
+}
+
+/* 卡行视图的整体编排：
+   继续观看置顶 → 各系列行 → 「未归类」兜底。
+   「未归类」不能省：库里没归类的作品在系列行里根本没位置，
+   视图一换它们就从屏幕上消失了，用户会以为丢了。 */
+function rowsViewHTML(list){
+  const cont = continueWatchingList(list, 0);
+  const rows = [];
+  if(cont.length) rows.push(tvRowHTML("继续观看", cont, { hint:"有进度且还没看完", moreKey:ROW_CONTINUE }));
+
+  const groups = seriesRowGroups(list);
+  const grouped = new Set();
+  groups.forEach(g => g.items.forEach(a => grouped.add(a.id)));
+  groups.slice(0, TV_ROW.seriesRowLimit).forEach(g => {
+    /* 「继续观看」已置顶展示过的作品，系列行里不再重复占位 ——
+       一屏里出现两张一模一样的卡，用户会以为是 bug。 */
+    const items = g.items.filter(a => !cont.some(c => c.id === a.id));
+    if(!items.length) return;
+    rows.push(tvRowHTML(g.name, items, { hint: g.items.length + " 部", moreKey:g.id }));
+  });
+  /* 被 seriesRowLimit 截掉的系列，统一收进「其他系列」行 ——
+     直接丢掉等于这些作品在卡行视图里彻底消失。
+     这行的 moreKey 用哨兵 ROW_OVERFLOW：成员跨多个系列，
+     任何单个 seriesId 都定位不到它，点「更多」必须能摊出整组。 */
+  const overflow = groups.slice(TV_ROW.seriesRowLimit);
+  if(overflow.length){
+    const items = [];
+    overflow.forEach(g => g.items.forEach(a => { if(!cont.some(c => c.id === a.id)) items.push(a); }));
+    if(items.length) rows.push(tvRowHTML("其他系列", items, { hint: overflow.length + " 个系列", moreKey:ROW_OVERFLOW }));
+  }
+
+  const leftover = list.filter(a => !grouped.has(a.id) && !cont.some(c => c.id === a.id));
+  if(leftover.length) rows.push(tvRowHTML("全部作品", leftover, { hint: list.length + " 部" }));
+
+  return rows.join("") || libraryEmptyHTML();
+}
+
 function tableHTML(list){
   const rows = list.map(a => {
     const name = a.titleCn || a.titleOriginal || "未命名";
@@ -3900,7 +4054,11 @@ function libraryEmptyHTML(){
 }
 
 function renderLibrary(root){
-  const list = sortAnime(filterAnime(state.anime));
+  /* 展开态优先于筛选结果：从卡行「更多」进来时，
+     网格要显示的是那一组本身，而不是叠加在筛选之上的子集
+     —— 叠加的话点「继续观看 → 更多」很可能得到空网格。 */
+  const expanded = libState.rowExpanded ? rowExpandedList() : null;
+  const list = expanded || sortAnime(filterAnime(state.anime));
   let html = '<div class="filterbar">' +
     '<div class="field field-wide"><label for="lib-q">搜索本地片库</label>' +
       '<div class="search-wrap">' + ic("search",16) +
@@ -3947,27 +4105,54 @@ function renderLibrary(root){
     '<div class="filterbar-right">' +
       '<div class="seg" role="group" aria-label="视图切换">' +
         '<button type="button" data-view="wall" aria-pressed="' + (libState.view === "wall") + '">' + ic("grid",14) + "封面墙</button>" +
+        /* 卡行只在 TV 影院套系下出现。桌面浏览器里横滑卡行是反模式 ——
+           鼠标没有「左右走」的肌肉记忆，一行 6 张还要横向滚，比网格慢得多。 */
+        (settings.ui_skin === "tv"
+          ? '<button type="button" data-view="rows" aria-pressed="' + (libState.view === "rows") + '">' + ic("film",14) + "卡行</button>"
+          : "") +
         '<button type="button" data-view="table" aria-pressed="' + (libState.view === "table") + '">' + ic("list",14) + "表格</button>" +
       "</div>" +
       (activeFilterCount() ? '<button class="btn btn-sm" type="button" data-act="reset-filter">' + ic("close",14) + "清空筛选</button>" : "") +
     "</div>" +
   "</div>";
 
-  html += '<div class="small muted mb-3">共 ' + list.length + " 部" + (list.length !== state.anime.length ? "（从 " + state.anime.length + " 部中筛选）" : "") + "</div>";
+  /* 展开条：告诉用户「现在看到的不是筛选结果，是某一行的全部」，
+     并给一个返回卡行的出口。没有它，用户会以为筛选被改坏了。 */
+  if(expanded) html += '<div class="note-box is-ok mb-3">' + ic("info",16) +
+    "<span>正在展开「" + esc(rowExpandedLabel()) + "」的 " + list.length + " 部。" +
+    (libState.view === "rows"
+      ? ""
+      : ' <button class="btn btn-sm" type="button" data-act="back-rows">返回卡行</button>') +
+    "</span></div>";
+  html += '<div class="small muted mb-3">共 ' + list.length + " 部" +
+    (expanded ? "" : (list.length !== state.anime.length ? "（从 " + state.anime.length + " 部中筛选）" : "")) + "</div>";
+  /* 三种视图：卡行（TV 套系）、封面墙、表格。
+     卡行走 rowsViewHTML 而不是复用 wall 的 class —— 它的列数不由
+     列宽公式决定，而是由一行的卡片数决定。 */
   html += list.length
-    ? (libState.view === "wall" ? '<div class="wall">' + list.map(cardHTML).join("") + "</div>" : tableHTML(list))
+    ? (libState.view === "rows" && settings.ui_skin !== "tv"
+        /* 非 TV 套系下 rows 是非法值（用户可能先在 TV 套系选了卡行、
+           之后切回档案馆）。必须显式落回封面墙：
+           原来的三元里它会一路掉到 table 分支，
+           于是「我只换了套系」变成「我的片库视图被偷偷换了」。 */
+        ? '<div class="wall">' + list.map(cardHTML).join("") + "</div>"
+        : (libState.view === "rows"
+            ? rowsViewHTML(list)
+            : (libState.view === "wall" ? '<div class="wall">' + list.map(cardHTML).join("") + "</div>" : tableHTML(list))))
     : libraryEmptyHTML();
   root.innerHTML = html;
 
+  /* 改筛选条件前先退出展开态。展开中的网格无视筛选结果，
+   用户在下拉里换了条件却看不到任何变化，会以为筛选器坏了。 */
   const bind = (sel, key, isNum) => {
     const n = root.querySelector(sel);
     if(!n) return;
-    n.addEventListener("change", () => { libState[key] = n.value; rerender(); });
-    if(!isNum) n.addEventListener("input", debounce(() => { libState[key] = n.value; rerender(); }, 260));
+    n.addEventListener("change", () => { libState.rowExpanded = ""; libState[key] = n.value; rerender(); });
+    if(!isNum) n.addEventListener("input", debounce(() => { libState.rowExpanded = ""; libState[key] = n.value; rerender(); }, 260));
   };
   const q = root.querySelector("#lib-q");
   if(q){
-    q.addEventListener("input", debounce(() => { libState.q = q.value; rerender(); const n2 = root.querySelector("#lib-q"); if(n2){ n2.focus(); n2.setSelectionRange(n2.value.length, n2.value.length); } }, 300));
+    q.addEventListener("input", debounce(() => { libState.rowExpanded = ""; libState.q = q.value; rerender(); const n2 = root.querySelector("#lib-q"); if(n2){ n2.focus(); n2.setSelectionRange(n2.value.length, n2.value.length); } }, 300));
   }
   bind("#lib-status","statusId"); bind("#lib-decade","decade"); bind("#lib-year","watchYear"); bind("#lib-grade","watchGrade");
   bind("#lib-studio","studio"); bind("#lib-genre","genre"); bind("#lib-flag","flag"); bind("#lib-sort","sort", true);
@@ -3975,16 +4160,116 @@ function renderLibrary(root){
      走通用 bind() 的话哨兵值会被原样写进去。 */
   const seriesSel = root.querySelector("#lib-series");
   if(seriesSel) seriesSel.addEventListener("change", () => {
+    libState.rowExpanded = "";
     libState.seriesId = seriesSel.value === "__all__" ? null : seriesSel.value;
     rerender();
   });
+  /* 切视图不清展开态：网格 ↔ 卡行是同一组内容的两种排法，
+     清掉的话从「更多」进网格再切卡行就丢了这一组。 */
   root.querySelectorAll("[data-view]").forEach(b => b.addEventListener("click", () => {
     libState.view = b.dataset.view;
     settings.default_view = libState.view;
     saveSettings();
     rerender();
   }));
+  /* 「更多」卡：把这一行的全部内容摊成网格看，而不是换路由。
+     换成网格而不是弹层，是因为电视上弹层要额外处理焦点回收与返回键，
+     而网格是已经在同一页里的视图，方向键走过去、看完按回墙就回来了。
+     seriesId 走真实筛选器（用户随后能自己改条件），
+     「继续观看」这类虚拟分组没有对应筛选器，只能临时放宽筛选集合。 */
+  root.querySelectorAll("[data-row-more]").forEach(b => b.addEventListener("click", () => {
+    const key = b.dataset.rowMore;
+    if(!seriesRowIds().has(key) && key !== ROW_CONTINUE && key !== ROW_OVERFLOW){
+      /* 兜底：key 既不是已知系列也不是哨兵，说明卡片与数据不同步
+         （比如系列在渲染后被删了）。静默走进 else 会摊出一个空网格，
+         用户看到的是「全部作品不见了」。 */
+      toast("这一行已经变了，回卡行重进一次", "warn");
+      return;
+    }
+    /* 一律先清空筛选：用户带着旧条件点「更多」，叠加后会得到空网格，
+       而界面上不会有任何解释。 */
+    resetLibraryFilter();
+    if(key === ROW_CONTINUE || key === ROW_OVERFLOW){
+      /* 虚拟分组没有对应的筛选器组合，只能靠 rowExpanded 记住这一组。 */
+      libState.rowExpanded = key;
+    }else{
+      /* 真实系列除记住这一行，还要把系列筛选器拨过去 ——
+         用户在网格里看到「系列：钢炼」的下拉会以为是自己筛的，
+         其实是我们带过来的；不拨的话下拉与网格内容对不上。 */
+      libState.rowExpanded = key;
+      libState.seriesId = key;
+    }
+    libState.view = "wall";
+    rerender();
+  }));
+  const backRows = root.querySelector('[data-act="back-rows"]');
+  if(backRows) backRows.addEventListener("click", () => {
+    libState.rowExpanded = "";
+    libState.view = "rows";
+    rerender();
+  });
   bindLibraryActions(root);
+}
+
+/* 行分组里的 seriesId 集合。「更多」卡靠它区分
+   「这是一个真实系列（走筛选器）」与「这是一个虚拟分组（走临时集合）」。
+   每次重算而不是缓存：系列能增删，缓存会过期。 */
+function seriesRowIds(){
+  const s = new Set(state.series.map(x => x.id));
+  s.add(DEFAULT_SERIES_ID);
+  return s;
+}
+const ROW_CONTINUE = "__continue__";
+/* 「其他系列」行的哨兵 key。成员跨多个 seriesId，
+   展开时按「第 N 个以后的系列」重算，不能靠 key 反查。 */
+const ROW_OVERFLOW = "__overflow__";
+
+/* 「更多」展开后网格要显示的那一批。
+   空数组 = 不展开（显示正常筛选结果）。
+   为什么要单独记而不是复用筛选器：库里没有「有进度未看完」这个筛选维度，
+   硬塞进 filterAnime 会让它在筛选栏里也出现一个语义不清的下拉项。 */
+function rowExpandedList(){
+  const key = libState.rowExpanded;
+  if(!key) return null;
+  if(key === ROW_CONTINUE) return continueWatchingList(filterAnime(state.anime), 0);
+  if(key === ROW_OVERFLOW){
+    const ids = new Set(overflowSeriesIds());
+    const cont = new Set(continueWatchingList(filterAnime(state.anime), 0).map(a => a.id));
+    return state.anime.filter(a => ids.has(a.seriesId || DEFAULT_SERIES_ID) && !cont.has(a.id));
+  }
+  const m = new Map();
+  state.anime.forEach(a => {
+    const k = a.seriesId || DEFAULT_SERIES_ID;
+    if(k === key){ if(!m.has(a.id)) m.set(a.id, a); }
+  });
+  return Array.from(m.values());
+}
+
+/* 排在 seriesRowLimit 之后的那些系列 id。
+   rowsViewHTML 与展开逻辑都要用它 —— 两处各算一次的话，
+   将来改排序规则就会算出两个不同的集合。 */
+function overflowSeriesIds(){
+  return seriesRowGroups(state.anime).slice(TV_ROW.seriesRowLimit).map(g => g.id);
+}
+
+/* 展开组的显示名。真实系列取系列名，「继续观看」是虚拟分组没有对应记录，
+   只能自己起名 —— 写成 seriesNameOf 会得到「默认系列」，
+   用户会以为点错了。 */
+function rowExpandedLabel(){
+  const key = libState.rowExpanded;
+  if(!key) return "";
+  if(key === ROW_CONTINUE) return "继续观看";
+  if(key === ROW_OVERFLOW) return "其他系列";
+  const s = seriesById(key);
+  return s ? s.name : "默认系列";
+}
+
+/* 清空筛选。抽出来是因为「更多」卡与筛选栏的「清空筛选」按钮要做同一件事，
+   两处各写一遍迟早会不一致。 */
+function resetLibraryFilter(){
+  ["q","statusId","decade","watchYear","watchGrade","studio","genre","flag"].forEach(k => { libState[k] = ""; });
+  libState.seriesId = null;
+  libState.rowExpanded = "";
 }
 
 /* 卡片当前能不能靠「悬停」翻面。
@@ -4763,6 +5048,17 @@ function activeSourceOf(a){
   return list.find(s => s.id === want) || list[0];
 }
 
+/* 「现在看到第几集」的唯一口径：当前线路声明的集数 → 旧 streamEp → 已看集数。
+   三处（片尾自动下一集、详情页播放记录、剧集卡行）都调它 ——
+   各写一遍的话，改其中一处就会出现「下一集提示跳错集数」这种对不上的 bug。 */
+function currentEpisodeOf(a){
+  if(!a) return 0;
+  const line = activeSourceOf(a);
+  if(line && line.ep != null && Number.isFinite(Number(line.ep))) return Math.max(0, Number(line.ep));
+  if(a.streamEp != null && Number.isFinite(Number(a.streamEp))) return Math.max(0, Number(a.streamEp));
+  return Math.max(0, Number(a.watchedEpisodes) || 0);
+}
+
 /* ---- 三态筛选 ----
    直译 MaybeExcludedMedia：被排除的资源不丢弃，携带原因排到最后。 */
 const EXCLUDE_REASONS = {
@@ -5205,10 +5501,7 @@ function mountVideoPlayer(mountEl, srcObj, a, onLineChange){
     /* 集数以「当前线路声明的集数」为准，没有才回落到已看集数 ——
        用 a.watchedEpisodes 直接推会在「声明看到第 3 集但已看 12 集」时跳到 13，
        而用户此刻正在看第 3 集的下一步。 */
-    const curLine = activeSourceOf(a);
-    const curEp = curLine && curLine.ep != null ? Number(curLine.ep)
-      : (a.streamEp != null ? Number(a.streamEp) : (a.watchedEpisodes || 0));
-    const next = curEp + 1;
+    const next = currentEpisodeOf(a) + 1;
     if(next <= total){
       showBadge("即将播放第 " + next + " 集");
       if(onLineChange) onLineChange({ autonext:next });
@@ -5828,6 +6121,10 @@ function renderDetail(root, id){
           (when ? "（记录于 " + esc(String(when).slice(0,10)) + "）" : "") + "</span></div>";
       })() +
 
+      /* 剧集卡行：TV 影院套系下替代数字输入框。
+         放在播放记录正下方 —— 用户从这里出发找的是「第几集」。 */
+      episodeRowHTML(a) +
+
       (a.summary ? '<details class="mt-4"><summary class="sec-title">' + ic("film",16) + "<span>简介</span></summary>" +
         '<div class="summary-box scroll mt-2">' + esc(a.summary) + "</div></details>" : "") +
 
@@ -5875,11 +6172,128 @@ function renderDetail(root, id){
   root.querySelectorAll("[data-series-go]").forEach(b => b.addEventListener("click", () => {
     go("theater", b.dataset.seriesGo);
   }));
+  /* 剧集卡选集：只改当前线路的 ep 并落盘，不整页重渲染 ——
+     整页重渲染会把正在播的播放器拆掉，而用户点集多半是为了接着看。
+     成功后只把卡片的高亮态挪过去（updateEpisodeRowHighlight）。 */
+  root.querySelectorAll("[data-ep-pick]").forEach(b => b.addEventListener("click", async () => {
+    const ep = Number(b.dataset.epPick);
+    if(!(Number.isInteger(ep) && ep > 0)) return;
+    const ok = await pickEpisode(root, a, ep);
+    if(ok) updateEpisodeRowHighlight(root, a);
+  }));
+}
+
+/* 重排剧集卡的四态。
+   不重渲染整页的理由同上：正在播的视频不能被打断。 */
+function updateEpisodeRowHighlight(root, a){
+  const cur = currentEpisodeOf(a);
+  const watched = Number(a.watchedEpisodes) || 0;
+  const total = Number(a.totalEpisodes) || 0;
+  root.querySelectorAll("[data-ep-pick]").forEach(b => {
+    const i = Number(b.dataset.epPick);
+    b.classList.toggle("is-watched", i <= watched && i !== cur);
+    b.classList.toggle("is-playing", i === cur);
+    b.classList.toggle("is-next", i !== cur && i === cur + 1 && cur + 1 <= total);
+    const bar = b.querySelector(".tv-ep-prog > i");
+    if(bar) bar.style.width = (i <= watched && i !== cur) ? "100%" : (i === cur ? "50%" : "0%");
+    b.setAttribute("aria-label", "第 " + i + " 集" +
+      (i === cur ? "（正在看）" : i <= watched ? "（已看）" : i === cur + 1 && cur + 1 <= total ? "（下一集）" : "（未看）"));
+  });
+  const head = root.querySelector("[data-ep-current]");
+  if(head) head.textContent = cur ? "当前第 " + cur + " 集" : "未开始";
 }
 
 /* 详情页的系列区块。
    默认系列下作品可能极多，全部列出反而变成一堵墙 ——
    那种情况下只提示可以归类，不铺列表。 */
+/* ---- 剧集卡行（详情页，TV 影院套系）----
+   形态照 Izuko_TV 的 FocusEpisodesSection：16:9 剧照 + 集号 + 3px 进度条，
+   看过压暗、在播描边。
+
+   但有一条必须说清的差别：本项目没有逐集剧照与集名数据。
+   抓取侧只存作品级封面（coverUrl）与总集数，没有 per-episode 的 still / title。
+   所以这里的剧照位退化为「作品封面 + 集号」，集名退化为「第 N 集」。
+   把它渲染成好像有剧照的样子（随机图、编号代替图）只会误导用户 ——
+   看着像有，实际点进去什么都没有。
+
+   想补真数据要动抓取侧（Animeko 那边是 EpisodeInfo.still / name，
+   B 站接口确实给得到），那是另一次改动，不该在这一层假装已经做了。 */
+function episodeRowHTML(a){
+  if(settings.ui_skin !== "tv") return "";
+  const total = Number(a.totalEpisodes) || 0;
+  if(!(total > 0)) return "";
+  const shown = Math.min(total, TV_ROW.epRowLimit);
+  const cur = currentEpisodeOf(a);
+  const watched = Number(a.watchedEpisodes) || 0;
+
+  const cards = [];
+  for(let i = 1; i <= shown; i++){
+    /* 四态：已看（压暗）/ 在播（描边）/ 下一集（虚线描边）/ 未看（常态）。
+       is-next 只在「在播的那一集之后还有没看过的」时才点亮 ——
+       已经看到最后一集时再标「下一集」是骗人的。 */
+    const isWatched = i <= watched && i !== cur;
+    const isPlaying = i === cur;
+    const isNext = !isPlaying && i === cur + 1 && cur + 1 <= total;
+    /* 单集进度条没有真实数据（我们只记了「看到第几集」），
+       所以条只表示三种态：看完 = 满格、在播 = 50%、其余 = 空。
+       写一个假的百分比进去比空条更糟：用户会以为那一集看过 37%。 */
+    const fill = isWatched ? 100 : (isPlaying ? 50 : 0);
+    const cls = "tv-ep" + (isWatched ? " is-watched" : "") + (isPlaying ? " is-playing" : "") + (isNext ? " is-next" : "");
+    const label = "第 " + i + " 集" + (isWatched ? "（已看）" : isPlaying ? "（正在看）" : isNext ? "（下一集）" : "（未看）");
+    cards.push(
+      '<button type="button" class="' + cls + '" data-ep-pick="' + i + '" aria-label="' + attr(label) + '">' +
+        '<div class="tv-ep-still"' + (a.coverUrl ? ' style="background-image:url(' + attr(a.coverUrl) + ')"' : "") + ">" +
+          '<span class="tv-ep-no">EP ' + String(i).padStart(2, "0") + "</span>" +
+        "</div>" +
+        '<div class="tv-ep-body">' +
+          '<div class="tv-ep-name">' + (a.titleCn || a.titleOriginal || "未命名") + "</div>" +
+          '<div class="tv-ep-prog"><i style="width:' + fill + '%"></i></div>' +
+        "</div>" +
+      "</button>");
+  }
+
+  const truncNote = total > shown
+    ? '<span class="hint">共 ' + total + " 集，已显示前 " + shown + " 集（上限 " + TV_ROW.epRowLimit + "，可在下方填准确集数）</span>"
+    : '<span class="hint">' + total + " 集 · 点一集即把它设为当前集</span>";
+
+  return '<div class="mt-4">' +
+    '<div class="sec-title">' + ic("film",16) + "<span>剧集</span>" +
+      '<span class="small muted" style="margin-left:auto" data-ep-current>' + (cur ? "当前第 " + cur + " 集" : "未开始") + "</span></div>" +
+    '<div class="tv-ep-row">' + cards.join("") + "</div>" +
+    '<div class="mt-2">' + truncNote + "</div>" +
+  "</div>";
+}
+
+/* 点剧集卡 = 把它设为当前集。
+   与播放器面板的「看到第几集」输入框写同一个字段，
+   两处独立赋值会出现「卡上说是第 5 集、面板里还是第 3 集」。 */
+async function pickEpisode(root, a, ep){
+  migrateSources(a);
+  const line = activeSourceOf(a);
+  if(!line){
+    toast("先添加一条播放源，再选集", "warn");
+    return false;
+  }
+  line.ep = ep;
+  line.savedAt = new Date().toISOString();
+  a.activeSourceId = line.id;
+  a.streamEp = ep;
+  a.streamUrlAt = line.savedAt;
+  await saveAnime(a);
+  /* 把面板一起改掉：#st-ep 与状态条的值都是渲染那一刻的快照，
+     不同步的话同一页上「卡上第 7 集、面板第 2 集」自相矛盾，
+     用户会以为点集没生效。 */
+  const input = root.querySelector("#st-ep");
+  if(input) input.value = String(ep);
+  const status = root.querySelector("#st-status");
+  if(status && status.classList.contains("is-ok")){
+    const when = line.savedAt ? String(line.savedAt).slice(0,10) : "";
+    status.innerHTML = ic("check",16) + "<span>当前线路：" + esc(line.name || "线路") +
+      " · 第 " + esc(String(ep)) + " 集" + (when ? "（记录于 " + esc(when) + "）" : "") + "</span>";
+  }
+  return true;
+}
+
 function seriesBlockHTML(a){
   const s = seriesById(a.seriesId);
   const siblings = state.anime
@@ -8013,9 +8427,15 @@ function settingsBodyHTML(){
   }
   if(t === "library"){
     html += '<div class="panel"><div class="panel-head"><h3>片库</h3></div>';
-    html += setRow("默认视图", "封面墙 / 表格",
+    html += setRow("默认视图", "封面墙 / 卡行 / 表格",
       '<div class="seg" role="group" aria-label="默认视图">' +
-      [["wall","封面墙"],["table","表格"]].map(([v,n]) => '<button type="button" data-set="default_view" data-val="' + v + '" aria-pressed="' + (settings.default_view === v) + '">' + n + "</button>").join("") + "</div>");
+      /* 卡行只对 TV 影院套系有意义，别的套系下列表里根本不显示它。
+         若用户先在 TV 套系选了卡行、之后切回档案馆，settings 里仍留着
+         "rows" —— 这时默认视图按钮一个都不亮，看着像功能坏了。
+         所以非 TV 套系下额外显示当前实际生效的那一个。 */
+      [["wall","封面墙"],["table","表格"]]
+        .concat(settings.ui_skin === "tv" ? [["rows","卡行"]] : (settings.default_view === "rows" ? [["rows","卡行（需 TV 影院）"]] : []))
+        .map(([v,n]) => '<button type="button" data-set="default_view" data-val="' + v + '" aria-pressed="' + (settings.default_view === v) + '">' + n + "</button>").join("") + "</div>");
     html += setRow("默认排序", "", '<select class="select" data-set="default_sort">' +
       SORTS.map(s => '<option value="' + attr(s.key) + '"' + (settings.default_sort === s.key ? " selected" : "") + ">" + esc(s.name) + "</option>").join("") + "</select>");
     html += setRow("卡片字段显隐", "控制封面墙卡片上哪些信息显示",
@@ -8606,7 +9026,12 @@ async function boot(){
   if(bgLost){ settings.bg_image = ""; saveSettings(); }
   installImageFallback();
   applyAppearance();
-  libState.view = settings.default_view === "table" ? "table" : "wall";
+  /* 默认视图：TV 影院套系下默认给卡行（横滑才是电视该有的滚法），
+     其余套系维持网格。写死的取值表在加第三个视图时会漏掉新值，
+     这里改成白名单。 */
+  libState.view = ["table","rows","wall"].indexOf(settings.default_view) >= 0
+    ? settings.default_view : "wall";
+  if(libState.view === "rows" && settings.ui_skin !== "tv") libState.view = "wall";
   libState.sort = settings.default_sort || "createdAt_desc";
   const order = ["home","library","chronicle","wheel","theater","quotes","settings"];
   PAGES.sort((a,b) => order.indexOf(a.id) - order.indexOf(b.id));

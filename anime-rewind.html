@@ -879,6 +879,70 @@ table.grid-table{ width:100%; border-collapse:collapse; font-size:var(--fs-sm); 
 .grid-table .score-input{ width:64px; }
 .grid-table td.nowrap{ white-space:nowrap; }
 .st-dot{ display:inline-flex; align-items:center; gap:6px; white-space:nowrap; }
+
+/* ============================================================
+   播放源台账
+   ============================================================ */
+/* 汇总条：数字用等宽字体对齐，语义色只给「有问题」的那几个。
+   全绿的一排绿块等于没有重点 —— 台账要回答的是
+   「哪里出问题了」，不是「一切正常」。 */
+.ledger-stats{ display:flex; flex-wrap:wrap; gap:var(--sp-2); margin-bottom:var(--sp-4); }
+.ledger-stat{
+  flex:1 1 116px; min-width:104px; padding:var(--sp-3);
+  background:var(--panel); border:1px solid var(--border);
+  border-left:2px solid var(--border-2); border-radius:var(--r-md);
+}
+.ledger-stat b{
+  display:block; font-family:var(--font-mono); font-size:var(--fs-xl);
+  line-height:1.2; letter-spacing:-.01em;
+}
+.ledger-stat span{ font-size:11px; color:var(--muted); }
+.ledger-stat.tone-ok{ border-left-color:var(--ok); }
+.ledger-stat.tone-ok b{ color:var(--ok); }
+.ledger-stat.tone-warn{ border-left-color:var(--warn); }
+.ledger-stat.tone-warn b{ color:var(--warn); }
+.ledger-stat.tone-err{ border-left-color:var(--danger); }
+.ledger-stat.tone-err b{ color:var(--danger); }
+
+/* 台账表：行内操作密集，密度比片库表格更紧一档 */
+.ledger-table .col-check{ width:34px; }
+/* 搜索框要比片库那条更宽：这里的placeholder 有五项提示词，
+   沿用片库的 200px 会被截成「片名 / 线路名 / 网址 / 站点 /」，
+   用户根本猜不到还能搜什么。 */
+.ledger-q{ flex:1 1 320px; min-width:260px; }
+.ledger-q .search-wrap{ max-width:none; }
+.ledger-table .col-src{ min-width:200px; }
+.ledger-table .url-cell{
+  display:block; font-family:var(--font-mono); font-size:11px; color:var(--muted);
+  max-width:320px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+}
+.ledger-table tr.is-dead td:not(.col-check){ opacity:.62; }
+.ledger-table tr.is-dead .url-cell{ text-decoration:line-through; }
+/* 被勾选的行要整行有反馈，否则用户不知道批量操作会作用在哪些行上 */
+.ledger-table tr.is-picked{ background:var(--accent-soft); }
+.ledger-table .flag-row{ display:flex; gap:4px; flex-wrap:wrap; }
+.flag{
+  display:inline-flex; align-items:center; padding:0 5px; border-radius:var(--r-sm);
+  font-size:10.5px; font-weight:600; border:1px solid currentColor; white-space:nowrap; line-height:1.6;
+}
+.flag.tone-ok{ color:var(--ok); }
+.flag.tone-warn{ color:var(--warn); }
+.flag.tone-err{ color:var(--danger); }
+.flag.tone-muted{ color:var(--muted); }
+.ledger-table .note-cell{ max-width:180px; font-size:var(--fs-xs); color:var(--text-2); }
+/* 探测进行中的整行压暗：让「正在跑」这件事在整屏上可见，
+   否则几十行同时点亮时用户分不清哪些已经出结果。 */
+.ledger-table tr.is-probing{ opacity:.5; }
+.probe-bar{
+  display:flex; align-items:center; gap:var(--sp-2);
+  font-size:var(--fs-xs); color:var(--muted);
+}
+.progress.pulse > i{ animation:ledger-pulse 1.1s var(--ease) infinite; }
+@keyframes ledger-pulse{ 0%{ opacity:.45; } 50%{ opacity:1; } 100%{ opacity:.45; } }
+/* 编辑弹窗里的线路字段分组 */
+.led-form-grid{ display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:var(--sp-3); }
+.led-form-grid .span-2{ grid-column:1 / -1; }
+@media (max-width:640px){ .led-form-grid{ grid-template-columns:1fr; } }
 .st-dot i{ width:8px; height:8px; border-radius:50%; background:var(--st-color); flex:0 0 8px; box-shadow:0 0 0 3px color-mix(in srgb,var(--st-color) 25%,transparent); }
 
 /* ============================================================
@@ -2276,6 +2340,7 @@ const DEFAULT_SETTINGS = {
      不读取、不报错、不影响任何显示 —— 所以旧数据无需迁移。 */
   crt_power_sound: true,
   module_quotes: true,
+  module_sources: true,
   module_honor: true,
   module_wheel: true,
   module_chronicle: true,
@@ -5145,6 +5210,23 @@ function subtitleRank(lang, wanted){
   return i < 0 ? SUBTITLE_ORDER.length : i;
 }
 
+/* 线路健康度：探测结果与人工标记。
+   浏览器端只能确认「网络层有没有响应」，确认不了 HTTP 状态码，
+   所以状态只有四档且必须允许 unknown —— 把「没探测过」画成
+   「可用」和画成「失效」都是在骗用户。 */
+const HEALTH_STATES = ["unknown", "alive", "dead", "blocked"];
+const HEALTH_TEXT = {
+  unknown: "未检测",
+  alive:   "网络可达",
+  dead:    "已标记失效",
+  blocked: "被拒绝访问"
+};
+function normalizeHealth(h){
+  if(!h || typeof h !== "object") return { state:"unknown", at:"", detail:"" };
+  const st = HEALTH_STATES.indexOf(String(h.state)) >= 0 ? String(h.state) : "unknown";
+  return { state:st, at:String(h.at || ""), detail:String(h.detail || "").slice(0, 200) };
+}
+
 /* 把一条线路补全成完整结构。
    缺字段必须给确定的默认值而不是 undefined ——
    下游的排序比较全部是数值比较，undefined 会让比较结果变成 NaN，
@@ -5172,7 +5254,15 @@ function normalizeSource(s, idx, nowIso){
       ? s.subtitles.map(x => String(x || "").toUpperCase()).filter(Boolean)
       : (s.subtitle ? [String(s.subtitle).toUpperCase()] : []),
     tier: Number.isFinite(Number(s.tier)) ? Number(s.tier) : 2,
-    savedAt: s.savedAt || nowIso || ""
+    savedAt: s.savedAt || nowIso || "",
+    /* ---- 台账字段（播放源管理页用）----
+       这三个字段只影响「管理与筛选」，不参与选源质量比较。
+       enabled 缺省必须为 true：老数据没有这个键，
+       若按 falsy 判断会把用户所有线路一次性判成停用。 */
+    enabled: s.enabled === false ? false : true,
+    note: String(s.note || "").slice(0, 200),
+    health: normalizeHealth(s.health),
+    lastUsedAt: s.lastUsedAt || ""
   };
 }
 /* 轻量字符串哈希，用于生成稳定 id。不追求分布性，只求稳定。 */
@@ -5215,12 +5305,26 @@ function sourcesOf(a){
   const legacy = String(settings.stream_url || "").trim();
   return legacy ? [normalizeSource({ url: legacy, name: "临时片源" }, 0, new Date().toISOString())] : [];
 }
-/* 当前应当使用的那条：优先用户上次选的，其次列表第一条。 */
+/* 当前应当使用的那条：优先用户上次选的，其次列表第一条。
+   记忆的那条若已被停用/标记失效，必须跳过 ——
+   否则用户在管理页标了失效，回到放映厅还是它自动起播，
+   「管理」就成了假动作。此时退回到第一条仍然可用的线路。 */
 function activeSourceOf(a){
   const list = sourcesOf(a);
   if(!list.length) return null;
+  const usable = list.filter(sourceUsable);
+  const pool = usable.length ? usable : list;
   const want = a && a.activeSourceId;
-  return list.find(s => s.id === want) || list[0];
+  return pool.find(s => s.id === want) || pool[0];
+}
+/* 线路是否参与播放。停用与人工标记失效都算不可用，
+   但「未检测」不算 —— 把没探测过的线路默认判死，
+   等于让所有老线路一夜之间全变成不可用。 */
+function sourceUsable(s){
+  if(!s) return false;
+  if(s.enabled === false) return false;
+  if(s.health && s.health.state === "dead") return false;
+  return true;
 }
 
 /* 「现在看到第几集」的唯一口径：当前线路声明的集数 → 旧 streamEp → 已看集数。
@@ -5240,7 +5344,11 @@ const EXCLUDE_REASONS = {
   episode_mismatch: "集数不匹配",
   no_subtitle:      "无字幕",
   subtitle_kind:    "字幕形态不支持",
-  invalid_url:      "网址无效"
+  invalid_url:      "网址无效",
+  /* 台账状态参与选源：用户在管理页把线路停用或标记失效后，
+     这里必须同步排除，否则「管理」只是一个不生效的标签。 */
+  disabled:         "已停用",
+  dead:             "已标记失效"
 };
 function excludeSource(src, reason){
   return { state:"excluded", src:null, original:src, reason:reason, reasonText:EXCLUDE_REASONS[reason] || reason };
@@ -5258,6 +5366,12 @@ function filterSources(list, ctx){
     if(!s || !normalizeStreamURL(s.url)){
       out.push(excludeSource(s, "invalid_url")); return;
     }
+    /* 台账状态先于质量筛选判定。
+       顺序有讲究：把「已停用」排在集数/字幕之前，
+       否则同一条线路会先报「集数不匹配」，用户改了集数才发现
+       它早就被自己停用了 —— 提示指向的原因不是真正的原因。 */
+    if(s.enabled === false){ out.push(excludeSource(s, "disabled")); return; }
+    if(s.health && s.health.state === "dead"){ out.push(excludeSource(s, "dead")); return; }
     /* 集数匹配：source.ep 是用户声明的「这条源对应第几集」。
        为空表示「整季通用」，此时不该被判为不匹配 ——
        大量站点一条链接覆盖整季，误杀等于让用户白填。
@@ -5388,6 +5502,214 @@ function autoSelect(entries, ctx){
   }
   const fuzzy = included.slice().sort(compareSourceQuality)[0];
   return { source:fuzzy.src, stage:"fuzzy", reason:"没有精确匹配，取质量最优" };
+}
+
+/* ============================================================
+   16.6 播放源台账（跨作品管理）
+   ------------------------------------------------------------
+   需求原话：「不好管理每部动画的播放源那些可以删，那些失效了等等」。
+   逐部作品去看线路有两个问题：
+     ① 失效是跨作品的公共事实。同一个站点挂掉时，
+        库里可能有十几条线路一起失效，逐部去发现等于漏掉一半；
+     ② 删除/停用是批量决策。「把检测不通的都清掉」
+        在逐部视角下无法表达。
+
+   所以这一层把 a.sources 摊平成全局台账：
+     每一项是 { anime, source }，动它就是动那部作品的那条线路，
+     不复制数据 —— 台账是视图，不是第二份存储。
+   ============================================================ */
+
+/* 摊平全局台账。只取自有线路（a.sources），
+   不走 sourcesOf —— 后者会在无线路时回落到 settings.stream_url
+   那条全局兜底，把一个作品算成有线路，而它其实没有可管理的线路。 */
+function sourceLedger(){
+  const rows = [];
+  state.anime.forEach(a => {
+    migrateSources(a);
+    const list = Array.isArray(a.sources) ? a.sources : [];
+    list.forEach(s => { if(s && s.url) rows.push({ anime:a, source:s }); });
+  });
+  return rows;
+}
+/* 线路的展示名：优先线路名，其次从网址推断站点，
+   最后才退回「线路 N」—— 站点名比编号有用得多，
+   台账里一屏十几条「线路 1/2/3」根本分不清谁是谁。 */
+function sourceDisplayName(s){
+  const n = String(s && s.name || "").trim();
+  if(n && !/^线路\s*\d+$/.test(n)) return n;
+  const host = hostOf(normalizeStreamURL(s && s.url) || String(s && s.url || ""));
+  if(host) return n ? (n + " · " + host) : host;
+  return n || "未命名线路";
+}
+/* 台账里一条线路的完整状态标签（徽标文案 + 语义色）。
+   返回数组，因为「停用」与「未检测」可能同时成立。 */
+function sourceFlags(row){
+  const s = row.source;
+  const out = [];
+  const act = activeSourceOf(row.anime);
+  if(act && act.id === s.id) out.push({ id:"active", text:"使用中", tone:"ok" });
+  if(s.enabled === false) out.push({ id:"disabled", text:"已停用", tone:"muted" });
+  const h = normalizeHealth(s.health);
+  if(h.state === "dead") out.push({ id:"dead", text:"已失效", tone:"err" });
+  else if(h.state === "blocked") out.push({ id:"blocked", text:"访问被拒", tone:"warn" });
+  else if(h.state === "alive") out.push({ id:"alive", text:"可达", tone:"ok" });
+  else out.push({ id:"unknown", text:"未检测", tone:"muted" });
+  return out;
+}
+/* 台账汇总。分成「健康度分布」而不是给一个总数：
+   用户真正要回答的问题是「有多少条还能用」，不是「我存了多少条」。 */
+function sourceLedgerStats(rows){
+  const st = { total:rows.length, alive:0, dead:0, unknown:0, blocked:0,
+               disabled:0, animeWith:0, animeWithout:0, stale:0 };
+  const seen = new Set();
+  state.anime.forEach(a => {
+    const n = Array.isArray(a.sources) ? a.sources.filter(x => x && x.url).length : 0;
+    if(n) st.animeWith++; else st.animeWithout++;
+  });
+  rows.forEach(r => {
+    seen.add(r.anime.id);
+    if(r.source.enabled === false) st.disabled++;
+    const h = normalizeHealth(r.source.health);
+    if(h.state === "dead") st.dead++;
+    else if(h.state === "blocked") st.blocked++;
+    else if(h.state === "alive") st.alive++;
+    else st.unknown++;
+  });
+  return st;
+}
+/* 单条线路探测。
+ *
+ * 能力边界必须写在结果里，不能让界面替我吹：
+ * 浏览器对第三方站点既读不到状态码也读不到正文，
+ * `fetch` 抛错只说明「请求没能完成」，可能是 DNS 失败、
+ * 也可能是对方拒绝跨域。唯一能确定的是
+ * 「响应回来了没有」。所以只有这一种结论叫 alive，
+ * 其余全部归入 blocked 并附上原因，绝不写「已失效」——
+ * 失效是用户的判断，不是探测器的判断。 */
+async function probeSource(row, opts){
+  opts = opts || {};
+  const url = normalizeStreamURL(row.source.url);
+  if(!url) return { state:"blocked", at:nowIso(), detail:"网址不是有效的 http/https 地址" };
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), opts.timeout || 9000);
+  try{
+    /* mode:"no-cors" 是这里唯一可行的模式：
+       跨域请求若用默认 cors，对面没有 CORS 头就会抛 TypeError，
+       那是「浏览器不让读」而不是「网站挂了」，
+       两种情况混在一起会让探测结果毫无价值。 */
+    const res = await fetch(url, {
+      method:"GET", mode:"no-cors", redirect:"follow",
+      referrerPolicy:"no-referrer", signal:ctrl.signal, cache:"no-store"
+    });
+    /* no-cors 下的响应是不透明的：拿不到状态码，
+       但「resolve 本身就是响应」已经是我们能拿到的最强证据。 */
+    if(res && (res.type === "opaque" || res.status === 0 || res.ok)){
+      return { state:"alive", at:nowIso(),
+        detail:"服务器有响应（跨域限制下无法确认能否播放）" };
+    }
+    return { state:"blocked", at:nowIso(), detail:"HTTP " + (res ? res.status : "?") };
+  }catch(e){
+    const name = String(e && e.name || "");
+    if(name === "AbortError") return { state:"blocked", at:nowIso(), detail:"9 秒内没有响应（网络不通或对方在限流）" };
+    return { state:"blocked", at:nowIso(),
+      detail:"请求未能完成：" + ((e && e.message) || name || "未知原因") };
+  }finally{ clearTimeout(timer); }
+}
+function nowIso(){ return new Date().toISOString(); }
+
+/* ---- 台账写操作 ----
+   全部统一走「改内存对象 → 落盘 → 返回成功与否」，
+   且落盘刻意用 Repo.put 而不是 saveAnime：
+   台账整理（改备注、标失效、清重复）不是用户编辑作品内容，
+   用 saveAnime 会 touch() 把 updatedAt 刷成现在，
+   于是「最近添加」排序会因为整理了一次线路而全库乱序。 */
+async function persistAnimeQuiet(a){
+  return await Repo.put("anime", a).then(() => true).catch(err => {
+    toast("保存失败：" + (err && err.message || err), "err");
+    return false;
+  });
+}
+/* 更新一条线路的字段。changes 里出现 undefined 表示「不动这个键」，
+   这样调用方不必先读一遍旧值，也不会误把未传的字段清空。 */
+async function updateSource(row, changes){
+  const s = row.source;
+  Object.keys(changes).forEach(k => {
+    if(changes[k] === undefined) return;
+    if(k === "health"){ s.health = normalizeHealth(changes[k]); return; }
+    s[k] = changes[k];
+  });
+  return await persistAnimeQuiet(row.anime);
+}
+/* 删除一条线路。删掉的可能正是当前线路，
+   此时必须把 activeSourceId 让给剩下的第一条 ——
+   留着悬空 id 的表现是详情页显示一个已不存在的线路名。 */
+async function deleteSource(row){
+  const a = row.anime, s = row.source;
+  const name = sourceDisplayName(s);
+  const before = a.sources.length;
+  a.sources = a.sources.filter(x => x.id !== s.id);
+  if(a.sources.length === before) return false;
+  if(a.activeSourceId === s.id) a.activeSourceId = (a.sources[0] || {}).id || "";
+  syncLegacyStreamFields(a);
+  const ok = await persistAnimeQuiet(a);
+  return ok ? { removed:name, left:a.sources.length } : null;
+}
+/* 旧字段 a.streamUrl/streamEp 要跟着当前线路走。
+   详情页与待机屏仍有读它们的地方，不同步的话
+   「删掉了正在用的那条」之后，页面上还挂着已删线路的集数。 */
+function syncLegacyStreamFields(a){
+  const nx = activeSourceOf(a);
+  a.streamUrl = nx ? nx.url : "";
+  a.streamEp = nx ? nx.ep : null;
+  a.streamUrlAt = nx ? (nx.savedAt || nowIso()) : "";
+}
+/* 批量删除。返回逐条结果而不是一个布尔：
+   界面要能说清「删了 3 条、2 条没删掉」，否则用户会以为全部成功。 */
+async function deleteSources(rows){
+  const okNames = [], failNames = [];
+  for(const r of rows){
+    const res = await deleteSource(r);
+    if(res) okNames.push(res.removed); else failNames.push(sourceDisplayName(r.source));
+  }
+  return { removed:okNames, failed:failNames };
+}
+/* 同一作品内按「网址 + 集数」判重。
+   addSourceFromInput 加新线路时已经拦过一次，
+   这里防的是更早版本/导入数据带进来的重复。 */
+function findDuplicateIn(a, url, ep){
+  return (a.sources || []).find(s =>
+    s.url === url && (s.ep == null || ep == null || s.ep === ep)) || null;
+}
+/* 同一部作品内按「网址 + 集数」判重。
+   注意遍历的是**作品**而不是台账行：
+   一部作品在台账里有几行，就会在外层被访问几次，
+   若按行遍历再回头扫全作品线路，同一组重复会被报告 N 次 ——
+   表现为「发现 2 条重复」，点去重却只删得掉 1 条。 */
+function ledgerDuplicates(rows){
+  const out = [];
+  const seenAnime = new Set();
+  (rows || []).forEach(r => {
+    const a = r.anime;
+    if(!a || seenAnime.has(a.id)) return;
+    seenAnime.add(a.id);
+    const seen = new Map();
+    (a.sources || []).forEach(s => {
+      if(!s || !s.url) return;
+      const k = s.url + "|" + (s.ep == null ? "" : s.ep);
+      if(seen.has(k)) out.push({ anime:a, source:s, keepId:seen.get(k) });
+      else seen.set(k, s.id);
+    });
+  });
+  return out;
+}
+/* 标记失效 / 恢复。走「用户判断」通道：
+   探测只能给「可达/不可达」，「这条彻底废了」是用户的结论。 */
+async function markSourceDead(row, dead){
+  return await updateSource(row, {
+    health: dead
+      ? { state:"dead", at:nowIso(), detail:"用户手动标记失效" }
+      : { state:"unknown", at:"", detail:"" }
+  });
 }
 
 /* 外部播放器区。
@@ -5909,6 +6231,14 @@ function renderStreamLauncher(a){
       "<span>已保存 " + list.length + " 条线路，当前使用「" +
       esc(act ? (act.name || "线路") : "—") + "」。播放时点控制条上的「选源」可随时切换。</span></div>"
     : "";
+  /* 失效与停用的条数：这两类线路仍然占着选源列表，
+     不提示的话用户会以为「保存了 N 条就等于有 N 条能用」。 */
+  const badCount = list.filter(s => !sourceUsable(s)).length;
+  const warnBox = badCount
+    ? '<div class="note-box is-warn mt-3">' + ic("warning",16) +
+      "<span>其中 " + badCount + " 条已被停用或标记失效，播放时会被跳过。" +
+      '<button class="btn btn-sm" type="button" data-st="manage">去管理</button></span></div>'
+    : "";
   return '<div class="panel stream-panel mt-4"><div class="panel-head">' + ic("film",16) +
     "<h3>播放源</h3>" +
     '<span class="hint">' + (a ? "按这部作品保存，换番不会互相覆盖" : "临时片源（未选作品）") + "</span></div>" +
@@ -5933,7 +6263,8 @@ function renderStreamLauncher(a){
       (has ? '<button class="btn" type="button" data-st="open">' + ic("external",14) + "新标签打开</button>" : "") +
       (list.length > 1 ? '<button class="btn" type="button" data-st="clear-one">清除当前线路</button>' : "") +
       (list.length > 1 ? '<button class="btn btn-sm" type="button" data-st="clear">清除全部</button>' : "") +
-    "</div>" + lineList +
+      (a ? '<button class="btn btn-sm" type="button" data-st="manage">' + ic("link",14) + "播放源管理</button>" : "") +
+    "</div>" + lineList + warnBox +
     /* 状态条在两种形态下都必须存在（带 id="st-status"）：
        bindStreamLauncher 的 setStatus 只往这个 id 写。
        缺了它，用户看到的就只有静态提示，出错了也不知道。 */
@@ -6071,9 +6402,17 @@ function bindStreamLauncher(root, a){
     mount.hidden = false;
     dropPlayer();
     setStatus("warn", "正在准备播放…");
+    /* 记一次「最近使用」。走 Repo.put 而不是 saveAnime：
+       播放不该算作编辑作品内容，用 saveAnime 会把 updatedAt 刷成现在，
+       于是「随便点一次播放」就能把老作品顶到「最近添加」最前面。 */
+    const usedAct = activeSourceOf(a);
+    if(a && usedAct){
+      usedAct.lastUsedAt = nowIso();
+      persistAnimeQuiet(a);
+    }
     /* 直链走原生播放器：能读时间轴，所以续播、倍速、片尾自动下一集都能做。 */
     if(isDirectPlayable(raw)){
-      const act = activeSourceOf(a) || normalizeSource({ url:raw }, 0, new Date().toISOString());
+      const act = usedAct || normalizeSource({ url:raw }, 0, new Date().toISOString());
       vp = mountVideoPlayer(mount, act, a, evt => {
         if(evt.failed && evt.message) setStatus("err", evt.message);
         if(evt.switchTo && vp){ vp.switchTo(evt.switchTo); }
@@ -6121,6 +6460,14 @@ function bindStreamLauncher(root, a){
       return;
     }
     if(act === "play"){ await play(); return; }
+    if(act === "manage"){
+      /* 带上作品 id：管理页收到 focusAnime 后自动筛出这部作品，
+         省掉用户在几十行台账里翻找这部番的过程。 */
+      ledgerState.q = a && (a.titleCn || a.titleOriginal) ? (a.titleCn || a.titleOriginal) : "";
+      ledgerState.filter = ""; ledgerState.picked = [];
+      go("sources");
+      return;
+    }
     if(act === "open"){
       const u = normalizeStreamURL(effectiveURL()) || (activeSourceOf(a) || {}).url;
       if(!u){ setStatus("err", "网址无效，无法打开"); return; }
@@ -6616,6 +6963,562 @@ registerPage({
     if(state.routeId) renderDetail(root, state.routeId);
     else renderStandby(root);
   }
+});
+
+/* ============================================================
+   16.9 播放源管理（台账页）
+   ------------------------------------------------------------
+   逐部管理线路解决不了三件事，这一页专门解决它们：
+     ① 一眼看出哪些线路坏了（探测 + 人工标记失效）
+     ② 批量处置（一次清掉全库标记失效的 / 重复的线路）
+     ③ 补录与修改（不用回到某部作品的详情页里找输入框）
+   ============================================================ */
+const ledgerState = {
+  q: "",
+  /* 状态筛选。空串 = 全部；其余对应 sourceFlags 的语义 */
+  filter: "",
+  sort: "anime",
+  picked: [],          /* 勾选的 "作品id|线路id" 复合键 */
+  probing: false,
+  progress: null       /* { done, total, label } */
+};
+const LEDGER_FILTERS = [
+  { key:"",          name:"全部" },
+  { key:"active",    name:"使用中" },
+  { key:"dead",      name:"已失效" },
+  { key:"unknown",   name:"未检测" },
+  { key:"disabled",  name:"已停用" },
+  { key:"no-source", name:"无播放源" }
+];
+const LEDGER_SORTS = [
+  { key:"anime",  name:"按作品" },
+  { key:"health", name:"按状态（问题优先）" },
+  { key:"newest", name:"按添加时间" },
+  { key:"host",   name:"按站点" }
+];
+/* 一行的复合键。source 为 null（待办行）时返回空串 ——
+   空串永远不会出现在 ledgerState.picked 里，天然被排除在批量操作外。 */
+function ledgerKey(row){
+  if(!row || !row.source) return "";
+  return row.anime.id + "|" + row.source.id;
+}
+/* 台账健康度排序键：问题越重越靠前。
+   排序必须把「已失效」放最前 —— 用户打开这一页就是来处理问题的，
+   把有问题的行排在最后一屏等于没做。 */
+function ledgerHealthRank(row){
+  const h = normalizeHealth(row.source.health);
+  if(h.state === "dead") return 0;
+  if(row.source.enabled === false) return 1;
+  if(h.state === "blocked") return 2;
+  if(h.state === "unknown") return 3;
+  return 4;
+}
+function filterLedgerRows(rows){
+  const q = normalize(ledgerState.q);
+  let out = rows.filter(r => {
+    if(ledgerState.filter === "no-source") return false;   /* 由下面的单独分支处理 */
+    const flags = sourceFlags(r).map(f => f.id);
+    if(ledgerState.filter && flags.indexOf(ledgerState.filter) < 0) return false;
+    if(!q) return true;
+    const a = r.anime;
+    const hay = normalize([
+      a.titleCn, a.titleOriginal, (a.aliases || []).join(" "),
+      r.source.name, r.source.url, r.source.note, hostOf(r.source.url)
+    ].join(" "));
+    return hay.indexOf(q) >= 0;
+  });
+  /* 「无播放源」筛的是作品而不是线路，只能单独构造行 */
+  if(ledgerState.filter === "no-source"){
+    out = state.anime.filter(a => !(Array.isArray(a.sources) && a.sources.some(s => s && s.url)))
+      .filter(a => !q || normalize([a.titleCn, a.titleOriginal].join(" ")).indexOf(q) >= 0)
+      .map(a => ({ anime:a, source:null }));
+  }
+  const pick = ledgerState.sort;
+  const byTitle = (a, b) =>
+    String(a.anime.titleCn || a.anime.titleOriginal || "").localeCompare(
+      String(b.anime.titleCn || b.anime.titleOriginal || ""), "zh");
+  /* 三个按线路字段排的档位（状态/时间/站点）对 source 为 null 的行
+     全部要退化成「按片名排」。这一层必须有兜底：
+     「无播放源」那一档构出来的行 source 就是 null，
+     而用户很可能正好在这一档切排序 —— 那一刻整页会崩成
+     「页面渲染出错」，且只在特定操作顺序下复现。 */
+  const hasSrc = list => list.filter(r => r.source);
+  const onlyNull = list => list.filter(r => !r.source);
+  const mergeSorted = (real, fake) => real.concat(fake.sort(byTitle));
+  if(pick === "health"){
+    const real = hasSrc(out).slice().sort((a, b) =>
+      (ledgerHealthRank(a) - ledgerHealthRank(b)) || byTitle(a, b));
+    out = mergeSorted(real, onlyNull(out));
+  }else if(pick === "newest"){
+    const real = hasSrc(out).slice().sort((a, b) =>
+      String(b.source.savedAt || "").localeCompare(String(a.source.savedAt || "")) || byTitle(a, b));
+    out = mergeSorted(real, onlyNull(out));
+  }else if(pick === "host"){
+    const real = hasSrc(out).slice().sort((a, b) =>
+      hostOf(a.source.url).localeCompare(hostOf(b.source.url)) || byTitle(a, b));
+    out = mergeSorted(real, onlyNull(out));
+  }else{
+    out = out.slice().sort(byTitle);
+  }
+  return out;
+}
+function pickedLedgerRows(all){
+  const set = new Set(ledgerState.picked);
+  return all.filter(r => r.source && set.has(ledgerKey(r)));
+}
+function ledgerStatHTML(rows){
+  const st = sourceLedgerStats(rows);
+  const cell = (n, label, tone) =>
+    '<div class="ledger-stat' + (tone ? " tone-" + tone : "") + '"><b>' + n + "</b><span>" + label + "</span></div>";
+  return '<div class="ledger-stats">' +
+    cell(st.total, "线路总数", st.total ? "" : "") +
+    cell(st.alive, "探测可达", st.alive ? "ok" : "") +
+    cell(st.dead, "已标记失效", st.dead ? "err" : "") +
+    cell(st.blocked, "访问不通", st.blocked ? "warn" : "") +
+    cell(st.unknown, "未检测", "warn") +
+    cell(st.disabled, "已停用", "") +
+    cell(st.animeWithout, "作品尚无片源", st.animeWithout ? "warn" : "") +
+    "</div>";
+}
+function ledgerRowHTML(row, picked){
+  const a = row.anime, s = row.source;
+  /* 无播放源的作品：这一行不是线路，是一条待办 */
+  if(!s){
+    return '<tr class="ledger-empty-row" data-anime="' + attr(a.id) + '">' +
+      '<td class="col-check"></td>' +
+      '<td class="col-src"><div class="truncate" style="max-width:280px">' +
+        esc(a.titleCn || a.titleOriginal || "未命名") + "</div>" +
+        '<span class="url-cell">尚未添加任何播放源</span></td>' +
+      '<td colspan="5"><span class="hint">在放映厅打开这部作品即可添加线路</span></td>' +
+      '<td class="nowrap"><button class="btn btn-sm" type="button" data-act="open-anime" data-id="' +
+        attr(a.id) + '">去添加</button></td></tr>';
+  }
+  const flags = sourceFlags(row).map(f =>
+    '<span class="flag tone-' + f.tone + '">' + esc(f.text) + "</span>").join("");
+  const dead = normalizeHealth(s.health).state === "dead";
+  const probing = ledgerState.probing && ledgerState.progress &&
+    ledgerState.progress.keys && ledgerState.progress.keys.has(ledgerKey(row));
+  const ep = s.ep == null ? "整季" : "第 " + s.ep + " 集";
+  const meta = [s.resolution, ep].filter(Boolean).join(" · ");
+  return '<tr class="' + (dead ? "is-dead " : "") + (picked ? "is-picked " : "") + (probing ? "is-probing" : "") +
+      '" data-key="' + attr(ledgerKey(row)) + '" data-anime="' + attr(a.id) + '">' +
+    '<td class="col-check"><input type="checkbox" data-act="pick" aria-label="选择 ' + attr(sourceDisplayName(s)) + '"></td>' +
+    '<td class="col-src"><div class="truncate" style="max-width:260px">' +
+      esc(a.titleCn || a.titleOriginal || "未命名") + "</div>" +
+      '<span class="url-cell" title="' + attr(s.url) + '">' + esc(s.url) + "</span></td>" +
+    "<td>" + esc(sourceDisplayName(s)) + (meta ? ' <span class="hint">' + esc(meta) + "</span>" : "") + "</td>" +
+    '<td><div class="flag-row">' + flags + "</div></td>" +
+    '<td class="note-cell">' + (s.note ? esc(s.note) : '<span class="hint">—</span>') + "</td>" +
+    '<td class="nowrap small muted">' +
+      "<div>" + (normalizeHealth(s.health).at ? esc(String(normalizeHealth(s.health).at).slice(0, 10)) : "—") + "</div>" +
+      "<div>" + (s.lastUsedAt ? "用过 " + esc(String(s.lastUsedAt).slice(0, 10)) : "") + "</div></td>" +
+    '<td class="nowrap">' +
+      '<button class="btn btn-sm btn-icon" type="button" data-act="probe" title="探测这条线路" aria-label="探测">' + ic("refresh",14) + "</button> " +
+      '<button class="btn btn-sm btn-icon" type="button" data-act="edit" title="编辑" aria-label="编辑">' + ic("edit",14) + "</button> " +
+      '<button class="btn btn-sm btn-icon' + (s.enabled === false ? " is-on" : "") + '" type="button" data-act="toggle" title="停用/启用" aria-label="停用或启用">' + ic("eye",14) + "</button> " +
+      '<button class="btn btn-sm btn-icon" type="button" data-act="dead" title="' + (dead ? "恢复" : "标记失效") + '" aria-label="标记失效或恢复">' + ic(dead ? "refresh" : "warning",14) + "</button> " +
+      '<button class="btn btn-sm btn-icon" type="button" data-act="open" title="新标签打开" aria-label="新标签打开">' + ic("external",14) + "</button> " +
+      '<button class="btn btn-sm btn-icon" type="button" data-act="del" title="删除线路" aria-label="删除线路">' + ic("trash",14) + "</button>" +
+    "</td></tr>";
+}
+function renderLedger(root){
+  const all = sourceLedger();
+  const rows = filterLedgerRows(all);
+  const stats = sourceLedgerStats(all);
+  const dupes = ledgerDuplicates(all);
+  const hasFilter = !!(ledgerState.q || ledgerState.filter || ledgerState.sort !== "anime" || ledgerState.picked.length);
+
+  let html = '<div class="filterbar">' +
+    '<div class="field field-wide ledger-q"><label for="led-q">搜索线路</label>' +
+      '<div class="search-wrap">' + ic("search",16) +
+      '<input class="input" id="led-q" type="search" placeholder="片名 / 线路名 / 网址 / 站点 / 备注" value="' + attr(ledgerState.q) + '"></div></div>' +
+    '<div class="field"><label for="led-filter">状态</label><select class="select" id="led-filter">' +
+      LEDGER_FILTERS.map(f => {
+        /* 每个选项带上数量，用户不必先筛一遍才知道哪一类有问题 */
+        const n = f.key === ""
+          ? all.length + state.anime.filter(a => !(a.sources || []).some(s => s && s.url)).length
+          : (f.key === "no-source"
+              ? state.anime.filter(a => !(a.sources || []).some(s => s && s.url)).length
+              : all.filter(r => sourceFlags(r).some(x => x.id === f.key)).length);
+        return '<option value="' + attr(f.key) + '"' + (ledgerState.filter === f.key ? " selected" : "") + ">" +
+          esc(f.name) + "（" + n + "）</option>";
+      }).join("") +
+    "</select></div>" +
+    '<div class="field"><label for="led-sort">排序</label><select class="select" id="led-sort">' +
+      LEDGER_SORTS.map(s => '<option value="' + attr(s.key) + '"' + (ledgerState.sort === s.key ? " selected" : "") + ">" +
+        esc(s.name) + "</option>").join("") +
+    "</select></div>" +
+    '<div class="filterbar-right">' +
+      (hasFilter ? '<button class="btn btn-sm" type="button" data-act="reset">' + ic("close",14) + "重置</button>" : "") +
+      '<button class="btn btn-sm btn-primary" type="button" data-act="probe-all"' +
+        (all.length ? "" : " disabled") + ">" + ic("refresh",14) + "批量探测</button>" +
+    "</div></div>";
+
+  html += ledgerStatHTML(all);
+
+  /* 需要用户知道、但不该自动替他决定的事：重复线路不自动删，
+     因为「同址不同集」可能是合法的两条。 */
+  if(dupes.length){
+    html += '<div class="note-box is-warn mb-3">' + ic("warning",16) +
+      "<span>发现 " + dupes.length + " 条重复线路（同一部作品里网址与集数完全相同，" +
+      '可能是反复添加留下的）。<button class="btn btn-sm" type="button" data-act="dedupe">去重</button>' +
+      "</span></div>";
+  }
+  /* 全库失效时给出的是出路而不是结论 */
+  if(stats.total && !stats.alive && !stats.unknown && !stats.blocked){
+    html += '<div class="note-box is-err mb-3">' + ic("warning",16) +
+      "<span>库中所有线路都已被标记失效，播放时会无源可用。" +
+      '<button class="btn btn-sm" type="button" data-act="revive-all">全部恢复</button></span></div>';
+  }
+  if(ledgerState.probing && ledgerState.progress){
+    const p = ledgerState.progress;
+    const pct = p.total ? Math.round(p.done / p.total * 100) : 0;
+    html += '<div class="note-box mb-3"><div style="flex:1">' +
+      '<div class="probe-bar"><span>' + esc(p.label) + " " + p.done + " / " + p.total + "</span>" +
+      '<span style="margin-left:auto">' + pct + "%</span></div>" +
+      '<div class="progress pulse mt-2" style="height:6px"><i style="width:' + pct + '%"></i></div>' +
+      "</div></div>";
+  }
+
+  html += '<div class="row gap-2 mb-3" style="flex-wrap:wrap">' +
+    '<button class="btn btn-sm" type="button" data-act="pick-all"' + (rows.length ? "" : " disabled") + ">" +
+      ic("check",14) + "全选本页</button>" +
+    '<button class="btn btn-sm" type="button" data-act="pick-none"' + (ledgerState.picked.length ? "" : " disabled") + ">" +
+      ic("close",14) + "取消选择（" + ledgerState.picked.length + "）</button>" +
+    '<button class="btn btn-sm" type="button" data-act="bulk-disable"' + (ledgerState.picked.length ? "" : " disabled") + ">" +
+      ic("eye",14) + "停用所选</button>" +
+    '<button class="btn btn-sm" type="button" data-act="bulk-enable"' + (ledgerState.picked.length ? "" : " disabled") + ">" +
+      ic("check",14) + "启用所选</button>" +
+    '<button class="btn btn-sm" type="button" data-act="bulk-dead"' + (ledgerState.picked.length ? "" : " disabled") + ">" +
+      ic("warning",14) + "标记失效</button>" +
+    '<button class="btn btn-danger btn-sm" type="button" data-act="bulk-del"' + (ledgerState.picked.length ? "" : " disabled") + ">" +
+      ic("trash",14) + "删除所选</button>" +
+    "</div>";
+
+  html += rows.length
+    ? '<div class="table-wrap scroll ledger-table"><table class="grid-table"><thead><tr>' +
+        '<th class="col-check"></th><th class="col-src">作品 / 网址</th><th>线路</th><th>状态</th>' +
+        "<th>备注</th><th>检测 / 使用</th><th>操作</th>" +
+      "</tr></thead><tbody>" + rows.map(r =>
+        /* ledgerKey 要读 row.source.id，而「无播放源」档位的行 source 是 null。
+           选中态判定必须放在渲染函数内部去问「这行有没有线路」，
+           不能在 map 里无脑调 ledgerKey —— 那样整页会崩成
+           「页面渲染出错」，而且只在切到那一档时复现。 */
+        ledgerRowHTML(r, r.source && ledgerState.picked.indexOf(ledgerKey(r)) >= 0)).join("") +
+      "</tbody></table></div>"
+    : '<div class="state-box">' + ic(all.length ? "search" : "link", 40) +
+      (all.length
+        ? "<h2>没有符合条件的线路</h2><p>换个状态或清空搜索词。</p>" +
+          '<div class="row"><button class="btn" type="button" data-act="reset">重置筛选</button></div>'
+        : "<h2>还没有任何播放源</h2><p>到放映厅打开一部作品，在「播放源」里粘一个网址即可。</p>" +
+          '<div class="row"><button class="btn btn-primary" type="button" data-act="goto-theater">去放映厅</button></div>') +
+      "</div>";
+
+  root.innerHTML = html;
+  bindLedger(root, all, rows);
+}
+function rerenderLedger(){ rerender(); }
+
+/* ---- 事件绑定 ----
+   用事件委托：台账的按钮全是渲染时批量生成的，
+   逐个 addEventListener 在 200 行表格里既慢又容易漏。 */
+function bindLedger(root, all, rows){
+  const q = root.querySelector("#led-q");
+  if(q) q.addEventListener("input", debounce(() => {
+    ledgerState.q = q.value;
+    rerenderLedger();
+    const n = root.querySelector("#led-q");
+    if(n){ n.focus(); n.setSelectionRange(n.value.length, n.value.length); }
+  }, 280));
+  const f = root.querySelector("#led-filter");
+  if(f) f.addEventListener("change", () => { ledgerState.filter = f.value; rerenderLedger(); });
+  const s = root.querySelector("#led-sort");
+  if(s) s.addEventListener("change", () => { ledgerState.sort = s.value; rerenderLedger(); });
+
+  /* 找行数据。行由 render 生成，用 key 反查，避免把整个 anime 塞进 DOM 属性 */
+  const rowByKey = (key) => all.find(r => r.source && ledgerKey(r) === key) || null;
+
+  root.addEventListener("change", (e) => {
+    const box = e.target.closest('[data-act="pick"]');
+    if(!box) return;
+    const key = box.closest("tr").dataset.key;
+    const i = ledgerState.picked.indexOf(key);
+    if(box.checked && i < 0) ledgerState.picked.push(key);
+    else if(!box.checked && i >= 0) ledgerState.picked.splice(i, 1);
+    box.closest("tr").classList.toggle("is-picked", box.checked);
+    rerenderLedger();
+  });
+
+  root.addEventListener("click", async (e) => {
+    const btn = e.target.closest("[data-act]");
+    if(!btn || !root.contains(btn)) return;
+    const act = btn.dataset.act;
+    const tr = btn.closest("tr");
+    const row = tr && tr.dataset.key ? rowByKey(tr.dataset.key) : null;
+
+    if(act === "reset"){
+      ledgerState.q = ""; ledgerState.filter = ""; ledgerState.sort = "anime"; ledgerState.picked = [];
+      rerenderLedger(); return;
+    }
+    if(act === "goto-theater"){ go("theater"); return; }
+    if(act === "open-anime"){ go("theater", btn.dataset.id); return; }
+    if(act === "pick-all"){
+      rows.forEach(r => {
+        if(!r.source) return;
+        const k = ledgerKey(r);
+        if(ledgerState.picked.indexOf(k) < 0) ledgerState.picked.push(k);
+      });
+      rerenderLedger(); return;
+    }
+    if(act === "pick-none"){ ledgerState.picked = []; rerenderLedger(); return; }
+    if(act === "probe-all"){ await probeAll(); return; }
+    if(act === "probe"){ if(row) await probeOne(row); return; }
+    if(act === "edit"){ if(row) openSourceEditor(row); return; }
+    if(act === "open"){
+      if(row) window.open(normalizeStreamURL(row.source.url), "_blank", "noopener,noreferrer");
+      return;
+    }
+    if(act === "toggle"){
+      if(!row) return;
+      const off = row.source.enabled === false;
+      await updateSource(row, { enabled:off });
+      toast(off ? "已启用「" + sourceDisplayName(row.source) + "」" : "已停用「" + sourceDisplayName(row.source) + "」", "ok");
+      rerenderLedger(); return;
+    }
+    if(act === "dead"){
+      if(!row) return;
+      const dead = normalizeHealth(row.source.health).state === "dead";
+      await markSourceDead(row, !dead);
+      toast(dead ? "已恢复为可用" : "已标记失效：选源时会跳过它", "ok");
+      rerenderLedger(); return;
+    }
+    if(act === "del"){
+      if(!row) return;
+      const name = sourceDisplayName(row.source);
+      const ok = await confirmDialog({
+        title:"删除线路", danger:true, okText:"删除",
+        html:"确定删除《" + esc(row.anime.titleCn || row.anime.titleOriginal || "未命名") + "》的线路「" + esc(name) + "」吗？<br>" +
+          "<span class=\"hint\">只删这一条线路，不影响作品本身。此操作无法撤销。</span>"
+      });
+      if(!ok) return;
+      const res = await deleteSource(row);
+      ledgerState.picked = ledgerState.picked.filter(k => k !== ledgerKey(row));
+      toast(res ? ("已删除，还剩 " + res.left + " 条线路") : "删除失败", res ? "ok" : "err");
+      rerenderLedger(); return;
+    }
+    if(act === "bulk-disable" || act === "bulk-enable"){
+      const list = pickedLedgerRows(all);
+      if(!list.length) return;
+      const on = act === "bulk-enable";
+      for(const r of list) await updateSource(r, { enabled:on });
+      toast((on ? "已启用 " : "已停用 ") + list.length + " 条线路", "ok");
+      rerenderLedger(); return;
+    }
+    if(act === "bulk-dead"){
+      const list = pickedLedgerRows(all);
+      if(!list.length) return;
+      for(const r of list) await markSourceDead(r, true);
+      toast("已把 " + list.length + " 条线路标记为失效", "ok");
+      rerenderLedger(); return;
+    }
+    if(act === "bulk-del"){
+      const list = pickedLedgerRows(all);
+      if(!list.length) return;
+      const ok = await confirmDialog({
+        title:"批量删除线路", danger:true, okText:"删除 " + list.length + " 条",
+        html:"确定删除选中的 <b>" + list.length + "</b> 条线路吗？<br>" +
+          "<span class=\"hint\">涉及 " + new Set(list.map(r => r.anime.id)).size +
+          " 部作品，只删线路不删作品。删除后无法撤销，建议先导出备份。</span>"
+      });
+      if(!ok) return;
+      const res = await deleteSources(list);
+      ledgerState.picked = [];
+      toast(res.failed.length
+        ? ("已删除 " + res.removed.length + " 条，" + res.failed.length + " 条失败：" + res.failed.join("、"))
+        : ("已删除 " + res.removed.length + " 条线路"), res.failed.length ? "warn" : "ok");
+      rerenderLedger(); return;
+    }
+    if(act === "dedupe"){
+      const ok = await confirmDialog({
+        title:"清理重复线路", danger:true, okText:"清理",
+        html:"将删除 <b>" + dupes.length + "</b> 条重复线路（同一部作品里网址与集数完全相同的多余项），<br>" +
+          "每组重复保留最早添加的那一条。<span class=\"hint\">此操作无法撤销。</span>"
+      });
+      if(!ok) return;
+      let n = 0;
+      for(const d of dupes){ if(await deleteSource(d)) n++; }
+      toast(n ? ("已清理 " + n + " 条重复线路") : "没有可清理的重复项", n ? "ok" : "warn");
+      rerenderLedger(); return;
+    }
+    if(act === "revive-all"){
+      const dead = all.filter(r => normalizeHealth(r.source.health).state === "dead");
+      for(const r of dead) await markSourceDead(r, false);
+      toast("已恢复 " + dead.length + " 条线路", "ok");
+      rerenderLedger(); return;
+    }
+  });
+}
+/* 逐条探测。整表重渲会打断用户正在点的按钮，
+   所以探测期间就地更新状态文本，只有开始/结束才重绘整页。 */
+async function probeOne(row){
+  const res = await probeSource(row);
+  await updateSource(row, { health:res });
+  toast(sourceDisplayName(row.source) + "：" + HEALTH_TEXT[res.state] + " · " + res.detail,
+    res.state === "alive" ? "ok" : "warn", 4200);
+  rerenderLedger();
+}
+/* 批量探测：串行 + 每条之间让出主线程。
+   并发 5 条以上会让所有请求同时超时（对方站点排队把我们当攻击），
+   那种情况下拿回一堆「不通」，比不探测更糟。 */
+async function probeAll(){
+  const all = sourceLedger();
+  if(!all.length) return;
+  ledgerState.probing = true;
+  ledgerState.progress = { done:0, total:all.length, label:"正在探测", keys:new Set() };
+  rerenderLedger();
+  let ok = 0, blocked = 0, dead = 0;
+  for(const row of all){
+    ledgerState.progress.keys.add(ledgerKey(row));
+    const res = await probeSource(row);
+    /* 探测结果只覆盖「未检测/被拒」两类：
+       用户手动标的失效是判断，不是观测，不能被一次网络波动抹掉。 */
+    const cur = normalizeHealth(row.source.health);
+    if(cur.state !== "dead") await updateSource(row, { health:res });
+    if(res.state === "alive") ok++; else blocked++;
+    ledgerState.progress.done++;
+    /* 每 5 条刷一次进度，避免上千行反复重排 */
+    if(ledgerState.progress.done % 5 === 0) await new Promise(r => setTimeout(r, 0));
+  }
+  ledgerState.probing = false;
+  ledgerState.progress = null;
+  toast("探测完成：" + ok + " 条可达，" + blocked + " 条不通", ok ? "ok" : "warn", 5000);
+  rerenderLedger();
+}
+/* 线路编辑弹窗。字段比详情页多（备注、状态、优先级），
+   因为这里的用户意图是「整理」，不是「随手记一条」。 */
+function openSourceEditor(row){
+  const a = row.anime, s = row.source;
+  const dead = normalizeHealth(s.health).state === "dead";
+  const root = openModal({
+    title:"编辑线路",
+    body:
+      '<p class="small muted mb-3">《' + esc(a.titleCn || a.titleOriginal || "未命名") + "》 · " +
+      '<span class="url-cell">' + esc(s.url) + "</span></p>" +
+      '<div class="led-form-grid">' +
+        '<div class="field span-2"><label for="ls-url">播放网址</label>' +
+          '<input class="input" id="ls-url" type="url" inputmode="url" spellcheck="false" value="' + attr(s.url) + '"></div>' +
+        '<div class="field"><label for="ls-name">线路名称</label>' +
+          '<input class="input" id="ls-name" type="text" maxlength="40" value="' + attr(s.name || "") + '"></div>' +
+        '<div class="field"><label for="ls-ep">对应集数</label>' +
+          '<input class="input" id="ls-ep" type="number" min="1" step="1" placeholder="留空 = 整季通用" value="' +
+            (s.ep == null ? "" : s.ep) + '"></div>' +
+        '<div class="field"><label for="ls-res">分辨率</label><select class="select" id="ls-res">' +
+          '<option value="">未标注</option>' +
+          RESOLUTION_ORDER.map(r => '<option value="' + r + '"' + (s.resolution === r ? " selected" : "") + ">" + r + "</option>").join("") +
+          "</select></div>" +
+        '<div class="field"><label for="ls-tier">线路优先级</label>' +
+          '<select class="select" id="ls-tier">' +
+          [0,1,2,3,4,5].map(t => '<option value="' + t + '"' + (Number(s.tier) === t ? " selected" : "") +
+            ">" + t + " · " + ["最快","较快","普通","较慢","最慢","备用"][t] + "</option>").join("") +
+          "</select></div>" +
+        '<div class="field"><label for="ls-kind">字幕形态</label><select class="select" id="ls-kind">' +
+          SUBTITLE_KINDS.map(k => '<option value="' + k + '"' + (s.subtitleKind === k ? " selected" : "") + ">" +
+            ({ EXTERNAL:"外挂字幕（可关闭）", CLOSED:"内封字幕轨", EMBEDDED:"硬字幕（不可关闭）" })[k] + "</option>").join("") +
+          "</select></div>" +
+        '<div class="field"><label for="ls-subs">字幕语言（可多选）</label>' +
+          '<div class="row gap-2" id="ls-subs" style="flex-wrap:wrap">' +
+          SUBTITLE_ORDER.map(l => '<label class="checkline small"><input type="checkbox" value="' + l + '"' +
+            ((s.subtitles || []).indexOf(l) >= 0 ? " checked" : "") + "><span>" + l + "</span></label>").join("") +
+          "</div></div>" +
+        '<div class="field span-2"><label for="ls-note">备注（只给自己看）</label>' +
+          '<input class="input" id="ls-note" type="text" maxlength="200" placeholder="例如：需要登录 / 1080P 有慢放 / 备用线路" value="' +
+          attr(s.note || "") + '"></div>' +
+        '<div class="field"><label>启用状态</label>' +
+          '<label class="checkline"><input type="checkbox" id="ls-enabled"' + (s.enabled !== false ? " checked" : "") +
+          "><span>参与选源</span></label></div>" +
+        '<div class="field"><label>失效标记</label>' +
+          '<label class="checkline"><input type="checkbox" id="ls-dead"' + (dead ? " checked" : "") +
+          "><span>已失效（选源时跳过）</span></label></div>" +
+      "</div>" +
+      '<div class="note-box mt-3">' + ic("info",16) +
+        "<span>当前状态：" + esc(HEALTH_TEXT[normalizeHealth(s.health).state]) +
+        (normalizeHealth(s.health).at ? "（" + esc(String(normalizeHealth(s.health).at).slice(0, 16)) + "）" : "") +
+        (normalizeHealth(s.health).detail ? " · " + esc(normalizeHealth(s.health).detail) : "") + "</span></div>",
+    footer:(f) => {
+      f.innerHTML = '<span class="hint">「参与选源」与「已失效」互斥：失效线路不会再被自动选中</span><div class="grow"></div>' +
+        '<button class="btn" type="button" data-close="1">取消</button>' +
+        '<button class="btn btn-primary" type="button" id="ls-save">保存</button>';
+      f.querySelector("#ls-save").addEventListener("click", onSave);
+    }
+  });
+  async function onSave(){
+    const urlRaw = root.querySelector("#ls-url").value.trim();
+    const norm = normalizeStreamURL(urlRaw);
+    const msg = root.querySelector("#ls-msg") || (() => {
+      const d = document.createElement("div");
+      d.className = "err-text mt-2";
+      root.querySelector(".modal-body").appendChild(d);
+      return d;
+    })();
+    msg.textContent = "";
+    if(!norm){ msg.textContent = "网址无效：只接受 http / https 开头的地址"; return; }
+    const epRaw = root.querySelector("#ls-ep").value.trim();
+    let ep = null;
+    if(epRaw !== ""){
+      ep = Number(epRaw);
+      if(!Number.isInteger(ep) || ep < 1){ msg.textContent = "集数必须是大于 0 的整数"; return; }
+    }
+    /* 改成另一条已存在的线路会让台账出现重复项。
+       这里只提示不阻止：用户可能就是要指向同一条（比如改名后重排）。 */
+    const dup = findDuplicateIn(a, norm, ep);
+    if(dup && dup.id !== s.id && !msg.textContent){
+      msg.textContent = "提示：这部作品里已经有一条相同网址与集数的线路（「" +
+        sourceDisplayName(dup) + "」），保存后会形成重复项。";
+    }
+    const subs = Array.from(root.querySelectorAll('#ls-subs input:checked')).map(i => i.value);
+    const isDead = root.querySelector("#ls-dead").checked;
+    const enabled = root.querySelector("#ls-enabled").checked;
+    const ok = await updateSource(row, {
+      url: norm,
+      name: root.querySelector("#ls-name").value.trim(),
+      ep: ep,
+      resolution: root.querySelector("#ls-res").value || null,
+      tier: Number(root.querySelector("#ls-tier").value),
+      subtitleKind: root.querySelector("#ls-kind").value,
+      subtitles: subs,
+      note: root.querySelector("#ls-note").value.trim(),
+      enabled: enabled,
+      /* 手动改动网址后旧的探测结论立刻作废：
+         拿「上一个地址的可达性」去描述新地址是在骗用户。 */
+      health: (norm !== s.url) ? { state:"unknown", at:"", detail:"" }
+        : (isDead ? { state:"dead", at:nowIso(), detail:"用户手动标记失效" }
+                  : { state:normalizeHealth(s.health).state, at:normalizeHealth(s.health).at,
+                      detail:isDead ? "" : normalizeHealth(s.health).detail })
+    });
+    if(!ok){ msg.textContent = "保存失败，请重试"; return; }
+    syncLegacyStreamFields(a);
+    await persistAnimeQuiet(a);
+    closeModal();
+    toast("线路已更新", "ok");
+    rerenderLedger();
+  }
+}
+
+registerPage({
+  id:"sources", name:"播放源", icon:"link", title:"播放源管理",
+  sub:"全库线路台账：探测失效、批量清理、按站点整理",
+  settingKey:"module_sources",
+  actions(box){
+    const all = sourceLedger();
+    const st = sourceLedgerStats(all);
+    box.innerHTML = '<span class="hint">' +
+      (all.length
+        ? "共 " + all.length + " 条线路 · " + st.dead + " 条已失效"
+        : "还没有线路") + "</span>";
+    const b = box.querySelector("[data-act=add-anime]");
+    if(b) b.addEventListener("click", () => go("library"));
+  },
+  render: renderLedger
 });
 
 /* ============================================================
@@ -8708,6 +9611,7 @@ function settingsBodyHTML(){
     html += setRow("重看转盘", "", '<label class="checkline"><input type="checkbox" data-set="module_wheel"' + (settings.module_wheel ? " checked" : "") + "><span>启用</span></label>");
     html += setRow("童年编年史", "", '<label class="checkline"><input type="checkbox" data-set="module_chronicle"' + (settings.module_chronicle ? " checked" : "") + "><span>启用</span></label>");
     html += setRow("统计图表", "关闭后首页只保留数字带与列表", '<label class="checkline"><input type="checkbox" data-set="module_charts"' + (settings.module_charts ? " checked" : "") + "><span>启用</span></label>");
+    html += setRow("播放源管理", "全库线路台账：探测失效、批量清理。关闭后侧栏不再显示该页面", '<label class="checkline"><input type="checkbox" data-set="module_sources"' + (settings.module_sources ? " checked" : "") + "><span>启用</span></label>");
     html += "</div>";
   }
   if(t === "data"){
@@ -9240,7 +10144,7 @@ async function boot(){
     ? settings.default_view : "wall";
   if(libState.view === "rows" && settings.ui_skin !== "tv") libState.view = "wall";
   libState.sort = settings.default_sort || "createdAt_desc";
-  const order = ["home","library","chronicle","wheel","theater","quotes","settings"];
+  const order = ["home","library","sources","chronicle","wheel","theater","quotes","settings"];
   PAGES.sort((a,b) => order.indexOf(a.id) - order.indexOf(b.id));
   buildNav();
   /* 窗口变宽变窄都要重算 TV 套系的列数。

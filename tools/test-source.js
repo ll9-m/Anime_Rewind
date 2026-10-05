@@ -351,8 +351,87 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
     c1.join(",") === "2160P,1440P,1080P,720P,480P", c1);
 
   const c2 = await ev(`return JSON.stringify(Object.values(EXCLUDE_REASONS))`);
-  check("四种排除原因都有中文说明",
-    c2.length === 4 && c2.every(x => /[一-龥]/.test(x)), c2);
+  /* 这里是「每一项都有中文说明」，不是「一共有几项」。
+     早先写死成 length === 4，加了「已停用/已标记失效」两个原因后
+     立刻变红 —— 那种断言测的是数字，不是行为，
+     下次再加一个排除原因又得来改一遍。 */
+  check("每种排除原因都有中文说明", c2.length >= 4 && c2.every(x => /[一-龥]/.test(x)), c2);
+
+  /* ---------- 8. 台账状态参与选源 ----------
+     用户在管理页把线路停用/标记失效之后，播放器必须同步跳过。
+     这两处若不同步，「管理」就只是一个不生效的标签。 */
+  const led1 = await ev(`
+    const list = sourcesOf({ sources:[
+      {id:"on",   url:"https://a.com/1", name:"在用"},
+      {id:"off",  url:"https://b.com/1", name:"停用", enabled:false},
+      {id:"dead", url:"https://c.com/1", name:"失效", health:{state:"dead", at:"2026-01-01T00:00:00.000Z"}}
+    ]});
+    return JSON.stringify(filterSources(list, { showExcluded:true })
+      .map(x => x.original.id + "=" + x.state + (x.reason?"/"+x.reason:"")));
+  `);
+  check("停用线路被选源排除并带原因", led1.indexOf("off=excluded/disabled") >= 0, led1);
+  check("标记失效的线路被选源排除并带原因", led1.indexOf("dead=excluded/dead") >= 0, led1);
+  check("停用/失效判断先于集数等其他原因", await ev(`
+    const r = filterSources(sourcesOf({ sources:[
+      {id:"offEp", url:"https://a.com/1", ep:2, enabled:false}
+    ]}), { showExcluded:true, wantEp:9 });
+    return r[0].reason === "disabled";
+  `) === true,
+    "集数不匹配会盖掉停用原因，用户改了集数才发现线路早就被停用");
+
+  const led2 = await ev(`
+    const a = { id:"anL", sources:[
+      {id:"s1", url:"https://a.com/1", name:"甲"},
+      {id:"s2", url:"https://b.com/1", name:"乙"}
+    ], activeSourceId:"s2" };
+    /* 甲被停用后，记忆里的乙应继续被使用 */
+    const before = activeSourceOf(a).id;
+    a.sources[0].enabled = false;
+    /* 现在记忆的那条被停用：必须退回到还活着的那条 */
+    a.sources[1].enabled = false;
+    const allOff = activeSourceOf(a).id;
+    /* 全部停用时不能返回 null —— 否则详情页显示不出任何线路 */
+    return JSON.stringify({ before:before, allOff:allOff });
+  `);
+  const led2o = led2;
+  check("记忆线路仍可用时继续使用它", led2o.before === "s2", led2o);
+  check("全部线路停用时仍返回一条（不返回 null）", !!led2o.allOff, led2o);
+
+  const led3 = await ev(`
+    const a = { id:"anM", sources:[
+      {id:"m1", url:"https://a.com/1", name:"甲"},
+      {id:"m2", url:"https://b.com/1", name:"乙"}
+    ], activeSourceId:"m1" };
+    /* 未检测的线路必须照常可用：
+       把「没探测过」当成不可用，会让所有老线路一夜之间全废。 */
+    return JSON.stringify({ usable:sourceUsable({ url:"https://a.com/1" }),
+                            active:activeSourceOf(a).id });
+  `);
+  const led3o = led3;
+  check("未检测的线路仍算可用", led3o.usable === true && led3o.active === "m1", led3o);
+
+  /* 台账字段的缺省值。老数据没有这些键，
+     若按 falsy 判断会把用户所有线路一次性判成停用。 */
+  const led4 = await ev(`
+    const s = normalizeSource({ url:"https://a.com/1", name:"老线路" }, 0, "2026-01-01T00:00:00.000Z");
+    const off = normalizeSource({ url:"https://a.com/2", enabled:false }, 1, "2026-01-01T00:00:00.000Z");
+    return JSON.stringify({ enabled:s.enabled, health:s.health, note:s.note, offEnabled:off.enabled });
+  `);
+  const led4o = led4;
+  check("老线路迁移后默认启用", led4o.enabled === true, JSON.stringify(led4o));
+  check("健康度缺省为未检测", led4o.health && led4o.health.state === "unknown", JSON.stringify(led4o));
+  check("显式停用被保留", led4o.offEnabled === false, JSON.stringify(led4o));
+
+  /* 非法状态值必须被纠正成 unknown，
+     否则一个手写错误的 state 会一路渲染成空白徽标。 */
+  const led5 = await ev(`
+    return JSON.stringify([
+      normalizeHealth({ state:"瞎写的" }).state,
+      normalizeHealth(null).state,
+      normalizeHealth("dead").state
+    ]);
+  `);
+  check("非法/缺失的健康度一律回落为未检测", led5.join(",") === "unknown,unknown,unknown", led5);
 
   console.log("\n" + (fail === 0 ? "全部通过 " : "") + pass + " 项通过" + (fail ? "，" + fail + " 项失败" : ""));
   if(fail){ console.log("失败项：\n - " + fails.join("\n - ")); process.exit(1); }

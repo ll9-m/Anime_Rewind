@@ -114,7 +114,18 @@ function setVal(el, v) {
 
   // 1. 启动
   check("启动完成（boot 遮罩隐藏）", () => !q("#boot") || q("#boot").classList.contains("hide"));
-  check("侧边栏渲染 7 个导航项", () => qa("#nav-list .nav-item").length === 7 || qa("#nav-list .nav-item").length);
+  /* 导航项数量对着 PAGES 实际长度断言，不写死数字。
+     写死 7 时新增「播放源」页就会变红，而那种失败测的是
+     「我有没有改这一行」而不是「导航对不对」——
+     更糟的是原判据尾部那个 `|| 长度` 让它在为 0 时反而通过，
+     真正该抓的「导航渲染空了」永远抓不到。
+     check 只接fn 的返回值，失败详情靠返回值字符串带出去。 */
+  check("侧边栏渲染的导航项数与 PAGES 一致", () => {
+    const shown = qa("#nav-list .nav-item").length;
+    const visible = win.eval("PAGES.filter(function(p){return pageModuleEnabled(p);}).length");
+    if(shown === visible && visible > 0) return true;
+    return "导航项 " + shown + " / 应显示 " + visible;
+  });
   check("默认落点首页", () => q("#page-title").textContent.indexOf("看板") >= 0 || q("#page-title").textContent);
   check("首屏有内容", () => q("#view").innerHTML.length > 200 || q("#view").innerHTML.length);
   check("内置语录已播种 26 条", () => win.eval("state.quotes.length") === 26 || win.eval("state.quotes.length"));

@@ -4,6 +4,8 @@ assets/honor-webp/
 *.log
 .DS_Store
 tools/_shot/
+tools/_verify-*.png
+tools/_dbg*.js
 .wbapp_*.genie
 .workbuddy/applications.yaml
 _shot/

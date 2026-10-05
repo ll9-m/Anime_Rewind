@@ -553,22 +553,92 @@ input[type="range"]{ accent-color:var(--accent); width:100%; }
 .vsrc{
   display:inline-flex; align-items:center; gap:var(--sp-2);
   padding:var(--sp-2) var(--sp-3); border-radius:var(--r-pill);
-  background:rgba(255,255,255,.08); color:#fff; cursor:pointer;
+  /* 底色原来写的是 rgba(255,255,255,.08) —— 那是给深色底设计的「提亮」。
+   浅色主题与 pixel/tv 套系的胶囊底本来就亮，再叠一层白会把底推到
+   0.58–0.67 亮度，而文字是深色 —— 底越亮对比度越低，
+   实测这两套系下只有 3.3:1 / 4.2:1，都不过 AA。
+   改用 --panel-3 实色（比面板更深一档，各套系都有），
+   并逐套系实测过4.5:1。
+   不能用 --panel-2 —— pixel 套系的 panel-2 是 #fff1e8，
+   比文字亮太多，文字反而更看不清。 */
+background:var(--panel-3); color:var(--text); cursor:pointer;
   border:1px solid transparent; font-size:var(--fs-sm); text-align:left;
   transition:background var(--dur-fast) var(--ease), transform var(--dur-fast) var(--ease);
 }
-.vsrc:hover{ background:rgba(255,255,255,.16); }
+/* 播放器控制条上的选源面板铺在视频之上，底色恒为深色，
+   这里的胶囊必须继续用「深底 + 白字」，
+   不能跟着主题走 --panel-3 —— 浅色主题下会变成浅底上的深字，
+   而播放器内部还有自己的层叠上下文。 */
+.vplayer-panel .vsrc{
+  background:rgba(255,255,255,.08); color:#fff;
+}
+.vplayer-panel .vsrc .vsrc-reason{ color:#ffd9a0; }
+.vplayer-panel .vsrc.is-off{ color:rgba(255,255,255,.45); }
+.vsrc:hover{ background:var(--panel-2); }
+.vplayer-panel .vsrc:hover{ background:rgba(255,255,255,.16); }
 .vsrc.is-on{ background:var(--accent); color:var(--accent-ink); border-color:var(--accent); }
-/* 禁用态：Izuko_TV 用 alpha = 1 - 0.618 ≈ 0.382，不是 0.5。
-   0.5 在深色底上仍会误读成「可点」，0.382 才是明确的「暂不可用」。 */
-.vsrc.is-off{ opacity:.382; cursor:not-allowed; }
-.vsrc.is-off:hover{ background:rgba(255,255,255,.08); }
+/* 「淡」必须是不透明色，**不能**用 color-mix(..., transparent)。
+   往 transparent 混是降 alpha —— 文字与底色同时变淡，对比度跟着一起塌：
+   实测 0.62 时只有 1.7–2.4:1，0.82 时也只有 2.0–3.0:1，
+   线路名等于看不见，而「这条能不能用」正是选线路时唯一要判断的事。
+   正确做法是往**底色**混：不透明度不变，只把颜色推向胶囊自己的底。
+   混色比例 82% 是四套 UI × 明暗 8 种组合实测出来的下限，
+   68% 时最差的一套只有 3.6:1，82% 全部过 4.5:1，
+   而视觉上仍与可用线路有明确区分。 */
+.vsrc.is-off{
+  color:color-mix(in srgb, var(--text-2) 82%, var(--panel-3));
+  cursor:not-allowed;
+}
+.vsrc.is-off:hover{ background:var(--panel-2); }
+.vsrc.is-off .vsrc-meta{ opacity:.85; }
+/* 不支持 color-mix 的旧引擎退回 --text-2（各套系都保证过 AA）。 */
+@supports not (color: color-mix(in srgb, red 50%, blue)){
+  .vsrc.is-off{ color:var(--text-2); }
+}
 .vsrc-dot{ width:7px; height:7px; border-radius:50%; background:currentColor; flex:0 0 auto; }
 .vsrc-meta{ color:inherit; opacity:.72; font-size:var(--fs-xs); font-family:var(--font-mono); }
+/* 「为什么不会被选中」独占一行。
+   胶囊是 inline-flex 单行容器，塞第二行会把整排的基线拉乱 ——
+   实测是名字和元信息被挤成两截，元信息竖着排下来很难读。
+   所以让带原因的胶囊整体换行：flex-wrap + 主行占满、原因另起。 */
+.vsrc{ flex-wrap:wrap; max-width:100%; }
+.vsrc-name{ display:inline-flex; align-items:center; gap:var(--sp-2); min-width:0; }
+/* 「为什么不会被选中」独占一行。
+   胶囊是 inline-flex 单行容器，塞第二行会把整排的基线拉乱 ——
+   实测是名字和元信息被挤成两截，元信息竖着排下来很难读。
+   所以让带原因的胶囊整体换行：flex-wrap + 主行占满、原因另起。 */
 .vsrc-reason{
-  display:block; width:100%; color:var(--warn); opacity:.9;
-  font-size:var(--fs-xs); margin-top:2px;
+  /* 文字色用 --text 而不是 --warn：
+     --warn 在 4 套 UI × 明暗 8 种组合下与胶囊底色的实测对比度只有
+     2.3–4.0:1，全部不过 AA。--text 是每个套系里最保证可读的一档。 */
+  flex-basis:100%; color:var(--text);
+  font-size:var(--fs-xs); margin-top:3px; line-height:1.35;
+  /* 关键：整颗胶囊的淡化不能压到这行文字上。
+     之前给 .vsrc.is-off 加 opacity:.382，文字与底色同时合成，
+     实测 pixel 套系下这行只剩 1.23:1 —— 「已停用」四个字几乎看不见，
+     而它恰恰是用户最需要读到的那句结论。
+     「看起来淡」由名字那行承担，结论这行必须清楚。 */
+  opacity:1; font-weight:600;
 }
+/* 警示语义不靠颜色单独承担 ——
+   前缀标记 + 字重给出，色盲用户看到的是这个而不是颜色。 */
+.vsrc-reason::before{ content:"! "; font-family:var(--font-mono); opacity:.7; }
+/* 带原因的胶囊是两行的，胶囊圆角（左半圆 + 右半圆）会显得像被拉长的药丸，
+   改成小圆角才读得出「这是一块带说明的标签」。 */
+.vsrc.has-reason{ border-radius:var(--r-md); align-items:flex-start; }
+.vsrc.has-reason .vsrc-name{ padding-top:1px; }
+/* 详情页的线路列表：包一层卡片把「选线路」这件事圈出来。
+   直接裸放一排胶囊会和上面的输入框、按钮混成一片 ——
+   用户看不出哪些能点、点了会发生什么。 */
+.line-picker{
+  border:1px solid var(--line); border-radius:var(--r-md);
+  padding:var(--sp-3); background:rgba(255,255,255,.03);
+}
+.line-picker-head{
+  display:flex; align-items:center; gap:var(--sp-2);
+  margin-bottom:var(--sp-2);
+}
+.line-picker-head .hint{ flex:1; }
 .mb-3{ margin-bottom:var(--sp-3); }
 
 /* 内联提示条：解析结果、导入诊断用。左侧 2px 色条承担语义，
@@ -2297,6 +2367,9 @@ const ICONS = {
   grid:"<rect x='3.5' y='3.5' width='7' height='7' rx='1.4'/><rect x='13.5' y='3.5' width='7' height='7' rx='1.4'/><rect x='3.5' y='13.5' width='7' height='7' rx='1.4'/><rect x='13.5' y='13.5' width='7' height='7' rx='1.4'/>",
   list:"<path d='M4 6h16M4 12h16M4 18h16'/>",
   lock:"<rect x='4.5' y='10' width='15' height='10' rx='2'/><path d='M8 10V7.5a4 4 0 1 1 8 0V10'/>",
+  /* 「设为使用中」：同心圆 + 中心实心点，比对勾更接近「选中这一个」的语义，
+     也不会和「已停用」共用的 eye/refresh 图标混淆。 */
+  target:"<circle cx='12' cy='12' r='8.2'/><circle cx='12' cy='12' r='2.6' fill='currentColor'/>",
   db:"<ellipse cx='12' cy='5.8' rx='7.5' ry='2.8'/><path d='M4.5 5.8v12.4c0 1.5 3.4 2.8 7.5 2.8s7.5-1.3 7.5-2.8V5.8'/><path d='M4.5 12c0 1.5 3.4 2.8 7.5 2.8s7.5-1.3 7.5-2.8'/>",
   rewind:"<path d='M11.5 6 4 12l7.5 6z'/><path d='M20.5 6 13 12l7.5 6z'/>",
   sort:"<path d='M7 4v16M4 17l3 3 3-3'/><path d='M13 6h7M13 11h5M13 16h3'/>",
@@ -5326,6 +5399,15 @@ function sourceUsable(s){
   if(s.health && s.health.state === "dead") return false;
   return true;
 }
+/* 不可用的原因。必须能说清是哪一条规则判的 ——
+   只显示「不可用」的话，用户会去改别的字段（网址、集数），
+   而真正的原因是这条线路被他自己停用过。 */
+function sourceUnusableReason(s){
+  if(!s) return "无效线路";
+  if(s.enabled === false) return "已停用，不会被自动选中";
+  if(s.health && s.health.state === "dead") return "已标记失效，不会被自动选中";
+  return "";
+}
 
 /* 「现在看到第几集」的唯一口径：当前线路声明的集数 → 旧 streamEp → 已看集数。
    三处（片尾自动下一集、详情页播放记录、剧集卡行）都调它 ——
@@ -5720,6 +5802,43 @@ async function markSourceDead(row, dead){
   });
 }
 
+/* 手动指定当前线路。
+ *
+ * 为什么要单独立一个函数，而不是直接写 a.activeSourceId = s.id：
+ * activeSourceId 是「播放器当前会起播哪条」的指针，
+ * 一旦它指向一条不可用的线路，activeSourceOf 会在全不可用时
+ * 悄悄退回第一条 —— 用户手动指定的意图就被改掉了，还看不出来。
+ * 所以显式指定时必须：
+ *   ① 允许指向任意线路（含已停用的），因为「我就是要用这条」
+ *      是用户的判断，不是算法的判断；
+ *   ② 但立刻把旧字段同步过去，否则详情页/待机屏读的还是老地址；
+ *   ③ 落盘走 persistAnimeQuiet —— 指定线路属于「整理线路」，
+ *      不该把 updatedAt 刷成现在、把老作品顶到「最近添加」最前。
+ * 返回 false 表示这条线路当前不可用，界面该给出提示而不是假装成功。 */
+async function setActiveSource(row){
+  const a = row && row.anime, s = row && row.source;
+  if(!a || !s) return { ok:false, reason:"missing" };
+  a.activeSourceId = s.id;
+  syncLegacyStreamFields(a);
+  const ok = await persistAnimeQuiet(a);
+  return { ok:ok, usable:sourceUsable(s), source:s, anime:a };
+}
+/* 批量指定：同一部作品只认一条，被选中多条时取「选中的第一条」。
+   静默取最后一条会让用户以为是自己选的那条在生效。 */
+async function setActiveSources(rows){
+  const done = [];
+  const byAnime = new Map();
+  (rows || []).forEach(r => {
+    if(!r || !r.source) return;
+    if(byAnime.has(r.anime.id)) return;
+    byAnime.set(r.anime.id, r);
+  });
+  for(const r of byAnime.values()){
+    const res = await setActiveSource(r);
+    if(res.ok) done.push(r);
+  }
+  return done;
+}
 /* 外部播放器区。
  *
  * 数据归属（这是本轮最关键的改动）：
@@ -6138,8 +6257,9 @@ function mountVideoPlayer(mountEl, srcObj, a, onLineChange){
     }
     body.innerHTML = '<div class="vsrc-row">' + entries.map(x => {
       if(x.state === "excluded"){
-        return '<span class="vsrc is-off" title="' + attr(x.reasonText || "不可用") + '">' +
-          '<span class="vsrc-dot"></span>' + esc(x.original.name || "未命名") +
+        return '<span class="vsrc is-off has-reason" title="' + attr(x.reasonText || "不可用") + '">' +
+          '<span class="vsrc-name"><span class="vsrc-dot"></span>' +
+          esc(x.original.name || "未命名") + "</span>" +
           '<span class="vsrc-reason">' + esc(x.reasonText || "不可用") + "</span></span>";
       }
       const s = x.src;
@@ -6147,8 +6267,9 @@ function mountVideoPlayer(mountEl, srcObj, a, onLineChange){
       const meta = [s.resolution, s.ep != null ? ("第 " + s.ep + " 集") : null]
         .filter(Boolean).join(" · ");
       return '<button class="vsrc' + (on ? " is-on" : "") + '" type="button" data-src-id="' + attr(s.id) + '">' +
-        '<span class="vsrc-dot"></span>' + esc(s.name || "线路") +
-        (meta ? '<span class="vsrc-meta">' + esc(meta) + "</span>" : "") + "</button>";
+        '<span class="vsrc-name">' + (on ? ic("target",12) : '<span class="vsrc-dot"></span>') +
+        esc(s.name || "线路") +
+        (meta ? '<span class="vsrc-meta">' + esc(meta) + "</span>" : "") + "</span></button>";
     }).join("") + "</div>";
     body.querySelectorAll("[data-src-id]").forEach(b => b.addEventListener("click", () => {
       const id = b.dataset.srcId;
@@ -6226,23 +6347,63 @@ function applyEpToURL(raw, ep){
   }catch(e){}
   return u;
 }
+/* 已保存线路的列表（详情页播放源面板内）。
+   抽成独立函数是因为选完线路后要就地重渲这块 ——
+   整页重渲会把播放器一起销毁，正在播的时候换线路就变成从头开始。
+   胶囊的高亮与状态条必须由同一次渲染产生，
+   分别维护两份 DOM 状态迟早会出现「标签写着使用中、胶囊没高亮」。 */
+function linePickerHTML(a){
+  const list = sourcesOf(a);
+  if(!list.length) return "";
+  const act = activeSourceOf(a);
+  return '<div class="line-picker mt-3" id="st-lines">' +
+    '<div class="line-picker-head"><span class="hint">已保存 ' + list.length + " 条线路" +
+    (list.length > 1 ? "，点一下设为使用中，双击直接播放" : "") + "</span>" +
+    (a ? '<button class="btn btn-sm" type="button" data-st="manage">去管理</button>' : "") +
+    "</div>" +
+    '<div class="vsrc-row">' + list.map(s => {
+      const on = act && s.id === act.id;
+      const usable = sourceUsable(s);
+      const why = usable ? "" : sourceUnusableReason(s);
+      const meta = [s.resolution, s.ep != null ? ("第 " + s.ep + " 集") : "整季"]
+        .filter(Boolean).join(" · ");
+      /* 不可用的线路照样可点：用户可能只是想把它设成默认
+         （比如先标记失效，回头修好再启用），直接 disabled 会让人以为改不了。
+         所以只明确写出「为什么它不会被自动选中」。 */
+      return '<button class="vsrc' + (on ? " is-on" : "") + (usable ? "" : " is-off has-reason") +
+        '" type="button" data-st="line" data-st-line="' + attr(s.id) + '"' +
+        (usable ? "" : ' title="' + attr(why) + '"') + ">" +
+        '<span class="vsrc-name">' +
+        (on ? ic("target",12) : '<span class="vsrc-dot"></span>') +
+        esc(s.name || sourceDisplayName(s)) +
+        (meta ? '<span class="vsrc-meta">' + esc(meta) + "</span>" : "") +
+        "</span>" +
+        (usable ? "" : '<span class="vsrc-reason">' + esc(why) + "</span>") +
+        "</button>";
+    }).join("") + "</div></div>";
+}
+/* 把线路列表就地重画。事件是委托的，新生成的按钮不需要重新绑定。 */
+function refreshLinePicker(root, a){
+  const box = root.querySelector("#st-lines");
+  if(!box) return;
+  box.outerHTML = linePickerHTML(a);
+}
 function renderStreamLauncher(a){
   const list = sourcesOf(a);
   const act = activeSourceOf(a);
   const has = !!act;
   const ep = act && act.ep != null ? act.ep : null;
-  /* 线路一览：让「有几条、哪条在用」一眼可见。
+  /* 线路一览：让「有几条、哪条在用」一眼可见，而且**当场就能换**。
      只存不看等于把选择成本从「保存时一次」推到「每次播放时一次」——
-     用户根本记不清自己上次存的是哪条。 */
-  const lineList = list.length > 1
-    ? '<div class="note-box is-ok mt-3">' + ic("grid",16) +
-      "<span>已保存 " + list.length + " 条线路，当前使用「" +
-      esc(act ? (act.name || "线路") : "—") + "」。播放时点控制条上的「选源」可随时切换。</span></div>"
-    : "";
+     用户根本记不清自己上次存的是哪条。
+     原来的实现是一行文字「已保存 N 条，当前使用 X，播放时点控制条上的『选源』切换」，
+     但播放器要点「播放」才出现，等于要求用户先起播一次才能改默认线路；
+     而「我下次就想看这条」是保存时的决策，不该被播放动作卡住。 */
+  const lineList = list.length ? linePickerHTML(a) : "";
   /* 失效与停用的条数：这两类线路仍然占着选源列表，
      不提示的话用户会以为「保存了 N 条就等于有 N 条能用」。 */
   const badCount = list.filter(s => !sourceUsable(s)).length;
-  const warnBox = badCount
+  const warnBox = badCount && list.length > 1
     ? '<div class="note-box is-warn mt-3">' + ic("warning",16) +
       "<span>其中 " + badCount + " 条已被停用或标记失效，播放时会被跳过。" +
       '<button class="btn btn-sm" type="button" data-st="manage">去管理</button></span></div>'
@@ -6355,7 +6516,24 @@ function showLauncherError(root, msg){
   el.className = "note-box mt-3 is-err";
   el.innerHTML = ic("warning",16) + "<span>" + esc(msg) + "</span>";
 }
+/* 放映厅视图的监听器句柄。renderDetail / renderStandby 每次导航都会
+   重新调用 bindStreamLauncher，而挂载点 root 始终是同一个 #view。
+   原实现用 forEach + addEventListener 逐元素绑定：旧监听器随元素销毁
+   「意外」失效，但代价是**就地重画出来的新按钮从未被绑定** ——
+   表现为「第一次点能换线路，第二次点就没反应」。
+
+   改成委托后监听器会跨导航累积，而委托处理器闭包捕获的 a 会是
+   **第一次绑定时那部作品** —— 在 B 番的详情页点线路，会把 A 番的
+   activeSourceId 改掉。这是数据损坏级的 bug。
+
+   所以每次绑定前先 abort 上一次的：既解决重复绑定，
+   也让 a / input 闭包跟着本次渲染走。 */
+let streamLauncherAbort = null;
 function bindStreamLauncher(root, a){
+  if(streamLauncherAbort){ streamLauncherAbort.abort(); streamLauncherAbort = null; }
+  const ac = new AbortController();
+  streamLauncherAbort = ac;
+  const sig = { signal:ac.signal };
   const input = root.querySelector("#st-url");
   const mount = root.querySelector("#st-mount");
   if(!input || !mount) return;
@@ -6455,7 +6633,14 @@ function bindStreamLauncher(root, a){
     }
     cleanup = fn;
   }
-  root.querySelectorAll("[data-st]").forEach(b => b.addEventListener("click", async () => {
+  /* 用委托而不是 forEach + addEventListener：
+     线路列表会就地重画（refreshLinePicker 换掉整块 outerHTML），
+     逐元素绑定的话重画出来的新按钮全是死的 ——
+     表现为「第一次点能换，第二次点就没反应」。
+     而且 routeId 切换会复用同一个 root，逐元素绑定还会越堆越多。 */
+  root.addEventListener("click", async (e) => {
+    const b = e.target.closest("[data-st]");
+    if(!b || !root.contains(b)) return;
     const act = b.dataset.st;
     if(act === "add"){
       const r = await addSourceFromInput(root, a);
@@ -6468,6 +6653,39 @@ function bindStreamLauncher(root, a){
       return;
     }
     if(act === "play"){ await play(); return; }
+    /* 线路列表：单击设为使用中，双击顺手起播。
+       落盘走 persistAnimeQuiet —— 换默认线路是「整理线路」，
+       不该把 updatedAt 刷成现在。
+       刻意**不整页重渲**：重渲会把播放器一起销毁，
+       正在播的时候换线路就变成了「从头开始」，
+       而状态条却说「已换」—— 画面和文字对不上。
+       所以只原地更新受影响的几处。 */
+    if(act === "line" && a){
+      const id = b.dataset.stLine;
+      const target = sourcesOf(a).find(s => s.id === id);
+      if(!target) return;
+      const same = a.activeSourceId === id;
+      const res = await setActiveSource({ anime:a, source:target });
+      if(!res.ok){ setStatus("err", "保存失败，线路没换成"); return; }
+      refreshLinePicker(root, a);
+      const epInput2 = root.querySelector("#st-ep");
+      if(epInput2) epInput2.value = target.ep == null ? "" : String(target.ep);
+      if(!res.usable){
+        setStatus("warn", "已设为使用中，但这条" + (sourceUnusableReason(target) || "当前不可用") + "，播放时会自动跳过它");
+      }else{
+        setStatus("ok", (same ? "当前线路：" : "已切到：") + (target.name || sourceDisplayName(target)) +
+          (target.ep != null ? " · 第 " + target.ep + " 集" : ""));
+      }
+      /* 正在播就立刻换源；没在播则只改默认线路，等用户点播放。
+         用 vp.switchTo 而不是重建播放器 —— 它保留进度语义。
+         「双击直接播」由单独的 dblclick 处理，不在这里判断：
+         双击会先派发两次 click，在这里播等于开了两次播放器。 */
+      if(vp && vp.video && !vp.video.paused && !vp.video.ended){
+        vp.switchTo(target);
+        toast("已切到「" + (target.name || "线路") + "」", "ok");
+      }
+      return;
+    }
     if(act === "manage"){
       /* 带上作品 id：管理页收到 focusAnime 后自动筛出这部作品，
          省掉用户在几十行台账里翻找这部番的过程。 */
@@ -6505,10 +6723,10 @@ function bindStreamLauncher(root, a){
       rerender();
       return;
     }
-  }));
+  }, sig);
   input.addEventListener("keydown", e => {
     if(e.key === "Enter"){ e.preventDefault(); play(); }
-  });
+  }, sig);
   input.addEventListener("input", debounce(() => {
     syncStreamLauncher(root);
     const v = input.value.trim();
@@ -6520,10 +6738,27 @@ function bindStreamLauncher(root, a){
     else if(resolveEmbed(v).ok) setStatus("warn", "地址可识别，按「添加线路」保存，点「播放」开始。");
     else if(bilibiliSeasonId(normalizeStreamURL(v))) setStatus("warn", "已识别为 B 站番剧，播放时会自动换算地址。");
     else setStatus("warn", "网址已记录。该网站可能禁止被嵌入，播放无画面时请用「新标签打开」。");
-  }, 350));
+  }, 350), sig);
+  /* 双击线路胶囊 = 设为使用中并立刻起播。
+     不能靠 click 事件里判断 detail（连点会触发两次），
+     dblclick 单独绑在这里 —— 线路列表会就地重画，
+     所以用委托挂在 root 上，一次绑定覆盖重画后的新节点。 */
+  root.addEventListener("dblclick", async (e) => {
+    const b = e.target.closest('[data-st-line]');
+    if(!b || !a || !root.contains(b)) return;
+    const target = sourcesOf(a).find(s => s.id === b.dataset.stLine);
+    if(!target) return;
+    const res = await setActiveSource({ anime:a, source:target });
+    if(!res.ok) return;
+    refreshLinePicker(root, a);
+    await play();
+  }, sig);
   syncStreamLauncher(root);
   /* 切走时务必断开播放器，否则外部站点的音视频会继续在后台播放 */
   window.addEventListener("pagehide", dropPlayer, { once:true });
+  /* 上一次绑定留下的监听器在这里一并撤掉：
+     播放器不销毁的话，切到别的作品后它还在后台播。 */
+  ac.signal.addEventListener("abort", dropPlayer);
 }
 
 /* 未选作品时的放映厅。
@@ -7108,6 +7343,15 @@ function ledgerRowHTML(row, picked){
     ledgerState.progress.keys && ledgerState.progress.keys.has(ledgerKey(row));
   const ep = s.ep == null ? "整季" : "第 " + s.ep + " 集";
   const meta = [s.resolution, ep].filter(Boolean).join(" · ");
+  /* 「设为使用中」按钮：台账页不能只显示「哪条在用」而不给切换手段。
+     用户在这里的意图是「整理」，顺手把默认线路换掉是自然动作 ——
+     而原实现只在播放器的控制条里藏着选源入口，
+     于是「管理」页能看不能改，想换默认线路必须先起播一次。 */
+  const isActive = a.activeSourceId === s.id;
+  const setBtn = isActive
+    ? '<span class="flag tone-ok" title="当前默认线路">' + ic("target",12) + "使用中</span>"
+    : '<button class="btn btn-sm btn-icon" type="button" data-act="use" title="设为使用中" aria-label="设为使用中">' +
+      ic("target",14) + "</button>";
   /* checked 必须由数据回填，不能只靠 class。
      台账的每一次筛选/勾选/批量操作都会整表重渲，
      重渲出来的是全新 DOM —— 不写 checked 的话，
@@ -7128,6 +7372,7 @@ function ledgerRowHTML(row, picked){
       "<div>" + (normalizeHealth(s.health).at ? esc(String(normalizeHealth(s.health).at).slice(0, 10)) : "—") + "</div>" +
       "<div>" + (s.lastUsedAt ? "用过 " + esc(String(s.lastUsedAt).slice(0, 10)) : "") + "</div></td>" +
     '<td class="nowrap">' +
+      setBtn + " " +
       '<button class="btn btn-sm btn-icon" type="button" data-act="probe" title="探测这条线路" aria-label="探测">' + ic("refresh",14) + "</button> " +
       '<button class="btn btn-sm btn-icon" type="button" data-act="edit" title="编辑" aria-label="编辑">' + ic("edit",14) + "</button> " +
       '<button class="btn btn-sm btn-icon' + (s.enabled === false ? " is-on" : "") + '" type="button" data-act="toggle" title="停用/启用" aria-label="停用或启用">' + ic("eye",14) + "</button> " +
@@ -7202,6 +7447,8 @@ function renderLedger(root){
       ic("close",14) + "取消选择（" + ledgerState.picked.length + "）</button>" +
     '<button class="btn btn-sm" type="button" data-act="bulk-disable"' + (ledgerState.picked.length ? "" : " disabled") + ">" +
       ic("eye",14) + "停用所选</button>" +
+    '<button class="btn btn-sm" type="button" data-act="bulk-use"' + (ledgerState.picked.length ? "" : " disabled") + ">" +
+      ic("target",14) + "设为使用中</button>" +
     '<button class="btn btn-sm" type="button" data-act="bulk-enable"' + (ledgerState.picked.length ? "" : " disabled") + ">" +
       ic("check",14) + "启用所选</button>" +
     '<button class="btn btn-sm" type="button" data-act="bulk-dead"' + (ledgerState.picked.length ? "" : " disabled") + ">" +
@@ -7301,6 +7548,17 @@ function bindLedger(root, all, rows){
     if(act === "probe-all"){ await probeAll(); return; }
     if(act === "probe"){ if(row) await probeOne(row); return; }
     if(act === "edit"){ if(row) openSourceEditor(row); return; }
+    if(act === "use"){
+      if(!row) return;
+      const res = await setActiveSource(row);
+      if(!res.ok){ toast("保存失败，线路没换成", "err"); return; }
+      const name = sourceDisplayName(row.source);
+      toast(res.usable
+        ? "已把「" + name + "」设为使用中"
+        : "已把「" + name + "」设为使用中，但这条已被停用或标记失效，播放时会被跳过",
+        res.usable ? "ok" : "warn");
+      rerenderLedger(); return;
+    }
     if(act === "open"){
       if(row) window.open(normalizeStreamURL(row.source.url), "_blank", "noopener,noreferrer");
       return;
@@ -7339,6 +7597,21 @@ function bindLedger(root, all, rows){
       const on = act === "bulk-enable";
       for(const r of list) await updateSource(r, { enabled:on });
       toast((on ? "已启用 " : "已停用 ") + list.length + " 条线路", "ok");
+      rerenderLedger(); return;
+    }
+    if(act === "bulk-use"){
+      const list = pickedLedgerRows(sourceLedger());
+      if(!list.length) return;
+      const ok = await confirmDialog({
+        title:"批量设为使用中", okText:"设好",
+        html:"将把选中的 <b>" + list.length + "</b> 条线路里每部作品的<b>第一条</b>" +
+          "设为该作品的默认线路。<br>" +
+          '<span class="hint">同一部作品勾了多条时只取第一条。设为使用中的线路，下次打开该作品会优先起播它。</span>'
+      });
+      if(!ok) return;
+      const done = await setActiveSources(list);
+      const animes = new Set(done.map(r => r.anime.id)).size;
+      toast("已把 " + animes + " 部作品的默认线路改掉", "ok");
       rerenderLedger(); return;
     }
     if(act === "bulk-dead"){

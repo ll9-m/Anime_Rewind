@@ -478,6 +478,125 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
     /state:"blocked"[^\n]*detail:"请求未能完成/.test(fileSrc.replace(/\s+/g," ")),
     "失败分支应归入 blocked（被拒绝/不确定），而不是 dead");
 
+  /* ---------- 手动选择默认线路（用户：「没有自己选择使用那个播放源的功能」） ---------- */
+  /* 用户看到的缺口有两处：
+       ① 台账页能看不能用 —— 没有「设为使用中」；
+       ② 详情页那行字让人以为只能「先播放、再点控制条上的选源」才能换，
+          于是「我下次就想看这条」这个保存时的决策被卡在播放动作上。
+     这一组对着两个入口的共同数据层 setActiveSource 打，
+     免得两处入口各写一份逻辑、各错各的。 */
+  const setRes = await ev(`
+    settings.stream_url = "";
+    state.anime = [
+      { id:"P1", titleCn:"手动选源甲", sources:[
+        { id:"p1a", url:"https://a.test/1", name:"线路甲", ep:1 },
+        { id:"p1b", url:"https://b.test/2", name:"线路乙", ep:2 }
+      ], activeSourceId:"p1a" }
+    ];
+    const a = state.anime[0];
+    migrateSources(a);
+    const r = await setActiveSource({ anime:a, source:a.sources[1] });
+    return JSON.stringify({
+      ok:r.ok, usable:r.usable,
+      act:a.activeSourceId,
+      legacy:a.streamUrl, legacyEp:a.streamEp,
+      updatedAt:a.updatedAt
+    });
+  `);
+  check("设默认线路成功", setRes.ok === true, JSON.stringify(setRes));
+  check("activeSourceId 指向被指定的那条", setRes.act === "p1b", setRes.act);
+  check("旧字段 streamUrl 跟着新线路走", setRes.legacy === "https://b.test/2", setRes.legacy);
+  check("旧字段 streamEp 跟着新线路走", setRes.legacyEp === 2, String(setRes.legacyEp));
+
+  /* 指定不可用的线路也是允许的：用户可能先标失效、修好后再启用。
+     但界面必须显式说出「这条不会被自动选中」，
+     不能让用户以为设了就等于下次一定播它。 */
+  const offRes = await ev(`
+    const a = animeById("P1");
+    migrateSources(a);
+    a.sources[1].enabled = false;
+    const r = await setActiveSource({ anime:a, source:a.sources[1] });
+    return JSON.stringify({ ok:r.ok, usable:r.usable, act:a.activeSourceId,
+      why:sourceUnusableReason(a.sources[1]), pickedByPlayer:activeSourceOf(a).id });
+  `);
+  check("可以把已停用线路设为默认（用户判断优先）",
+    offRes.ok === true && offRes.act === "p1b", JSON.stringify(offRes));
+  check("但要标明它不会被自动选中",
+    offRes.usable === false && /停用/.test(offRes.why || ""), JSON.stringify(offRes));
+  check("播放器仍会跳过它、退回可用线路",
+    offRes.pickedByPlayer !== "p1b", JSON.stringify(offRes));
+
+  const reasons = await ev(`
+    return JSON.stringify([
+      sourceUnusableReason({ enabled:false }),
+      sourceUnusableReason({ enabled:true, health:{ state:"dead" } }),
+      sourceUnusableReason({ enabled:true }),
+      sourceUnusableReason(null)
+    ]);
+  `);
+  check("停用与失效各有各的说法（指向的修复动作不同）",
+    /停用/.test(reasons[0]) && /失效/.test(reasons[1]), JSON.stringify(reasons));
+  check("可用线路没有「不可用原因」",
+    reasons[2] === "", JSON.stringify(reasons[2]));
+  check("空线路给出兜底文案而不是 undefined",
+    reasons[3] === "无效线路", JSON.stringify(reasons[3]));
+
+  /* 批量指定：同一部作品勾了多条只能落一条，
+     否则静默取最后一条会让用户以为是自己选的那条生效。 */
+  const bulkRes = await ev(`
+    settings.stream_url = "";
+    state.anime = [
+      { id:"B1", titleCn:"批量甲", sources:[
+        { id:"b1a", url:"https://x.test/1", name:"X" },
+        { id:"b1b", url:"https://y.test/2", name:"Y" },
+        { id:"b1c", url:"https://z.test/3", name:"Z" }
+      ], activeSourceId:"b1a" },
+      { id:"B2", titleCn:"批量乙", sources:[
+        { id:"b2a", url:"https://p.test/1", name:"P" },
+        { id:"b2b", url:"https://q.test/2", name:"Q" }
+      ], activeSourceId:"b2b" }
+    ];
+    state.anime.forEach(migrateSources);
+    const all = sourceLedger();
+    const picked = [
+      { anime:all.find(r=>r.anime.id==="B1").anime, source:all.find(r=>r.source.id==="b1b").source },
+      { anime:all.find(r=>r.anime.id==="B1").anime, source:all.find(r=>r.source.id==="b1c").source },
+      { anime:all.find(r=>r.anime.id==="B2").anime, source:all.find(r=>r.source.id==="b2a").source }
+    ];
+    const done = await setActiveSources(picked);
+    return JSON.stringify({
+      n:done.length,
+      b1:all.find(r=>r.anime.id==="B1").anime.activeSourceId,
+      b2:all.find(r=>r.anime.id==="B2").anime.activeSourceId
+    });
+  `);
+  check("批量指定每部作品只落一条", bulkRes.n === 2, JSON.stringify(bulkRes));
+  check("同作品多条时取第一条被勾的",
+    bulkRes.b1 === "b1b", JSON.stringify(bulkRes));
+  check("另一部作品独立生效",
+    bulkRes.b2 === "b2a", JSON.stringify(bulkRes));
+
+  /* 落盘纪律：指定默认线路属于「整理线路」，
+     走 saveAnime 会把 updatedAt 刷成现在，
+     于是「换个默认线路」这种小动作能把老作品顶到「最近添加」最前。 */
+  const quietPick = await ev(`
+    const before = animeById("B1").updatedAt;
+    await setActiveSource({ anime:animeById("B1"), source:animeById("B1").sources[2] });
+    return before === animeById("B1").updatedAt;
+  `);
+  check("指定默认线路不改 updatedAt", quietPick === true, String(quietPick));
+
+  /* 委托绑定：线路列表会就地重画，逐元素绑定会让新节点变死按钮。
+     这里断言 bindStreamLauncher 用的是 root 上的委托。 */
+  check("播放源面板的事件走委托（重画后新节点仍可点）",
+    /root\.addEventListener\("click"[\s\S]{0,200}?closest\("\[data-st\]"\)/.test(fileSrc),
+    "未找到委托绑定，线路列表就地重画后按钮会失效");
+  check("重复绑定被 AbortController 挡住（切换作品后不会改错作品的线路）",
+    /streamLauncherAbort/.test(fileSrc) && /streamLauncherAbort\.abort\(\)/.test(fileSrc),
+    "闭包会捕获第一次绑定的 a，在 B 番详情页点线路会改 A 番的 activeSourceId");
+  check("旧监听器随 abort 一起撤掉，播放器不留在后台播",
+    /ac\.signal\.addEventListener\("abort", dropPlayer\)/.test(fileSrc));
+
   console.log("\n" + (fail === 0 ? "全部通过 " : "") + pass + " 项通过" + (fail ? "，" + fail + " 项失败" : ""));
   if(fail){ console.log("失败项：\n - " + fails.join("\n - ")); process.exit(1); }
 })().catch(e => { console.error("测试自身异常：", e); process.exit(2); });

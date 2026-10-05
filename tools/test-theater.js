@@ -323,8 +323,14 @@ function check(name, cond, detail){
   // 未选作品时 = 选片页
   await ev('go("theater");');
   await new Promise(r => setTimeout(r, 400));
-  check("未选作品时显示选片入口", !!doc.querySelector(".pick-card") && doc.querySelectorAll(".pick-card").length === 2,
-    "选片卡 " + doc.querySelectorAll(".pick-card").length + " 张");
+  /* 对着 state.anime 断言，不写死张数。
+     写死 2 的前提是「库里恰好两部」—— 早前第 133 行已经塞了 an_src1，
+     后面又 push 了 an_test2，实际是 3 部。这类断言测的是
+     「我数过几部」而不是「选片页列全了没」，增删测试数据就会红。 */
+  const expectCards = JSON.parse(evSync('JSON.stringify(state.anime.map(function(a){return a.id;}))')).length;
+  check("未选作品时显示选片入口",
+    !!doc.querySelector(".pick-card") && doc.querySelectorAll(".pick-card").length === expectCards,
+    "选片卡 " + doc.querySelectorAll(".pick-card").length + " 张 / 库里 " + expectCards + " 部");
   check("未选作品时无待机语录屏保", !doc.querySelector(".crt-quote") && !doc.querySelector(".modern-quote"));
   check("未选作品时播放区标注为临时片源",
     /临时片源/.test(doc.querySelector(".stream-panel .panel-head").textContent),

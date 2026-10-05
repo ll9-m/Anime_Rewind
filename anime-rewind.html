@@ -2976,6 +2976,102 @@ function proxyUrl(target){
   if(!p) return null;
   return p + encodeURIComponent(target);
 }
+/* 公共代理有一类会把响应包一层壳再返回：
+   allorigins 的 /get 就是 { contents: "<原 body 字符串>" }，
+   corsproxy.xyz 的非raw 端点也是类似结构。
+   不解包的话 res.json() 拿到的是壳对象，下游读 data.data 全是undefined，
+   表现成「搜索到 0 条结果」—— 而用户会以为是自己的关键词没匹配上。
+
+   判据要严：只有壳里确实是字符串、且能解析成对象、且不是错误页，
+   才认它是壳。只认 contents 一个键是不够的：目标自己返回一个
+   带 contents 字段的合法 JSON 时会被误拆。 */
+function unwrapProxyPayload(data){
+  if(!data || typeof data !== "object" || Array.isArray(data)) return data;
+  if(typeof data.contents !== "string") return data;
+  let inner;
+  try{ inner = JSON.parse(data.contents); }
+  catch(e){ return data; }               /* 壳里不是 JSON：不是壳，按原样 */
+  if(!inner || typeof inner !== "object") return data;
+  /* 代理出错时 contents 常是 HTML 错误页或 { error: ... }。
+     那种情况下原样返回，让下游按错误处理 —— 把错误页解析成
+     「空结果」会把代理故障伪装成「没搜到」，是最难查的一类假象。 */
+  if(inner.error || inner.status || typeof inner.html === "string") return data;
+  return inner;
+}
+
+/* 代理自检：填完地址先点这个，别直接拿去搜索。
+   分四层报，因为用户看到「搜索失败」时无法区分是哪一层坏了：
+     ① 代理地址本身能不能解析出 host（填错格式最常见）
+     ② 网络能不能到（超时 = 大概率被墙/被限流）
+     ③ 有没有HTTP 响应
+     ④ 有没有 CORS 头 —— 这一层最隐蔽：curl 看着完全正常，
+        页面上照样失败，因为浏览器不让读没有 ACAO 的响应。
+   附带说明该代理是否需要 API Key。 */
+async function diagnoseProxy(prefix){
+  const report = { prefix: prefix, ok: false, stage: "", detail: "", cors: null, status: null };
+  let u = null;
+  try{ u = new URL(prefix); }
+  catch(e){
+    report.stage = "地址格式";
+    report.detail = "不是合法 URL（要含 https:// 与 ?url= 之类的参数）";
+    return report;
+  }
+  /* 探测目标用 AniList 根路径：GET 必然返回 400/404，
+     「有响应」就说明代理把请求转发出去了。不拿它当成功判据 ——
+     能转发和能用是两件事。 */
+  const probe = "https://graphql.anilist.co";
+  let res = null, err = null;
+  try{
+    res = await fetchWithTimeout(prefix + encodeURIComponent(probe), {
+      method: "GET", headers: { "Accept": "application/json" }
+    }, 9000);
+  }catch(e){ err = e; }
+  if(err){
+    const name = (err && err.name) || "";
+    if(name === "AbortError"){
+      report.stage = "网络";
+      report.detail = "9秒 无响应。公共免费代理多数在境外，国内常常连不上或被限流";
+    }else{
+      report.stage = "网络";
+      report.detail = "请求失败：" + ((err && err.message) || name || "未知");
+    }
+    return report;
+  }
+  report.status = res.status;
+  report.cors = !!res.headers.get("access-control-allow-origin");
+  if(res.status === 401 || res.status === 403){
+    report.stage = "需要授权";
+    report.detail = "HTTP " + res.status + "：该代理需要 API Key 或已关闭免费额度";
+    return report;
+  }
+  if(res.status === 429){
+    report.stage = "被限流";
+    report.detail = "HTTP 429：请求过于频繁，稍后再试";
+    return report;
+  }
+  if(!report.cors){
+    report.stage = "CORS 头";
+    report.detail = "HTTP " + res.status + " 但响应没有 Access-Control-Allow-Origin，浏览器仍会拦截";
+    return report;
+  }
+  if(res.status >= 400 && res.status < 500){
+    /* 4xx + 有 CORS 头 = 转发成功了，目标自己不接受这个方法。
+       对自检来说这就是通过。 */
+    report.ok = true;
+    report.stage = "可用";
+    report.detail = "转发正常（探测目标返回 " + res.status + " 属预期：它不接受 GET）";
+    return report;
+  }
+  if(res.status >= 500){
+    report.stage = "代理侧错误";
+    report.detail = "HTTP " + res.status + "：代理自己出错了";
+    return report;
+  }
+  report.ok = true;
+  report.stage = "可用";
+  report.detail = "HTTP " + res.status;
+  return report;
+}
 
 async function fetchJSON(target, opts, useProxy){
   const tryOnce = async (url) => {
@@ -2985,7 +3081,7 @@ async function fetchJSON(target, opts, useProxy){
       e.httpStatus = res.status;
       throw e;
     }
-    return await res.json();
+    return unwrapProxyPayload(await res.json());
   };
   try{
     return await tryOnce(target);
@@ -2997,6 +3093,11 @@ async function fetchJSON(target, opts, useProxy){
     try{ return await tryOnce(p); }
     catch(err2){
       if(err2 && err2.httpStatus){ e2.message = "HTTP " + err2.httpStatus; }
+      else if(err2 && /JSON|Unexpected/i.test(err2.message || "")){
+        /* 代理返回了非 JSON：多半是它自己出错了而不是目标出错。
+           照实说「代理返回的不是 JSON」，别让用户去查关键词。 */
+        e2.message = "代理返回的内容不是 JSON（该地址可能不是 CORS 代理，或已失效）";
+      }
       throw e2;
     }
   }
@@ -3092,7 +3193,7 @@ query ($q: String, $perPage: Int) {
 async function searchAniList(keyword){
   const body = JSON.stringify({ query: ANILIST_QUERY, variables: { q: keyword, perPage: clampNum(settings.search_limit,1,25) } });
   const opts = { method:"POST", headers:{ "Content-Type":"application/json", "Accept":"application/json" }, body: body };
-  const data = await fetchJSON("https://graphql.anilist.co", opts, false);
+  const data = await fetchJSON("https://graphql.anilist.co", opts, true);
   const media = (data && data.data && data.data.Page && data.data.Page.media) || [];
   return media.map(m => ({
     id: m.id,
@@ -3165,7 +3266,6 @@ function describeFetchError(e){
   if(/Failed to fetch|NetworkError|TypeError/i.test(msg)) return "网络错误或被浏览器跨域拦截（可在设置中配置代理）";
   return msg;
 }
-
 /* 8.3 候选 → 详情补全 */
 async function enrichCandidate(c){
   const full = Object.assign({}, c);
@@ -8576,8 +8676,15 @@ function settingsBodyHTML(){
       '<label class="checkline"><input type="checkbox" data-set="src_bangumi_enabled"' + (settings.src_bangumi_enabled ? " checked" : "") + "><span>启用</span></label>");
     html += setRow("AniList", "补日番，GraphQL 接口可直连",
       '<label class="checkline"><input type="checkbox" data-set="src_anilist_enabled"' + (settings.src_anilist_enabled ? " checked" : "") + "><span>启用</span></label>");
-    html += setRow("CORS 代理地址", "浏览器直连被跨域拦截时可用。拼接方式：<code>代理前缀 + encodeURIComponent(目标URL)</code>，<b>代理需转发请求方法与请求体</b>。留空则不使用。",
-      '<input class="input" style="width:100%" data-set="data_proxy_url" value="' + attr(settings.data_proxy_url) + '" placeholder="https://你的代理/?url=">');
+    html += setRow("CORS 代理地址",
+      "只在浏览器直连被跨域拦截时才用得上。拼接方式：<code>代理前缀 + encodeURIComponent(目标URL)</code>，<b>代理需转发请求方法与请求体</b>（搜索是 POST）。" +
+      "<br><b>实测提醒：</b>常见公共代理（allorigins、corsproxy.io、codetabs 等）在中国大陆多数<b>连不上、被限流或已要 API Key</b>，没有一个能保证长期可用。" +
+      "AniList 本身可直连，通常不需要代理；真正需要代理的往往是 Bangumi。填完请先点右侧「测试」。",
+      '<div style="display:flex;gap:8px;align-items:center">' +
+        '<input class="input" style="flex:1" data-set="data_proxy_url" value="' + attr(settings.data_proxy_url) + '" placeholder="https://你的代理/?url=">' +
+        '<button class="btn" type="button" data-act="test-proxy">测试</button>' +
+      "</div>" +
+      '<div class="small muted mt-2" data-proxy-report>' + (settings.data_proxy_url ? "尚未测试。" : "留空则不使用代理。") + "</div>");
     html += setRow("每源搜索结果条数", "1–25",
       '<input class="input" style="width:88px" type="number" min="1" max="25" step="1" data-set="search_limit" value="' + settings.search_limit + '">');
     html += "</div>";
@@ -8799,6 +8906,31 @@ async function updateUsageText(root){
 }
 async function settingsAction(act, id, root){
   switch(act){
+    case "test-proxy": {
+      const input = root.querySelector('input[data-set="data_proxy_url"]');
+      const box = root.querySelector("[data-proxy-report]");
+      const prefix = (input && input.value || "").trim();
+      if(!prefix){
+        if(box) box.textContent = "请先填写代理地址。";
+        toast("请先填写代理地址", "warn");
+        return;
+      }
+      if(box) box.textContent = "正在测试…";
+      const r = await diagnoseProxy(prefix);
+      if(!box) return;
+      /* 报告要能指出「哪一层坏了」。只说「失败」的话，
+         用户在「网络不通」「没 CORS 头」「要 API Key」之间无从下手，
+         只能一个个换地址碰运气。 */
+      const tone = r.ok ? "fav" : "master";
+      const head = r.ok ? "可用" : ("失败：" + r.stage);
+      box.innerHTML = '<span class="badge badge-' + tone + '">' + esc(head) + "</span> " + esc(r.detail) +
+        '<div class="small muted" style="margin-top:4px">探测目标 AniList 的 GET 返回 ' +
+        (r.status === null ? "无响应" : "HTTP " + r.status) +
+        "（它本就不接受 GET，这个状态属正常）；CORS 头：" +
+        (r.cors === null ? "未收到响应" : (r.cors ? "有" : "无")) + "</div>";
+      toast(r.ok ? "代理可用" : ("代理" + r.stage + "不可用"), r.ok ? "ok" : "warn");
+      return;
+    }
     case "se-add": {
       openModal({
         title:"新建系列", narrow:true,

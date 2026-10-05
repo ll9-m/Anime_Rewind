@@ -231,7 +231,7 @@ export NODE_PATH=C:/Users/lxc/.workbuddy/binaries/node/workspace/node_modules
 ```
 
 ```bash
-# 功能测试（共 661 项：jsdom 635 + 真实浏览器 26）
+# 功能测试（共 691 项：jsdom 665 + 真实浏览器 26）
 node tools/smoke.js                  # 125 项 · 启动/入库/七页面/主题/导入导出/3D 卡/触摸端/版权
 node tools/test-csv.js               #  30 项 · CSV 解析与表头映射
 node tools/test-sound.js             #  25 项 · WebAudio 音效
@@ -242,6 +242,10 @@ node tools/test-series.js            #  48 项 · 系列归类全链路
 node tools/test-skins.js             #  48 项 · 四套 UI 套系交叉
 node tools/test-source.js            #  37 项 · 迁移幂等、三态筛选、DFS 偏好、分阶段选源
 node tools/test-tv-skin.js           # 132 项 · TV 影院几何、列数公式、CSS 泄漏、卡行分组、剧集卡
+node tools/test-proxy.js             #  30 项 · 代理响应解包、自检分层、AniList 走代理
+
+# 网络实测（依赖真实外网，结果随时间变化）
+node tools/probe-cors-agents.js      # 15 个公共代理 × 3 轮，统计可用率
 
 # 对比度实测（WCAG AA，退出码非 0 即失败）
 node tools/contrast.js               # 三主题 text/text-2/muted/accent
@@ -365,11 +369,52 @@ jsdom 会在后续交互里陷入死循环，整个测试**静默卡死、连一
 ## 已知限制
 
 - **搜索需要联网**，且 Bangumi 在 `file://` 下因 origin 为 null 会被拒。
-  填一个代理地址（设置 → 数据源）可解决。
+  可在设置 → 数据源填代理地址，填完点「测试」自检。
+  但请先读下面这节 —— 多数公共代理在国内并不好用。
 - **`file://` 打开时存储降级**到 localStorage，容量约 5MB。
 - **B 站播放**依赖官方 iframe 播放器，番剧需要能访问 `player.bilibili.com`。
   解析失败时会提供跳转官方链接。
 - **ECharts 走 CDN**，离线环境下图表降级为文字排行（功能不丢，样式变简）。
+
+---
+
+## 关于 CORS 代理（实测结论，别当银弹）
+
+`data_proxy_url` 只是给「浏览器直连被跨域拦截」留的出口，**不是万能解**。
+在无梯子的中国大陆网络下实测15 个常见公共代理（每候选 3 轮，
+判据为2xx 且带 `Access-Control-Allow-Origin`）：
+
+| 代理 | 结果 |
+|---|---|
+| `allorigins.win/raw` | 超时 / 超时 / 超时（偶发单次成功，不可依赖） |
+| `allorigins.win/get` | 0/3，且会把响应包成 `{contents:"<原body>"}` |
+| `corsproxy.io` | 3/3 返回 **401**，现已要 API Key |
+| `api.codetabs.com` | 0/3 超时 |
+| `cors.lol` | 3/3 **429** 限流 |
+| `corsproxy.xyz` | 3/3 **200 但不带 CORS 头**，浏览器仍拦 |
+| `cors-anywhere.herokuapp.com` | 0/3 超时（公共实例早已停用） |
+| `cors.eu.org` / `cors.iamnd.eu.org` | **403** |
+| `thingproxy` | 域名已失效 |
+| `ghfast.top` / `ghproxy.net` | 对 GitHub 200，对其他域名 **403 Invalid input**（只做 GitHub 加速） |
+
+**结论：没有稳定可用的国内公共 CORS 代理。** 免费公共代理的服务器基本在境外，
+国内直连就是超时；能通的大多已要 Key 或已关停。
+
+几条因此写进代码的判断：
+
+- **AniList 可直连**（`graphql.anilist.co` 实测 200 + `Access-Control-Allow-Origin: *`），
+  通常根本不需要代理。真正需要代理的往往是 Bangumi（`api.bgm.tv` 在部分网络下 TCP 直接不通）。
+- **能转发 POST 才算能用**：搜索是 POST，只支持 GET 的代理填进去照样失败。
+- **有响应 ≠ 浏览器能读**：缺 CORS 头的代理在 curl 里看着完全正常，页面上照样被拦。
+  所以自检单独查 `Access-Control-Allow-Origin`。
+- **自动解包壳**：allorigins 的 `/get` 会把响应包成 `{ contents: "<原body 字符串>" }`。
+  不解包的话下游读 `data.data`全是 `undefined`，表现成「搜索到 0 条」——
+  用户会以为是自己关键词的问题。解包时同时排除 HTML 错误页与 `{ error }`，
+  否则代理故障会被伪装成「没搜到」，那是最难查的一类假象。
+
+想要稳定的代理，只能自建：Cloudflare Workers / Vercel / 国内云函数
+上放一个十几行的转发，把它的地址填进来，然后用「测试」确认。
+`tools/probe-cors-agents.js` 是本节数据的来源，改完网络环境可以自己再跑一遍。
 
 ---
 

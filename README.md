@@ -256,7 +256,7 @@ export NODE_PATH=C:/Users/lxc/.workbuddy/binaries/node/workspace/node_modules
 ```
 
 ```bash
-# 功能测试（共 855 项：jsdom 774 + 真实浏览器 81）
+# 功能测试（共 934 项：jsdom 777 + 真实浏览器 157）
 node tools/smoke.js                  # 125 项 · 启动/入库/八页面/主题/导入导出/3D 卡/触摸端/版权
 node tools/test-csv.js               #  30 项 · CSV 解析与表头映射
 node tools/test-sound.js             #  25 项 · WebAudio 音效
@@ -266,7 +266,7 @@ node tools/test-library-actions.js   #  22 项 · 片库卡片动作
 node tools/test-series.js            #  48 项 · 系列归类全链路
 node tools/test-skins.js             #  48 项 · 四套 UI 套系交叉
 node tools/test-source.js            #  47 项 · 迁移幂等、三态筛选、DFS 偏好、台账状态参与选源
-node tools/test-source-manager.js    #  61 项 · 台账摊平、统计口径、四种排序、待办行、批量写操作
+node tools/test-source-manager.js    #  64 项 · 台账摊平、统计口径、四种排序、待办行、批量写操作、徽标诚实性
 node tools/test-tv-skin.js           # 132 项 · TV 影院几何、列数公式、CSS 泄漏、卡行分组、剧集卡
 node tools/test-proxy.js             #  30 项 · 代理响应解包、自检分层、AniList 走代理
 node tools/test-bg.js                #  38 项 · 背景图渲染与对比度
@@ -306,14 +306,51 @@ node tools/contrast-stream-note.js   # 播放记录提示条
   修法是让断言按当前实际状态去取对象（`sourceUsable(r.source)`），
   并把「哪几行被动过」显式记下来。
 
+### 委托监听器：整表重渲的页面必须只挂一次
+
+台账页的按钮全是 `data-act` 委托到 `#view` 上的。修吐司刷屏时
+挖出一条更普适的规律，值得单列：
+
+`rerenderLedger()` 走的是 `rerender → renderRoute → page.render(view)`，
+而 **`#view` 这个节点本身从不替换、只换 `innerHTML`**。
+所以每次重渲染都往同一个 `root` 上再挂一遍监听器 ——
+第三次点按钮就触发三次，批量操作会连着写三次库。
+症状是「吐司刷屏」，看起来像渲染有问题，实际是监听器叠了 N 层。
+反向验证时一次点击弹出了 **90 个**吐司。
+
+修法是 `root.dataset` 打幂等标记。但**只挂一次之后，闭包里捕获的
+`all` / `rows` / `dupes` 就成了首次渲染的快照**，增删改之后全是旧的，
+必须改成每次现取 —— 否则去重会拿上一轮的旧列表二次删除。
+
+判据也重写了：「一次操作弹几个吐司」比「功能有没有生效」灵敏得多。
+`box.checked === true` 在这个 bug 下**依然是 true**
+（状态是对的，坏的是重渲后的属性回填），只有数吐司个数才抓得到。
+
+### 勾号要量像素，不能只量状态
+
+`input[type=checkbox]` 用了 `appearance:none` + `::after` 画对角线。
+断言只写 `box.checked === true` 的话，勾号**画没画出来、有多粗、
+在浅色套系下和不和底色混成一片**，全部测不出来。
+`tools/verify-pick-contrast.js` 遍历四套 UI × 明暗主题，
+每种组合都量勾号的宽高、描边宽度、勾色与底色的差异，
+再把截图塞回页面用 `OffscreenCanvas` 读像素 ——
+**量化后至少 3 种颜色**才算勾真的画出来了
+（抗锯齿的斜边会渲出过渡色，只有 2 种色说明勾压根没画）。
+
+刻意没装 `pngjs`：为一个断言新增依赖不划算，
+`OffscreenCanvas` 是浏览器自带的，判据一样成立。
+
 ```bash
 # 真实浏览器验证（需要 Edge），截图落在 _shot/（不入库）
 node tools/verify-tv-layout.js      # 26 项 · 侧栏折叠几何 + 翻面像素统计
 node tools/verify-ledger.js         # 55 项 · 台账渲染、勾选、弹窗、筛选、删除、详情页入口、模块开关
-node tools/shot-ledger.js           # 出图：台账页/ 编辑弹窗 / 待办行 / 探测中（人眼过一遍）
+node tools/verify-ledger-pick.js    # 35 项 · 勾选状态回填、吐司去重、徽标诚实性、四套系勾号
+node tools/verify-pick-contrast.js  # 41 项 · 四套 UI × 明暗主题的勾号像素可见性
+node tools/shot-ledger.js           # 出图：台账页 / 编辑弹窗 / 待办行 / 探测中
+node tools/shot-ledger-pick.js      # 出图：勾选态 / 勾号特写 / 批量吐司 / 使用中筛选
 ```
 
-当前状态：**855/855 全绿**，5 个对比度脚本全部通过 WCAG AA。
+当前状态：**934/934 全绿**，5 个对比度脚本全部通过 WCAG AA。
 
 ### 浏览器端验证（CDP）
 

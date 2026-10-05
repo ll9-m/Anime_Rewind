@@ -5546,8 +5546,16 @@ function sourceDisplayName(s){
 function sourceFlags(row){
   const s = row.source;
   const out = [];
+  /* 「使用中」只在**真能播**时才给。
+     activeSourceOf 在一部作品全部线路都停用/失效时会退回第一条，
+     那是为了不让 activeSourceId 悬空、详情页不至于显示不出线路。
+     但拿它当「使用中」badge 就是骗人：那条线路实际播不了，
+     用户会以为放着不管就能看。徽标描述的是播放器的真实选择，
+     不是数据结构里的指针指向。 */
   const act = activeSourceOf(row.anime);
-  if(act && act.id === s.id) out.push({ id:"active", text:"使用中", tone:"ok" });
+  if(act && act.id === s.id && sourceUsable(act)){
+    out.push({ id:"active", text:"使用中", tone:"ok" });
+  }
   if(s.enabled === false) out.push({ id:"disabled", text:"已停用", tone:"muted" });
   const h = normalizeHealth(s.health);
   if(h.state === "dead") out.push({ id:"dead", text:"已失效", tone:"err" });
@@ -7100,9 +7108,16 @@ function ledgerRowHTML(row, picked){
     ledgerState.progress.keys && ledgerState.progress.keys.has(ledgerKey(row));
   const ep = s.ep == null ? "整季" : "第 " + s.ep + " 集";
   const meta = [s.resolution, ep].filter(Boolean).join(" · ");
+  /* checked 必须由数据回填，不能只靠 class。
+     台账的每一次筛选/勾选/批量操作都会整表重渲，
+     重渲出来的是全新 DOM —— 不写 checked 的话，
+     「行高亮着但框里没勾」，用户看到的正是「勾不上 / 没箭头」。
+     高亮（is-picked）与勾选（checked）必须同源，
+     否则两者会各说各话。 */
   return '<tr class="' + (dead ? "is-dead " : "") + (picked ? "is-picked " : "") + (probing ? "is-probing" : "") +
       '" data-key="' + attr(ledgerKey(row)) + '" data-anime="' + attr(a.id) + '">' +
-    '<td class="col-check"><input type="checkbox" data-act="pick" aria-label="选择 ' + attr(sourceDisplayName(s)) + '"></td>' +
+    '<td class="col-check"><input type="checkbox" data-act="pick" aria-label="选择 ' + attr(sourceDisplayName(s)) + '"' +
+      (picked ? " checked" : "") + "></td>" +
     '<td class="col-src"><div class="truncate" style="max-width:260px">' +
       esc(a.titleCn || a.titleOriginal || "未命名") + "</div>" +
       '<span class="url-cell" title="' + attr(s.url) + '">' + esc(s.url) + "</span></td>" +
@@ -7235,8 +7250,21 @@ function bindLedger(root, all, rows){
   const s = root.querySelector("#led-sort");
   if(s) s.addEventListener("change", () => { ledgerState.sort = s.value; rerenderLedger(); });
 
-  /* 找行数据。行由 render 生成，用 key 反查，避免把整个 anime 塞进 DOM 属性 */
-  const rowByKey = (key) => all.find(r => r.source && ledgerKey(r) === key) || null;
+  /* 委托监听必须**只挂一次**。
+     rerenderLedger 走的是 rerender → renderRoute → page.render(view)，
+     而 #view 这个节点本身从不替换、只换 innerHTML，
+     所以每次重渲染都往同一个 root 上再挂一遍监听器：
+     第三次点按钮就会触发三次，一次操作弹出三个吐司，
+     批量操作更会连着写三次库。症状是「吐司刷屏」，
+     看起来像渲染有问题，实际是监听器叠了 N 层。
+     用 dataset 打标记做幂等 —— 比 abortController 简单，
+     且不影响同一页面上其它委托绑定。 */
+  if(root.dataset.ledgerBound) return;
+  root.dataset.ledgerBound = "1";
+
+  /* 只挂一次委托之后，闭包里的 all/rows/dupes 就成了**首次渲染的快照**，
+     增删改之后全是旧的。所以这三样一律现取，绝不缓存到闭包里。 */
+  const rowByKey = (key) => sourceLedger().find(r => r.source && ledgerKey(r) === key) || null;
 
   root.addEventListener("change", (e) => {
     const box = e.target.closest('[data-act="pick"]');
@@ -7245,7 +7273,6 @@ function bindLedger(root, all, rows){
     const i = ledgerState.picked.indexOf(key);
     if(box.checked && i < 0) ledgerState.picked.push(key);
     else if(!box.checked && i >= 0) ledgerState.picked.splice(i, 1);
-    box.closest("tr").classList.toggle("is-picked", box.checked);
     rerenderLedger();
   });
 
@@ -7263,7 +7290,7 @@ function bindLedger(root, all, rows){
     if(act === "goto-theater"){ go("theater"); return; }
     if(act === "open-anime"){ go("theater", btn.dataset.id); return; }
     if(act === "pick-all"){
-      rows.forEach(r => {
+      filterLedgerRows(sourceLedger()).forEach(r => {
         if(!r.source) return;
         const k = ledgerKey(r);
         if(ledgerState.picked.indexOf(k) < 0) ledgerState.picked.push(k);
@@ -7307,7 +7334,7 @@ function bindLedger(root, all, rows){
       rerenderLedger(); return;
     }
     if(act === "bulk-disable" || act === "bulk-enable"){
-      const list = pickedLedgerRows(all);
+      const list = pickedLedgerRows(sourceLedger());
       if(!list.length) return;
       const on = act === "bulk-enable";
       for(const r of list) await updateSource(r, { enabled:on });
@@ -7315,14 +7342,14 @@ function bindLedger(root, all, rows){
       rerenderLedger(); return;
     }
     if(act === "bulk-dead"){
-      const list = pickedLedgerRows(all);
+      const list = pickedLedgerRows(sourceLedger());
       if(!list.length) return;
       for(const r of list) await markSourceDead(r, true);
       toast("已把 " + list.length + " 条线路标记为失效", "ok");
       rerenderLedger(); return;
     }
     if(act === "bulk-del"){
-      const list = pickedLedgerRows(all);
+      const list = pickedLedgerRows(sourceLedger());
       if(!list.length) return;
       const ok = await confirmDialog({
         title:"批量删除线路", danger:true, okText:"删除 " + list.length + " 条",
@@ -7339,6 +7366,9 @@ function bindLedger(root, all, rows){
       rerenderLedger(); return;
     }
     if(act === "dedupe"){
+      /* 现取：上一轮去重已经改过库里数据，闭包里的旧 dupes 会二次删除 */
+      const dupes = ledgerDuplicates(sourceLedger());
+      if(!dupes.length){ toast("当前没有重复线路", "info"); return; }
       const ok = await confirmDialog({
         title:"清理重复线路", danger:true, okText:"清理",
         html:"将删除 <b>" + dupes.length + "</b> 条重复线路（同一部作品里网址与集数完全相同的多余项），<br>" +
@@ -7351,7 +7381,7 @@ function bindLedger(root, all, rows){
       rerenderLedger(); return;
     }
     if(act === "revive-all"){
-      const dead = all.filter(r => normalizeHealth(r.source.health).state === "dead");
+      const dead = sourceLedger().filter(r => normalizeHealth(r.source.health).state === "dead");
       for(const r of dead) await markSourceDead(r, false);
       toast("已恢复 " + dead.length + " 条线路", "ok");
       rerenderLedger(); return;

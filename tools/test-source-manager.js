@@ -107,6 +107,25 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
   `);
   check("已失效的线路不会再被标为使用中", b2 === false, b2);
 
+  /* 全部停用时 activeSourceOf 会退回第一条（免得 activeSourceId 悬空、
+     详情页显示不出线路），但那条线路实际播不了 ——
+     拿它当「使用中」badge 就是骗人，用户会以为放着不管就能看。
+     activeSourceOf 保证「有东西可显示」，徽标保证「不撒谎」，两件事分开。 */
+  const b3 = await ev(`
+    const a = { id:"Z1", titleCn:"独苗", sources:[{ id:"z1", url:"https://z.com/1", name:"Z", enabled:false }], activeSourceId:"z1" };
+    migrateSources(a);
+    const act = activeSourceOf(a);
+    const flags = sourceFlags({ anime:a, source:a.sources[0] }).map(f => f.id);
+    return JSON.stringify({ actId: act ? act.id : null, flags });
+  `);
+  const b3o = b3;
+  check("全部停用时 activeSourceOf 仍返回一条（详情页不空白）",
+    b3o.actId === "z1", b3o);
+  check("全部停用时不再显示「使用中」徽标",
+    b3o.flags.indexOf("active") < 0, b3o);
+  check("但仍显示「已停用」徽标（状态要如实呈现）",
+    b3o.flags.indexOf("disabled") >= 0, b3o);
+
   /* ---------- 3. 统计口径 ---------- */
   const st1 = await ev(`return JSON.stringify(sourceLedgerStats(sourceLedger()))`);
   const st1o = st1;

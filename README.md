@@ -231,7 +231,7 @@ export NODE_PATH=C:/Users/lxc/.workbuddy/binaries/node/workspace/node_modules
 ```
 
 ```bash
-# 功能测试（共 625 项）
+# 功能测试（共 661 项：jsdom 635 + 真实浏览器 26）
 node tools/smoke.js                  # 125 项 · 启动/入库/七页面/主题/导入导出/3D 卡/触摸端/版权
 node tools/test-csv.js               #  30 项 · CSV 解析与表头映射
 node tools/test-sound.js             #  25 项 · WebAudio 音效
@@ -241,7 +241,7 @@ node tools/test-library-actions.js   #  22 项 · 片库卡片动作
 node tools/test-series.js            #  48 项 · 系列归类全链路
 node tools/test-skins.js             #  48 项 · 四套 UI 套系交叉
 node tools/test-source.js            #  37 项 · 迁移幂等、三态筛选、DFS 偏好、分阶段选源
-node tools/test-tv-skin.js           # 111 项 · TV 影院几何、列数公式、CSS 泄漏、卡行分组、剧集卡
+node tools/test-tv-skin.js           # 132 项 · TV 影院几何、列数公式、CSS 泄漏、卡行分组、剧集卡
 
 # 对比度实测（WCAG AA，退出码非 0 即失败）
 node tools/contrast.js               # 三主题 text/text-2/muted/accent
@@ -249,6 +249,27 @@ node tools/contrast-skins.js         # 像素 / 全息两套新皮肤
 node tools/bg-contrast.js            # 背景图开底后的文字对比度
 node tools/caption-contrast.js       # 封面墙字幕
 node tools/contrast-stream-note.js   # 播放记录提示条
+```
+
+### 为什么有些验证必须开真浏览器
+
+`jsdom` 不做布局、不渲染 3D：`getBoundingClientRect` 一律返回 0，
+`backface-visibility` / `perspective` 完全不生效。
+于是「元素被 `overflow:hidden` 裁掉一半」「3D 翻转后两个面同时不可见」
+这类故障在单测里永远是绿的 —— DOM 完好、样式规则齐全、断言全过。
+
+`tools/verify-tv-layout.js` 用 headless Edge + CDP 量真实几何，
+并对截图像素做统计（`inkRatio`）。它的两条判据值得记住：
+
+- **像素统计的阈值必须从实际底色亮度推出**，不能写死绝对值。
+  写死 `46` 而侧栏底色亮度是 `52` 时，整块背景被算成「有内容」，
+  收起态恒为 `ink=1` —— 一个恒真的假红。
+- **「画面非空」要用相对判据**（翻面后必须明显比翻面前「有东西」），
+  不能对正面用绝对阈值：测试数据常无封面，正面本来就是暗的。
+
+```bash
+# 真实浏览器验证（需要 Edge），截图落在 _shot/（不入库）
+node tools/verify-tv-layout.js      # 26 项 · 侧栏折叠几何 + 翻面像素统计
 ```
 
 当前状态：**404/404 全绿**，5 个对比度脚本全部通过 WCAG AA。

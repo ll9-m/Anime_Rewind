@@ -1688,9 +1688,11 @@ details > summary:hover{ color:var(--accent); }
 [data-skin="tv"]{
   --sidebar-w:48px;                /* 收起态占位宽：与内容左缘对齐 */
   --card-min:118px;                /* 海报卡最小宽，对应「一屏 6 张」 */
+  /* --rail-w / --rail-w-open / --tv-bleed / --tv-gap / --card-min
+     由 applyTvTokens() 从 TV_LAYOUT 写入，值与 JS 常量同源。
+     这里的字面值只是首屏兜底（applyTvTokens 未跑时也能看）。 */
   --rail-w:48px;
   --rail-w-open:216px;
-  --tv-scrim:180px;
   --tv-bleed:64px;                 /* 下出血 */
   --tv-card-radius:8px;
   --tv-gap:20px;
@@ -1725,45 +1727,81 @@ details > summary:hover{ color:var(--accent); }
 /* 侧栏：收起态只留图标，聚焦/悬停时右侧浮出文字并压一层羽化遮罩。
    内容整体右移让开收起宽度，不重排 —— 重排会在浮出的瞬间抖动。 */
 [data-skin="tv"] #sidebar{
+  /* 基础规则是 flex:0 0 var(--sidebar-w)，flex-basis 在 flex 容器里
+     优先于 width —— 只改 :hover 的 width 的话展开根本不会发生。
+     两处都要改。
+     position:relative 同样必要：::after 羽化遮罩是 absolute，
+     没有定位祖先时会贴到 #shell 上铺满整屏，而不是侧栏右缘的 180px。 */
+  position:relative;
   width:var(--rail-w);
+  flex:0 0 var(--rail-w);
   overflow:hidden;
-  transition:width var(--dur) var(--ease);
+  transition:width var(--dur) var(--ease), flex-basis var(--dur) var(--ease);
   background:var(--panel);
 }
+/* 羽化遮罩：原先照搬 Izuko_TV 的 TV_RAIL_SCRIM_WIDTH 做右缘渐隐。
+   那个前提是「侧栏浮在内容之上」（Compose 里 Rail 覆盖在 Surface 上）。
+   本项目的侧栏是 flex 布局里的独立不透明栏（#sidebar 自己有 background），
+   文字本来就不压在内容上，不需要羽化保护。
+   更糟的是 ::after 作为最后一个子元素 z 序在内容之上 ——
+   展开动画期间那层半透明渐变会把自己的文字洗成残影，
+   底部「收录总数/数据位置」几乎看不见。
+   去掉这层；展开态靠宽度过渡就够了。 */
 [data-skin="tv"] #sidebar:hover,
 [data-skin="tv"] #sidebar:focus-within{
   width:var(--rail-w-open);
+  flex-basis:var(--rail-w-open);
 }
-[data-skin="tv"] #sidebar::after{
-  /* 右缘羽化：前82% 纯色，末段渐隐到透明。用固定层而非 box-shadow，
-     因为要渐隐到全透明，阴影做不到。 */
-  content:""; position:absolute; top:0; right:0; bottom:0; width:var(--tv-scrim);
-  pointer-events:none; opacity:0;
-  background:linear-gradient(to right, var(--panel) 0%, var(--panel) 72%, transparent 100%);
-  transition:opacity var(--dur) var(--ease);
-}
-[data-skin="tv"] #sidebar:hover::after,
-[data-skin="tv"] #sidebar:focus-within::after{ opacity:1; }
+/* 收起态必须让文字「不占布局」而不是「透明」。
+   opacity:0 的元素照样占位，而 .brand 是 justify-content:center ——
+   居中的是「图标 + 隐藏文字」这个整体（28+12+文字宽，远大于 48px），
+   两侧溢出被 overflow:hidden 裁掉，图标被推出左缘、只剩半个字露在中间。
+   上游用 AnimatedVisibility(expanded)，语义就是「不参与布局」，对应 display:none。
+   收起态不渲染文字，展开态再显示：宽度过渡本身已有 --dur，
+   文字在侧栏展开到位时出现，视觉上可接受。 */
 [data-skin="tv"] #sidebar .brand-text,
 [data-skin="tv"] #sidebar .nav-item span,
 [data-skin="tv"] #sidebar .side-honor span,
 [data-skin="tv"] #sidebar .side-stat{
-  opacity:0; transition:opacity var(--dur-fast) var(--ease);
+  display:none;
+  /* 展开后 216px 装不下长的系列名/称号名，不 nowrap 会折成两行把
+     整个侧栏撑高，导航项跟着错位。收起态 display:none 不受影响。 */
   white-space:nowrap;
 }
 [data-skin="tv"] #sidebar:hover .brand-text,
 [data-skin="tv"] #sidebar:hover .nav-item span,
 [data-skin="tv"] #sidebar:focus-within .nav-item span,
 [data-skin="tv"] #sidebar:hover .side-honor span,
-[data-skin="tv"] #sidebar:hover .side-stat{ opacity:1; }
-/* 导航图标块：32px 方块 + 6px 圆角，取自 TvNavigationSideRail */
+[data-skin="tv"] #sidebar:hover .side-stat span,
+[data-skin="tv"] #sidebar:hover .side-stat b{ display:revert; }
+/* .side-stat 不能跟着一起 revert。
+   revert 回滚到「作者样式」，而基础 .side-stat 的 display:flex 恰好
+   也是作者样式的一部分——但这条规则里同时被自己的 display:none 覆盖过，
+   revert 的「回滚到作者样式」与本规则的声明处在同一条规则内，
+   最终算出来是 block：数值被挤到第二行，展开态只看得见「收录总数」
+   而看不见数字。逐个显式写回，别图省事。 */
+[data-skin="tv"] #sidebar:hover .side-stat,
+[data-skin="tv"] #sidebar:focus-within .side-stat{ display:flex; }
+/* 底部信息在收起态是一个纯图标方块：整块居中，文字不参与布局 */
+[data-skin="tv"] .side-honor{ justify-content:center; padding:var(--sp-2) 0; }
+[data-skin="tv"] #sidebar:hover .side-honor{ justify-content:flex-start; padding:var(--sp-2) var(--sp-3); }
+/* 导航图标块：32px 方块 + 6px 圆角，取自 TvNavigationSideRail。
+   宽度只在收起态压到 32px —— 展开态必须放回 100%，
+   否则文字被塞进 32px 宽的框里逐字换行。 */
 [data-skin="tv"] .nav-item{
   width:32px; height:32px; border-radius:6px; justify-content:flex-start;
   padding:0; margin:2px auto; flex:0 0 auto;
 }
+[data-skin="tv"] #sidebar:hover .nav-item,
+[data-skin="tv"] #sidebar:focus-within .nav-item{
+  width:100%; height:auto; margin:2px 0; padding:9px var(--sp-3);
+  justify-content:flex-start;
+}
 [data-skin="tv"] .nav-item span{ margin-left:var(--sp-3); }
-/* 品牌区收起时只留mark：文字被隐藏但仍占位会让图标偏移 */
+/* 品牌区收起时只留 mark（文字 display:none 后无需再靠 justify-content 补偿） */
 [data-skin="tv"] .brand{ justify-content:center; padding:var(--sp-3) 0; }
+[data-skin="tv"] #sidebar:hover .brand,
+[data-skin="tv"] #sidebar:focus-within .brand{ justify-content:flex-start; padding:var(--sp-2) var(--sp-2) var(--sp-4); }
 [data-skin="tv"] .brand-mark{ width:28px; height:28px; }
 
 /* 海报卡：两行定高番名。
@@ -1785,15 +1823,38 @@ details > summary:hover{ color:var(--accent); }
 /* 静止投影 + 聚焦抬起，两层交叉淡入。
    抬起幅度与文字淡度要配比：抬起大就文字全亮，抬起小就该淡一档。 */
 [data-skin="tv"] .card .fc-face{ box-shadow:0 1px 4px rgba(0,0,0,.4); }
-[data-skin="tv"] .card:hover .fc-face,
-[data-skin="tv"] .card:focus-visible .fc-face{
+/* 抬起不能只写 transform:scale(1.06) 挂在 .fc-face 上。
+   背面自身带着 rotateY(180deg)——那行被整体覆盖掉之后，
+   父级 .card-3d 已经转了 180°，背面就转到了侧面，
+   被自己的 backface-visibility:hidden 干掉；正面同理。
+   表现是「卡片翻过去是一片空白」。
+   所以正面只缩放、背面在保留自身旋转的前提下缩放。
+   抬升不靠 z-index：preserve-3d 元素上z-index 不参与渲染排序，
+   写了不会生效。scale 本身就把卡片顶到视觉上层。 */
+[data-skin="tv"] .card:hover .fc-front,
+[data-skin="tv"] .card:focus-visible .fc-front{
   transform:scale(1.06);
   box-shadow:0 12px 34px rgba(0,0,0,.55);
-  z-index:2;
+}
+[data-skin="tv"] .card:hover .fc-back,
+[data-skin="tv"] .card:focus-visible .fc-back{
+  transform:rotateY(180deg) scale(1.06);
+  box-shadow:0 12px 34px rgba(0,0,0,.55);
 }
 [data-skin="tv"] .card:focus-visible{ outline:2px solid var(--accent); outline-offset:3px; }
 /* 进度条贴封面底缘，两端内缩圆角半径 */
 [data-skin="tv"] .fc-prog .progress{ height:3px; border-radius:2px; }
+/* 无封面时的占位大字（coverImg 取番名首字）要与字幕块拉开对比。
+   基础字幕块渐变从 .58 起，而 .placeholder 用的 --fs-2xl 大字在
+   TV 的 118px 窄卡上正好落在渐变最透的那一段，透出来像两层字叠在一起。
+   只压暗占位层本身，不动字幕块 —— 改字幕块会连带影响所有套系的
+   白底海报可读性（那条曲线是按纯白封面最坏情况验证的）。 */
+[data-skin="tv"] .fc-front .placeholder{
+  background:var(--panel-3);
+  color:var(--muted);
+  /* 大字降到 fs-xl：--fs-2xl 在 118px 宽的卡上会顶到字幕块 */
+  font-size:var(--fs-xl);
+}
 
 /* 片库网格：列数由 JS 按 (宽 +间距) / (最小卡宽 + 间距) 算，
    写死列数会在某些宽度下出现「空一列」或卡片挤成一条。 */
@@ -2033,14 +2094,28 @@ const UI_SKINS = ["archive", "pixel", "holo", "tv"];
 /* TV 套系的几何常量。来源是 Izuko_TV 的 TvPosterWall.kt，
    不是自己拟的数值 —— 那些数字是照Apple TV 一屏 6 张反推出来的，
    改成别的会连带破坏「一屏 6 张」的观感。 */
+/* 几何常量。CSS 侧统一用 var(--tv-*) 取值，本对象是唯一的数值来源 ——
+   原来 CSS 里另写了一份 --rail-w/--tv-bleed，与这里的数字各活各的，
+   改一处忘另一处就会出「CSS 说 48px、列数公式按 236 算」这类错位。
+   同一段脚本里把这些值写进 CSS 变量（见 applyTvTokens）。 */
 const TV_LAYOUT = {
   railCollapsed: 48,      /* 收起态占位宽，让内容左缘与详情页对齐 */
-  railScrim: 180,         /* 展开时右侧羽化遮罩宽 */
+  railOpen: 216,          /* 展开态宽：48 收起 + 168 文字，放得下最长系列名 */
   cardMinWidth: 118,      /* 不是 124：留余量防边界抖动掉到 5 列 */
   columnSpacing: 20,
   bottomBleed: 64,        /* 下出血：焦点走过去时按位置跑动画，不闪现 */
   bgTone: "#2C2C2E"       /* 深灰而非纯黑 —— 纯黑在屏幕上与深灰分不出来 */
 };
+/* 把 JS 侧的几何写进 CSS 变量。切套系时由 applyAppearance 调用 ——
+   不这样做的话 CSS 里的字面值与这里就成了两个独立真相。 */
+function applyTvTokens(){
+  const s = document.documentElement.style;
+  s.setProperty("--rail-w", TV_LAYOUT.railCollapsed + "px");
+  s.setProperty("--rail-w-open", TV_LAYOUT.railOpen + "px");
+  s.setProperty("--tv-bleed", TV_LAYOUT.bottomBleed + "px");
+  s.setProperty("--tv-gap", TV_LAYOUT.columnSpacing + "px");
+  s.setProperty("--card-min", TV_LAYOUT.cardMinWidth + "px");
+}
 
 /* 横滑卡行与剧集卡的额度，数值全部来自 Izuko_TV，不是自拟：
      watchNextLimit  ← TvHomeChannels.WATCH_NEXT_LIMIT
@@ -2745,7 +2820,7 @@ function applyAppearance(){
   overlay.style.display = "block";
   /* TV 套系的列数必须在 DOM 就位后算：applyAppearance 早于首屏渲染，
      此时 .wall 还不存在。留到下一帧再算。 */
-  if(settings.ui_skin === "tv") requestAnimationFrame(updateTvColumns);
+  if(settings.ui_skin === "tv"){ applyTvTokens(); requestAnimationFrame(updateTvColumns); }
 }
 /* 列数公式，直译 Izuko_TV 的 TvPosterWall.tvPosterWallColumns：
      列数 = floor((可用宽 + 间距) / (最小卡宽 + 间距))

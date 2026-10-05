@@ -65,11 +65,48 @@ function ratio(a, b){
   /* ---------- 2. 几何常量（照 Izuko_TV，不是自己拟的） ---------- */
   const L = (await ev('return JSON.stringify(TV_LAYOUT)'));
   check("侧栏收起态 48px", L.railCollapsed === 48, L.railCollapsed);
-  check("展开遮罩 180px", L.railScrim === 180, L.railScrim);
+  check("侧栏展开态 216px", L.railOpen === 216, L.railOpen);
   check("海报卡最小宽 118px（不是 124，留抖动余量）", L.cardMinWidth === 118, L.cardMinWidth);
   check("列间距 20px", L.columnSpacing === 20, L.columnSpacing);
   check("下出血 64px", L.bottomBleed === 64, L.bottomBleed);
   check("底色是深灰而非纯黑", L.bgTone === "#2C2C2E", L.bgTone);
+  /* 常量与 CSS 变量必须同源。原来 CSS 里另写了一份 --rail-w / --tv-bleed，
+     与这里的数字各活各的：改一处忘另一处就会出现「CSS 说 48px、
+     列数公式按 236 算」的错位，而两边各自的断言都是绿的。
+     判据是「applyTvTokens 跑完后，CSS 变量读出来等于常量」。 */
+  /* 常量与 CSS 变量必须同源。原来 CSS 里另写了一份 --rail-w / --tv-bleed，
+     与这里的数字各活各的：改一处忘另一处就会出现「CSS 说 48px、
+     列数公式按 236 算」的错位，而两边各自的断言都是绿的。
+     判据不能是「跑完后两者相等」—— 双源同值时它恒绿，
+     正是这类断言的通病（原缺陷下两边都是 48，永远相等）。
+     真正能测的是「改掉常量后 CSS 跟着变」：
+     临时把常量改成怪值，看 CSS 变量是否同步。 */
+  const tokShift = (await ev(`
+    const keep = TV_LAYOUT.railCollapsed;
+    TV_LAYOUT.railCollapsed = 77;
+    applyTvTokens();
+    const v = getComputedStyle(document.documentElement).getPropertyValue("--rail-w").trim();
+    TV_LAYOUT.railCollapsed = keep;
+    applyTvTokens();
+    return JSON.stringify(v);
+  `));
+  check("改常量后 CSS --rail-w 跟着变（两者同源，不是各写一份）",
+    tokShift === "77px", tokShift);
+  const tokBack = (await ev(`
+    const cs = getComputedStyle(document.documentElement);
+    return JSON.stringify({
+      rail: cs.getPropertyValue("--rail-w").trim(),
+      railOpen: cs.getPropertyValue("--rail-w-open").trim(),
+      bleed: cs.getPropertyValue("--tv-bleed").trim(),
+      gap: cs.getPropertyValue("--tv-gap").trim(),
+      cardMin: cs.getPropertyValue("--card-min").trim()
+    });
+  `));
+  check("CSS --rail-w 与常量同源", tokBack.rail === "48px", tokBack.rail);
+  check("CSS --rail-w-open 与常量同源", tokBack.railOpen === "216px", tokBack.railOpen);
+  check("CSS --tv-bleed 与常量同源", tokBack.bleed === "64px", tokBack.bleed);
+  check("CSS --tv-gap 与常量同源", tokBack.gap === "20px", tokBack.gap);
+  check("CSS --card-min 与常量同源", tokBack.cardMin === "118px", tokBack.cardMin);
 
   /* ---------- 3. 列数公式 ---------- */
   /* 公式：floor((可用宽 + 间距) / (最小卡宽 + 间距))
@@ -186,18 +223,17 @@ function ratio(a, b){
   check("下出血用 padding-bottom 实现", /\.wall\{ padding-bottom:var\(--tv-bleed\)/.test(cssOnly));
   check("侧栏收起态宽度用变量控制", /\[data-skin="tv"\] #sidebar\{[^}]*width:var\(--rail-w\)/.test(cssOnly));
   /* 收起态隐藏文字、悬停展开显示。
-     不写跨行的 [\s\S]{0,N} —— 字符数上限随代码排版一变就失效，
-     这类断言会在无关改动后突然变红。用「取到规则块再判断」的方式，
-     匹配失败会明确报「规则不存在」而不是报一个看不懂的 false。 */
+     隐藏方式是 display:none 而非 opacity:0 —— 理由见第13 组，
+     那里有完整的坑位说明。opacity 版本曾让品牌只剩「nime R」。 */
   const collapsedBlock = (cssOnly.match(/\[data-skin="tv"\] #sidebar \.brand-text,[\s\S]*?\{[^}]*\}/) || [""])[0];
   check("收起态隐藏侧栏文字的规则存在",
-    /\.brand-text/.test(collapsedBlock) && /opacity:0/.test(collapsedBlock),
+    /\.brand-text/.test(collapsedBlock) && /display:none/.test(collapsedBlock),
     collapsedBlock.slice(0, 90));
   check("收起态文字不换行（展开时不能折行）",
     /white-space:nowrap/.test(collapsedBlock));
   const hoverBlocks = (cssOnly.match(/\[data-skin="tv"\] #sidebar:hover [^{]*\{[^}]*\}/g) || []).join("\n");
   check("悬停/聚焦时侧栏文字恢复显示",
-    /#sidebar:hover \.brand-text/.test(hoverBlocks) && /opacity:1/.test(hoverBlocks),
+    /#sidebar:hover \.brand-text/.test(hoverBlocks) && /display:/.test(hoverBlocks),
     hoverBlocks.slice(0, 90));
   check("侧栏宽度有过渡（展开时不瞬移）",
     /\[data-skin="tv"\] #sidebar\{[^}]*width:var\(--rail-w\)[^}]*transition:width/.test(cssOnly),
@@ -206,8 +242,17 @@ function ratio(a, b){
      而规则里还夹着两行中文注释与 content/width/opacity。
      200 刚好差一点（渐变落在 202）—— 窗口宽度不该决定测试成败，
      一次无害的注释增删就会让这条假绿转红或反过来。 */
-  check("展开遮罩右缘羽化到全透明（阴影做不到，用渐变层）",
-    /#sidebar::after\{[\s\S]{0,400}?linear-gradient\(to right/.test(cssOnly));
+  /* 曾经照搬 Izuko_TV 的右缘羽化遮罩（TV_RAIL_SCRIM_WIDTH）。
+     那个前提是「侧栏浮在内容之上」，而本项目侧栏是 flex 里的独立不透明栏，
+     文字本来不压在内容上。更糟的是 ::after 作为最后一个子元素
+     z 序在内容之上，展开动画期间那层半透明渐变会把自己的文字
+     洗成残影。现在整块删掉，改断言「别再加回来」。 */
+  check("侧栏没有 ::after 羽化遮罩（会盖住自己的文字）",
+    !/#sidebar::after\{/.test(cssOnly),
+    "查到了 #sidebar::after 规则");
+  check("侧栏没有 linear-gradient(to right 的遮罩层",
+    !/linear-gradient\(to right/.test(cssOnly),
+    "查到了 to right 渐变");
 
   /* 控制层隐藏时必须同时关掉命中测试：
      只改 opacity 的话不可见的控制条仍会吃掉点击，表现为「点了没反应」。 */
@@ -630,6 +675,76 @@ function ratio(a, b){
   check("当前集：线路没声明则用旧字段", epRule.legacyUsed === 4, epRule.legacyUsed);
   check("当前集：都没有则用已看集数", epRule.watchedUsed === 5, epRule.watchedUsed);
   check("当前集：全空时为 0（不返回 NaN）", epRule.none === 0, epRule.none);
+
+  /* ---------- 13. 收起态侧栏：文字必须退出布局流 ---------- */
+  /* 背景：收起态原本用 opacity:0 藏文字。opacity:0 的元素照样占布局空间，
+     而 .brand 是 justify-content:center —— 居中的是「图标 + 隐藏文字」
+     这个整体（28+gap+文字宽，远大于 48px），两侧溢出被 overflow:hidden
+     裁掉：图标被推出左缘、只剩半个字露在中间，底部信息同样被拦腰截断。
+     截图上表现为「品牌只剩 nime R」「底部只剩一个 9」。
+     修法是 display:none（上游 AnimatedVisibility 的语义：不参与布局）。 */
+  const railBlock = (() => {
+    const i = cssOnly.indexOf('[data-skin="tv"] #sidebar{');
+    return i < 0 ? "" : cssOnly.slice(i, cssOnly.indexOf("}", i) + 1);
+  })();
+  check("找到 TV 侧栏规则块", railBlock.length > 0);
+  check("收起态侧栏同时改 width 与 flex-basis",
+    /width:var\(--rail-w\)/.test(railBlock) && /flex:0 0 var\(--rail-w\)/.test(railBlock),
+    railBlock.replace(/\s+/g, " "));
+  check("展开态同样改 flex-basis（只改 width 的话展开永远不生效）",
+    /#sidebar:hover[^{]*\{[\s\S]{0,160}?flex-basis:var\(--rail-w-open\)/.test(cssOnly),
+    "见 #sidebar:hover 规则");
+  /* 收起态不能用 opacity:0 藏侧栏文字 —— 那正是占位不掉的根因。
+     只查这四类选择器，不查全文件：别处用 opacity 做淡入淡出是对的。 */
+  check("收起态侧栏文字不用 opacity:0（会占位）",
+    !/\[data-skin="tv"\]\s*#sidebar[^{]*\.(?:brand-text|nav-item span|side-honor span)[^{]*\{[^}]*opacity:0/.test(cssOnly),
+    "查到了 opacity:0 的收起态规则");
+  check("收起态侧栏文字 display:none（退出布局流）",
+    /\[data-skin="tv"\]\s*#sidebar\s+\.brand-text[^{]*\{[^}]*display:none/.test(cssOnly),
+    "未找到 display:none");
+  check("展开态侧栏文字恢复显示",
+    /#sidebar:hover\s+\.brand-text[^{]*\{[^}]*display:/.test(cssOnly),
+    "未找到展开态 display 规则");
+  /* 展开态必须把 nav-item 放回全宽 —— TV 收起态写死了 32px 方块，
+     忘了放回的话文字被塞进 32px 宽的框里逐字换行。 */
+  check("展开态 nav-item 放回全宽（不是 32px 方块）",
+    /#sidebar:hover\s+\.nav-item[^{]*\{[^}]*width:100%/.test(cssOnly),
+    "见 #sidebar:hover .nav-item 规则");
+  check("展开态 brand 恢复左对齐（收起态是 center）",
+    /#sidebar:hover\s+\.brand[^{]*\{[^}]*justify-content:flex-start/.test(cssOnly),
+    "见 #sidebar:hover .brand 规则");
+  /* brand-mark 在 TV 收起态被压到 28px。塌回档案馆的 34px 的话
+     图标在 48px 里看着偏小，但更严重的是漏掉 flex:0 0 会让
+     28px 的 mark 在 flex 容器里被文字挤扁。 */
+  check("TV 收起态的 brand-mark 仍固定 28px",
+    /\[data-skin="tv"\]\s+\.brand-mark\{[^}]*width:28px/.test(cssOnly),
+    "见 .brand-mark 规则");
+
+  /* ---------- 14. 卡片翻面：抬起不能吃掉背面的 rotateY ---------- */
+  /* 背景：TV 的聚焦抬起原本写成 .card:hover .fc-face{ transform:scale(1.06) }。
+     .fc-face 是 .fc-front 和 .fc-back 的公共类，而 .fc-back 自身带着
+     transform:rotateY(180deg) —— 那行把它整个覆盖了。父级 .card-3d
+     已经转过 180°，背面失去自身旋转就转到侧面，被自己的
+     backface-visibility:hidden 干掉；正面同理。
+     两个面同时不可见 = 卡片翻过去一片空白。 */
+  const blankFace = /\[data-skin="tv"\]\s*\.card:hover\s+\.fc-face\s*\{[^}]*transform:scale/;
+  check("抬起不挂在 .fc-face 上（会覆盖背面的 rotateY）",
+    !blankFace.test(cssOnly),
+    "查到了 .card:hover .fc-face{ transform:scale... }");
+  check("正面抬起只写 scale",
+    /\[data-skin="tv"\]\s*\.card:hover\s+\.fc-front[^{]*\{[^}]*transform:scale/.test(cssOnly),
+    "见 .card:hover .fc-front 规则");
+  check("背面抬起保留 rotateY(180deg)（否则翻面后空白）",
+    /\[data-skin="tv"\]\s*\.card:hover\s+\.fc-back[^{]*\{[^}]*transform:rotateY\(180deg\)\s*scale/.test(cssOnly),
+    "见 .card:hover .fc-back 规则");
+  /* 抬起不该再叠 z-index：preserve-3d 元素上 z-index 不参与渲染排序，
+     写了以为能抬层，实际无效 —— 属于会误导后来者的假代码。 */
+  check("抬起不靠 z-index（preserve-3d 上无效）",
+    !/\[data-skin="tv"\][^{]*\.fc-(?:face|front|back)[^{]*\{[^}]*z-index/.test(cssOnly),
+    "查到了 .fc-* 上的 z-index");
+  check("静止态仍保留浅投影（抬起是从这层交叉淡入的）",
+    /\[data-skin="tv"\]\s*\.card\s+\.fc-face\{[^}]*box-shadow/.test(cssOnly),
+    "见 .card .fc-face 规则");
 
   console.log("\n" + (fail === 0 ? "全部通过 " : "") + pass + " 项通过" + (fail ? "，" + fail + " 项失败" : ""));
   if(fail){ console.log("失败项：\n - " + fails.join("\n - ")); process.exit(1); }

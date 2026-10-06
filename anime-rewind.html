@@ -5136,6 +5136,104 @@ async function fetchBiliSeason(key){
   biliSeasonCache.set(ck, out);
   return out;
 }
+/* ============================================================
+   站点搜索型片源
+   ------------------------------------------------------------
+   起因：用户不想给每部番都去找具体播放页，只想存「这个站能看番」，
+   点一下让站自己搜。
+
+   这里有一条硬边界要先说清：**浏览器不允许跨域往别人的页面里打字**。
+   iframe 里的第三方页面受同源策略保护，读不到它的搜索框，更别说赋值；
+   而多数站点还会用 X-Frame-Options / CSP frame-ancestors 直接拒绝被嵌入。
+   所以「自动填写动漫名」在技术上只能是这样实现：
+
+     把片名拼进对方站点的搜索 URL（?q= / ?keyword= / 路径段），
+     然后打开这个 URL。
+
+   这几乎是所有站点都支持的（搜索本质就是一次 GET），
+   于是功能做得到，只是形态是「帮你把关键词带过去搜」而不是「替你敲键盘」。
+   打开一律走新标签：站内 iframe 能不能成取决于对方是否允许，
+   失败时给用户的是白屏，而不是「搜到了」。
+   ============================================================ */
+/* tpl 是**模板**而不是最终 URL：{kw} 必须原样保留，
+   交给 buildSearchUrl 在打开那一刻替换。
+   曾经写成 build(origin, kw) 并把 "{kw}" 传进去，
+   结果 encodeURIComponent 把它变成 %7Bkw%7D —— 模板从此永远拼不出关键词。 */
+const SEARCH_RULES = [
+  { id:"bilibili", name:"哔哩哔哩",
+    test:h => /(^|\.)bilibili\.com$/i.test(h),
+    tpl:"https://search.bilibili.com/all?keyword={kw}" },
+  { id:"iqiyi", name:"爱奇艺",
+    test:h => /(^|\.)iqiyi\.com$/i.test(h),
+    tpl:"https://so.iqiyi.com/so/q_{kw}" },
+  { id:"youku", name:"优酷",
+    test:h => /(^|\.)youku\.com$/i.test(h),
+    tpl:"https://so.youku.com/search_video/q_{kw}" },
+  { id:"qq", name:"腾讯视频",
+    test:h => /(^|\.)(v\.qq\.com|qq\.com)$/i.test(h),
+    tpl:"https://v.qq.com/x/search/?q={kw}" },
+  { id:"mgtv", name:"芒果 TV",
+    test:h => /(^|\.)mgtv\.com$/i.test(h),
+    tpl:"https://so.mgtv.com/so/k-{kw}" },
+  { id:"acfun", name:"AcFun",
+    test:h => /(^|\.)acfun\.cn$/i.test(h),
+    tpl:"https://www.acfun.cn/search?keyword={kw}" },
+  { id:"dmhy", name:"动漫花园",
+    test:h => /(^|\.)(dmhy\.org|share\.dmhy\.org)$/i.test(h),
+    tpl:"https://share.dmhy.org/topics/list?keyword={kw}" }
+];
+function encKW(kw){ return encodeURIComponent(String(kw || "").trim()); }
+/* 站点首页判定：只看「是不是一个站的根地址」。
+   判定窄一点没关系 —— 判成播放页顶多是存成普通线路，
+   判成首页才会去问搜索模板，误判的代价不对称。 */
+function isSiteHome(u){
+  const n = normalizeStreamURL(u);
+  if(!n) return false;
+  try{
+    const p = new URL(n);
+    const path = p.pathname.replace(/\/+$/, "");
+    return !path && !p.search && !p.hash;
+  }catch(e){ return false; }
+}
+/* 推断搜索模板：命中内置规则用它，否则给三种最常见的路由形态让用户挑。
+   不猜「一定能用」，而是摆出来 —— 猜错的话用户面对的是搜不出结果的页面，
+   而那是他无法自己修正的（他不知道我们拼了什么 URL）。 */
+function searchCandidates(home){
+  const n = normalizeStreamURL(home);
+  if(!n) return [];
+  let origin = "";
+  try{ origin = new URL(n).origin; }catch(e){ return []; }
+  const host = hostOf(n);
+  const rule = SEARCH_RULES.find(r => r.test(host));
+  if(rule) return [rule.tpl];
+  return [origin + "/search?q={kw}", origin + "/search?keyword={kw}", origin + "/search/{kw}"];
+}
+function inferSearchUrl(home){ const c = searchCandidates(home); return c.length ? c[0] : ""; }
+/* 把模板拼成最终 URL。模板里没有 {kw} 时按「末尾追加关键词」兜底，
+   而不是返回空 —— 用户手填模板时漏写占位符是很常见的，
+   静默失败会让「点了没反应」变成最坏的反馈。 */
+function buildSearchUrl(tpl, kw){
+  const t = String(tpl || "").trim();
+  if(!t) return "";
+  const k = String(kw || "").trim();
+  if(!k) return t;
+  return t.indexOf("{kw}") >= 0 ? t.replace(/\{kw\}/g, encKW(k)) : t + encKW(k);
+}
+/* 搜索用哪个片名：中文名优先，没有再退回原名。
+   搜索站绝大多数按中文名收录，原名搜不到是常态。 */
+function searchKeywordFor(a){
+  if(!a) return "";
+  return String(a.titleCn || a.titleOriginal || "").trim();
+}
+function sourceIsSearch(s){ return !!(s && s.kind === "search" && s.searchUrl); }
+/* 搜索源的默认名字：认得出的站用站点名，认不出用域名 ——
+   「线路 1」这种名字在台账里等于没有名字。 */
+function siteLabelOf(u){
+  const h = hostOf(normalizeStreamURL(u) || u);
+  const r = SEARCH_RULES.find(x => x.test(h));
+  return (r ? r.name : (h || "站点")) + " · 搜索";
+}
+
 /* 宽松校验：只要求有协议头。URL 构造函数会拒绝 javascript: 等伪协议。 */
 function normalizeStreamURL(u){
   const s = String(u || "").trim();
@@ -5366,6 +5464,12 @@ function normalizeSource(s, idx, nowIso){
       ? s.subtitles.map(x => String(x || "").toUpperCase()).filter(Boolean)
       : (s.subtitle ? [String(s.subtitle).toUpperCase()] : []),
     tier: Number.isFinite(Number(s.tier)) ? Number(s.tier) : 2,
+    /* ---- 搜索型片源 ----
+       存的是「站点首页 + 搜索模板」而不是播放页：点一下把片名带过去让站自己搜。
+       kind 缺省必须是 play：老数据没有这个键，
+       按 truthy 判断会把用户所有已存线路一次性变成搜索型。 */
+    kind: String(s.kind || "") === "search" ? "search" : "play",
+    searchUrl: String(s.searchUrl || "").trim(),
     savedAt: s.savedAt || nowIso || "",
     /* ---- 台账字段（播放源管理页用）----
        这三个字段只影响「管理与筛选」，不参与选源质量比较。
@@ -5434,6 +5538,7 @@ function activeSourceOf(a){
    等于让所有老线路一夜之间全变成不可用。 */
 function sourceUsable(s){
   if(!s) return false;
+  if(sourceIsSearch(s)) return false;   // 站点首页没有可播放地址，不能当播放线路
   if(s.enabled === false) return false;
   if(s.health && s.health.state === "dead") return false;
   return true;
@@ -5443,6 +5548,7 @@ function sourceUsable(s){
    而真正的原因是这条线路被他自己停用过。 */
 function sourceUnusableReason(s){
   if(!s) return "无效线路";
+  if(sourceIsSearch(s)) return "搜索型片源：点它带着片名去站里搜，不会在站内播放";
   if(s.enabled === false) return "已停用，不会被自动选中";
   if(s.health && s.health.state === "dead") return "已标记失效，不会被自动选中";
   return "";
@@ -5469,7 +5575,10 @@ const EXCLUDE_REASONS = {
   /* 台账状态参与选源：用户在管理页把线路停用或标记失效后，
      这里必须同步排除，否则「管理」只是一个不生效的标签。 */
   disabled:         "已停用",
-  dead:             "已标记失效"
+  dead:             "已标记失效",
+  /* 搜索型片源不是「坏了」，只是形态不同：它是站点首页 + 搜索模板，
+     没有可播放地址，放进播放候选里只会让选源报「没有可用线路」却指着一条活着的源。 */
+  search_only:      "搜索型片源"
 };
 function excludeSource(src, reason){
   return { state:"excluded", src:null, original:src, reason:reason, reasonText:EXCLUDE_REASONS[reason] || reason };
@@ -5493,6 +5602,10 @@ function filterSources(list, ctx){
        它早就被自己停用了 —— 提示指向的原因不是真正的原因。 */
     if(s.enabled === false){ out.push(excludeSource(s, "disabled")); return; }
     if(s.health && s.health.state === "dead"){ out.push(excludeSource(s, "dead")); return; }
+    /* 搜索型必须排除在**播放**候选之外：它是「去站里搜」的入口，
+       不是可播地址。留在这里会让它顶掉真正能播的线路，
+       表现为「明明存了 B 站那条，播放却说没有可用线路」。 */
+    if(sourceIsSearch(s)){ out.push(excludeSource(s, "search_only")); return; }
     /* 集数匹配：source.ep 是用户声明的「这条源对应第几集」。
        为空表示「整季通用」，此时不该被判为不匹配 ——
        大量站点一条链接覆盖整季，误杀等于让用户白填。
@@ -5618,8 +5731,11 @@ function autoSelect(entries, ctx){
   }
   const exact = included.filter(x => resolutionOf(x.src, ctx.wantResolution));
   if(exact.length){
+    /* 必须取 .src：exact 里装的是 { state, src } 条目，
+       直接把它当线路返回的话，调用方拿到 entry.name / entry.url 全是 undefined，
+       和下面 fuzzy 分支的返回形态也对不上。 */
     const best = exact.slice().sort(compareSourceQuality)[0];
-    return { source:best, stage:"exact", reason:"按分辨率与线路优先级选定" };
+    return { source:best.src, stage:"exact", reason:"按分辨率与线路优先级选定" };
   }
   const fuzzy = included.slice().sort(compareSourceQuality)[0];
   return { source:fuzzy.src, stage:"fuzzy", reason:"没有精确匹配，取质量最优" };
@@ -5678,6 +5794,9 @@ function sourceFlags(row){
     out.push({ id:"active", text:"使用中", tone:"ok" });
   }
   if(s.enabled === false) out.push({ id:"disabled", text:"已停用", tone:"muted" });
+  /* 搜索型单独一个徽标：它和「已停用/已失效」是完全不同的状态，
+     混在一起的话用户会以为这条坏了、然后去点「恢复」。 */
+  if(sourceIsSearch(s)) out.push({ id:"search", text:"搜索型", tone:"muted" });
   const h = normalizeHealth(s.health);
   if(h.state === "dead") out.push({ id:"dead", text:"已失效", tone:"err" });
   else if(h.state === "blocked") out.push({ id:"blocked", text:"访问被拒", tone:"warn" });
@@ -5857,6 +5976,9 @@ async function markSourceDead(row, dead){
 async function setActiveSource(row){
   const a = row && row.anime, s = row && row.source;
   if(!a || !s) return { ok:false, reason:"missing" };
+  /* 搜索型不能被设为「使用中」：它播不了，
+     设完徽标写着使用中、播放却跳过它，等于界面在骗人。 */
+  if(sourceIsSearch(s)) return { ok:false, reason:"search_only", usable:false, source:s, anime:a };
   a.activeSourceId = s.id;
   syncLegacyStreamFields(a);
   const ok = await persistAnimeQuiet(a);
@@ -6395,17 +6517,23 @@ function linePickerHTML(a){
   const list = sourcesOf(a);
   if(!list.length) return "";
   const act = activeSourceOf(a);
+  const hasPlay = list.some(s => !sourceIsSearch(s));
   return '<div class="line-picker mt-3" id="st-lines">' +
     '<div class="line-picker-head"><span class="hint">已保存 ' + list.length + " 条线路" +
-    (list.length > 1 ? "，点一下设为使用中，双击直接播放" : "") + "</span>" +
+    (list.length > 1 ? (hasPlay ? "，点一下设为使用中，双击直接播放" : "") : "") +
+    (list.some(sourceIsSearch) && list.length > 1 ? " · 搜索型点一下带着片名去站里搜" : "") + "</span>" +
     (a ? '<button class="btn btn-sm" type="button" data-st="manage">去管理</button>' : "") +
     "</div>" +
     '<div class="vsrc-row">' + list.map(s => {
       const on = act && s.id === act.id;
       const usable = sourceUsable(s);
       const why = usable ? "" : sourceUnusableReason(s);
-      const meta = [s.resolution, s.ep != null ? ("第 " + s.ep + " 集") : "整季"]
-        .filter(Boolean).join(" · ");
+      /* 搜索型的胶囊不该长得和可播放线路一样：
+         它点下去是「跳出去搜」，不是「设为使用中/播放」，
+         图标与副标必须在点之前就把这个差别说清。 */
+      const meta = sourceIsSearch(s)
+        ? "搜《" + esc(searchKeywordFor(a) || "片名") + "》"
+        : [s.resolution, s.ep != null ? ("第 " + s.ep + " 集") : "整季"].filter(Boolean).join(" · ");
       /* 不可用的线路照样可点：用户可能只是想把它设成默认
          （比如先标记失效，回头修好再启用），直接 disabled 会让人以为改不了。
          所以只明确写出「为什么它不会被自动选中」。 */
@@ -6413,7 +6541,7 @@ function linePickerHTML(a){
         '" type="button" data-st="line" data-st-line="' + attr(s.id) + '"' +
         (usable ? "" : ' title="' + attr(why) + '"') + ">" +
         '<span class="vsrc-name">' +
-        (on ? ic("target",12) : '<span class="vsrc-dot"></span>') +
+        (sourceIsSearch(s) ? ic("search",12) : (on ? ic("target",12) : '<span class="vsrc-dot"></span>')) +
         esc(s.name || sourceDisplayName(s)) +
         (meta ? '<span class="vsrc-meta">' + esc(meta) + "</span>" : "") +
         "</span>" +
@@ -6442,9 +6570,11 @@ function renderStreamLauncher(a){
   /* 失效与停用的条数：这两类线路仍然占着选源列表，
      不提示的话用户会以为「保存了 N 条就等于有 N 条能用」。 */
   const badCount = list.filter(s => !sourceUsable(s)).length;
+  /* 文案必须包含搜索型：badCount 现在把它算在内，
+     而它既没停用也没失效，说「已被停用或标记失效」是错的。 */
   const warnBox = badCount && list.length > 1
     ? '<div class="note-box is-warn mt-3">' + ic("warning",16) +
-      "<span>其中 " + badCount + " 条已被停用或标记失效，播放时会被跳过。" +
+      "<span>其中 " + badCount + " 条不会在播放时自动选中（已停用、已失效，或只是「搜索型」站点入口）。" +
       '<button class="btn btn-sm" type="button" data-st="manage">去管理</button></span></div>'
     : "";
   return '<div class="panel stream-panel mt-4"><div class="panel-head">' + ic("film",16) +
@@ -6453,7 +6583,9 @@ function renderStreamLauncher(a){
     '<p class="small muted mb-3">粘一个播放网址（YouTube / 哔哩哔哩 / Vimeo，或任意允许嵌入的网站）。' +
     "直链（mp4 / webm）会在站内原生播放，支持续播、倍速与键盘控制；其余站点走内嵌播放器。" +
     "B 站的番剧播放页（<code>bilibili.com/bangumi/play/...</code>）会自动换算成可播放地址。" +
-    "同一部作品可以存多条线路，播放时一键切换。</p>" +
+    "同一部作品可以存多条线路，播放时一键切换。<br>" +
+    "也可以只粘<b>站点首页</b>（如 <code>www.bilibili.com</code>）：存成搜索型片源后，" +
+    "点它会带着这部番的名字去该站搜索 —— 适合「这个站能看，但不想每次都去找具体页面」。</p>" +
     '<div class="row gap-2" style="flex-wrap:wrap">' +
       '<div class="search-wrap" style="flex:1 1 320px;max-width:none">' + ic("link",16) +
         '<input class="input" id="st-url" type="url" inputmode="url" spellcheck="false" ' +
@@ -6522,6 +6654,28 @@ async function addSourceFromInput(root, a){
   if(!a){ showLauncherError(root, "请先从片库打开一部作品，再添加播放源"); return null; }
   migrateSources(a);
   const now = new Date().toISOString();
+  /* 站点首页：先问一句「要不要存成搜索型」。
+     放在重复检测之前 —— 用户粘首页的意图几乎不可能是「存一个播不了的地址」，
+     先把这条路给出来，比存完再让他想「为什么点播放没反应」好。 */
+  if(isSiteHome(norm)){
+    const choice = await promptSiteSource(norm, a);
+    if(!choice) return null;                       // 取消：什么都不存
+    if(choice.mode === "search"){
+      const sName = (nameInput && nameInput.value.trim()) || siteLabelOf(norm);
+      const srcS = normalizeSource(
+        { url:norm, name:sName, kind:"search", searchUrl:choice.tpl, savedAt:now },
+        (a.sources || []).length, now);
+      if(!srcS){ showLauncherError(root, "网址无效"); return null; }
+      a.sources.push(srcS);
+      /* 刻意**不改** activeSourceId / streamUrl：搜索型不能播，
+         设成当前线路会让播放区显示「当前线路：XX」却点不出画面。 */
+      await saveAnime(a);
+      input.value = "";
+      if(nameInput) nameInput.value = "";
+      return { source:srcS, duplicate:false, search:true };
+    }
+    /* mode === "plain"：尊重用户，按普通线路继续往下存。 */
+  }
   /* 同址不重复添加：反复点「添加」会攒出一串一模一样的线路，
      选源面板里全是重复项。提示已有而不是静默跳过。 */
   const dup = (a.sources || []).find(s => s.url === norm && (s.ep == null || ep == null || s.ep === ep));
@@ -6554,6 +6708,108 @@ function showLauncherError(root, msg){
   if(!el) return;
   el.className = "note-box mt-3 is-err";
   el.innerHTML = ic("warning",16) + "<span>" + esc(msg) + "</span>";
+}
+
+/* ---- 站点首页 → 搜索型片源 ----
+   粘进来的是站点首页时问一句搜索模板。
+   模板必须是**用户看得见、改得动**的：不同站的搜索路由五花八门，
+   猜错了用户面对的是「搜不出来」，而他根本不知道我们拼了什么 URL。 */
+function promptSiteSource(home, a){
+  const cands = searchCandidates(home);
+  return new Promise((resolve) => {
+    const root = openModal({
+      title:"这是站点首页",
+      narrow:true,
+      body:
+        '<p class="hint mb-3">' + esc(home) + ' 是站点首页，没有具体播放页。<br>' +
+        '存成<b>搜索型片源</b>：以后点它，会用这部番的名字在这个站里搜索。</p>' +
+        '<div class="field mb-3"><label for="ps-tpl">搜索网址模板（<code>{kw}</code> 会被替换成片名）</label>' +
+          '<input class="input" id="ps-tpl" data-autofocus value="' + attr(cands[0] || home) + '"></div>' +
+        (cands.length > 1
+          ? '<div class="row gap-2 mb-3" style="flex-wrap:wrap">' + cands.map((c, i) =>
+              '<button class="btn btn-sm" type="button" data-cand="' + attr(c) + '">' + esc(c.replace(/^https?:\/\//, "")) + "</button>").join("") + "</div>"
+          : "") +
+        '<div class="hint">多数站点的搜索就是一次 GET，把关键词放进网址即可。' +
+        '少数站用前端路由（# 后面带参数），把 <code>#/search?keyword={kw}</code> 这类地址贴进上面即可。</div>',
+      footer: (f) => {
+        f.innerHTML =
+          '<button class="btn btn-sm" type="button" id="ps-plain">仍按普通线路保存</button>' +
+          '<div class="grow"></div>' +
+          '<button class="btn" type="button" id="ps-cancel">取消</button>' +
+          '<button class="btn btn-primary" type="button" id="ps-try">试搜一下</button>' +
+          '<button class="btn btn-primary" type="button" id="ps-save">存为搜索型</button>';
+        /* footer 是在 openModal **内部**同步调用的，此时 `const root` 还没赋值
+           （TDZ）—— 回调里直接引用 root 会抛 ReferenceError，
+           而且被 openModal 的 try/catch 吞成一句控制台日志，
+           表现是「弹窗出来了但按钮全死」。一律走 document 取元素。 */
+        const tplVal = () => { const n = document.querySelector("#ps-tpl"); return n ? n.value.trim() : ""; };
+        document.querySelectorAll("[data-cand]").forEach(b => b.addEventListener("click", () => {
+          const n = document.querySelector("#ps-tpl"); if(n) n.value = b.dataset.cand;
+        }));
+        f.querySelector("#ps-cancel").addEventListener("click", () => { closeModal(); resolve(null); });
+        f.querySelector("#ps-plain").addEventListener("click", () => { closeModal(); resolve({ mode:"plain" }); });
+        /* 试搜：真开一个标签让用户确认搜出来是对的。
+           这一步不能省 —— 模板对不对，只有对方的搜索结果页能证明。 */
+        f.querySelector("#ps-try").addEventListener("click", () => {
+          const url = buildSearchUrl(tplVal(), a ? searchKeywordFor(a) : "测试");
+          if(url) window.open(url, "_blank", "noopener,noreferrer");
+        });
+        f.querySelector("#ps-save").addEventListener("click", () => {
+          const t = tplVal();
+          if(!t){ toast("请填一个搜索网址模板", "warn"); return; }
+          closeModal();
+          resolve({ mode:"search", tpl:t });
+        });
+      }
+    });
+  });
+}
+/* 打开搜索：确认关键词（可改）后在新标签打开结果页。
+   关键词必须摆出来让用户改：番的中文名未必是站里收录用的名字
+   （译名差异很大），不改的话「搜不到」会被误判成站点坏了。 */
+function openSiteSearch(a, s){
+  if(!a || !sourceIsSearch(s)) return Promise.resolve(null);
+  const kw = searchKeywordFor(a);
+  return new Promise((resolve) => {
+    const root = openModal({
+      title:"在「" + (s.name || sourceDisplayName(s)) + "」里搜索",
+      narrow:true,
+      body:
+        '<p class="hint mb-3">搜索型片源没有播放地址：这里把片名拼进该站的搜索网址，' +
+        '在新标签里直接给到搜索结果页。</p>' +
+        '<div class="field mb-3"><label for="ss-kw">搜索关键词</label>' +
+          '<input class="input" id="ss-kw" data-autofocus value="' + attr(kw) + '"></div>' +
+        '<div class="field"><label for="ss-url">将打开的网址</label>' +
+          '<input class="input" id="ss-url" readonly value=""></div>',
+      footer: (f) => {
+        f.innerHTML =
+          '<button class="btn btn-sm" type="button" id="ss-copy">复制片名</button>' +
+          '<div class="grow"></div>' +
+          '<button class="btn" type="button" id="ss-cancel">取消</button>' +
+          '<button class="btn btn-primary" type="button" id="ss-go">' + ic("search",14) + "打开搜索</button>";
+        /* 同上：footer 在 openModal 里同步执行，这里不能引用 root。 */
+        const kwEl = document.querySelector("#ss-kw");
+        const urlEl = document.querySelector("#ss-url");
+        const sync = () => { if(kwEl && urlEl) urlEl.value = buildSearchUrl(s.searchUrl, kwEl.value); };
+        bindIMEInput(kwEl, sync);
+        sync();
+        f.querySelector("#ss-cancel").addEventListener("click", () => { closeModal(); resolve(null); });
+        f.querySelector("#ss-copy").addEventListener("click", async () => {
+          const txt = kwEl.value.trim() || kw;
+          try{
+            await navigator.clipboard.writeText(txt);
+            toast("已复制片名：" + txt, "ok");
+          }catch(e){ toast("浏览器不允许复制，请手动选中复制", "warn"); }
+        });
+        f.querySelector("#ss-go").addEventListener("click", () => {
+          const url = buildSearchUrl(s.searchUrl, kwEl.value);
+          closeModal();
+          if(url) window.open(url, "_blank", "noopener,noreferrer");
+          resolve(url || null);
+        });
+      }
+    });
+  });
 }
 /* 放映厅视图的监听器句柄。renderDetail / renderStandby 每次导航都会
    重新调用 bindStreamLauncher，而挂载点 root 始终是同一个 #view。
@@ -6684,9 +6940,11 @@ function bindStreamLauncher(root, a){
     if(act === "add"){
       const r = await addSourceFromInput(root, a);
       if(r){
-        setStatus("ok", r.duplicate
+        setStatus(r.search ? "ok" : "ok", r.duplicate
           ? "这条线路已经存过了，已切到它。"
-          : "已添加线路「" + (r.source.name || "线路") + "」。");
+          : (r.search
+            ? "已存为搜索型片源「" + (r.source.name || "站点") + "」：点它用《" + (a.titleCn || a.titleOriginal || "片名") + "》在这个站里搜索。"
+            : "已添加线路「" + (r.source.name || "线路") + "」。"));
         if(!r.duplicate) rerender();
       }
       return;
@@ -6703,6 +6961,10 @@ function bindStreamLauncher(root, a){
       const id = b.dataset.stLine;
       const target = sourcesOf(a).find(s => s.id === id);
       if(!target) return;
+      /* 搜索型：点它不是「设为使用中」，是带着片名去站里搜。
+         必须在 setActiveSource 之前拦掉 —— 那条路会返回一个
+         「已设为使用中，但这条不可用」的提示，等于把搜索型判成坏线路。 */
+      if(sourceIsSearch(target)){ await openSiteSearch(a, target); return; }
       const same = a.activeSourceId === id;
       const res = await setActiveSource({ anime:a, source:target });
       if(!res.ok){ setStatus("err", "保存失败，线路没换成"); return; }
@@ -6787,6 +7049,8 @@ function bindStreamLauncher(root, a){
     if(!b || !a || !root.contains(b)) return;
     const target = sourcesOf(a).find(s => s.id === b.dataset.stLine);
     if(!target) return;
+    /* 搜索型没有可播地址，双击不做事（单击已经把搜索弹窗打开了）。 */
+    if(sourceIsSearch(target)) return;
     const res = await setActiveSource({ anime:a, source:target });
     if(!res.ok) return;
     refreshLinePicker(root, a);
@@ -7408,10 +7672,15 @@ function ledgerRowHTML(row, picked){
      而原实现只在播放器的控制条里藏着选源入口，
      于是「管理」页能看不能改，想换默认线路必须先起播一次。 */
   const isActive = a.activeSourceId === s.id;
-  const setBtn = isActive
-    ? '<span class="flag tone-ok" title="当前默认线路">' + ic("target",12) + "使用中</span>"
-    : '<button class="btn btn-sm btn-icon" type="button" data-act="use" title="设为使用中" aria-label="设为使用中">' +
-      ic("target",14) + "</button>";
+  /* 搜索型没有「设为使用中」：它播不了，设上去是假的使用中。
+     换成「搜索」按钮 —— 带着这部作品的名字去站里搜，这才是它该干的事。 */
+  const setBtn = sourceIsSearch(s)
+    ? '<button class="btn btn-sm btn-icon" type="button" data-act="search" title="带片名去这个站搜索" aria-label="搜索">' +
+      ic("search",14) + "</button>"
+    : (isActive
+      ? '<span class="flag tone-ok" title="当前默认线路">' + ic("target",12) + "使用中</span>"
+      : '<button class="btn btn-sm btn-icon" type="button" data-act="use" title="设为使用中" aria-label="设为使用中">' +
+        ic("target",14) + "</button>");
   /* checked 必须由数据回填，不能只靠 class。
      台账的每一次筛选/勾选/批量操作都会整表重渲，
      重渲出来的是全新 DOM —— 不写 checked 的话，
@@ -7611,7 +7880,12 @@ function bindLedger(root, all, rows){
     if(act === "use"){
       if(!row) return;
       const res = await setActiveSource(row);
-      if(!res.ok){ toast("保存失败，线路没换成", "err"); return; }
+      if(!res.ok){
+        toast(res.reason === "search_only"
+          ? "这条是搜索型片源，不能设为播放线路；点「搜索」直接带着片名去站里搜"
+          : "保存失败，线路没换成", "warn");
+        return;
+      }
       const name = sourceDisplayName(row.source);
       toast(res.usable
         ? "已把「" + name + "」设为使用中"
@@ -7621,6 +7895,11 @@ function bindLedger(root, all, rows){
     }
     if(act === "open"){
       if(row) window.open(normalizeStreamURL(row.source.url), "_blank", "noopener,noreferrer");
+      return;
+    }
+    /* 搜索型在台账里的主操作：带着这部作品的名字去站里搜。 */
+    if(act === "search"){
+      if(row) await openSiteSearch(row.anime, row.source);
       return;
     }
     if(act === "toggle"){
@@ -7802,6 +8081,12 @@ function openSourceEditor(row){
         '<div class="field"><label>失效标记</label>' +
           '<label class="checkline"><input type="checkbox" id="ls-dead"' + (dead ? " checked" : "") +
           "><span>已失效（选源时跳过）</span></label></div>" +
+        /* 搜索型必须能改模板：模板猜错了要能救回来，
+           否则用户只能删掉重加，还得再猜一次。 */
+        (sourceIsSearch(s)
+          ? '<div class="field span-2"><label for="ls-search">搜索网址模板（<code>{kw}</code> 会被替换成片名）</label>' +
+            '<input class="input" id="ls-search" type="text" spellcheck="false" value="' + attr(s.searchUrl || "") + '"></div>'
+          : "") +
       "</div>" +
       '<div class="note-box mt-3">' + ic("info",16) +
         "<span>当前状态：" + esc(HEALTH_TEXT[normalizeHealth(s.health).state]) +
@@ -7851,6 +8136,7 @@ function openSourceEditor(row){
       subtitles: subs,
       note: root.querySelector("#ls-note").value.trim(),
       enabled: enabled,
+      searchUrl: (root.querySelector("#ls-search") ? root.querySelector("#ls-search").value.trim() : s.searchUrl),
       /* 手动改动网址后旧的探测结论立刻作废：
          拿「上一个地址的可达性」去描述新地址是在骗用户。 */
       health: (norm !== s.url) ? { state:"unknown", at:"", detail:"" }

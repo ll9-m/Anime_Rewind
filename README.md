@@ -234,6 +234,21 @@ workflow 的 `path:` 是显式清单，不是整个仓库：
 > 台账的所有写操作刻意走 `Repo.put` 而非 `saveAnime`：后者会 `touch()` 改 `updatedAt`，
 > 于是「整理一次线路」就能把老作品顶到「最近添加」最前面。播放记录 `lastUsedAt` 同理。
 
+### 搜索型片源：只存站点首页
+
+需求原话是「我只添加可以看动漫的网站首页，然后点击对应源后自动填写动漫名给播放源搜索」。
+
+**这里有一条浏览器画死的边界**：跨域往别人的页面里打字是做不到的。iframe 里的第三方页面受同源策略保护（读不到它的搜索框，更别说赋值），多数站点还会用 `X-Frame-Options` / CSP `frame-ancestors` 直接拒绝被嵌入。
+
+所以实现形态是**把片名拼进对方站点的搜索网址再打开**，而不是「替你敲键盘」：
+
+- 粘贴站点首页（如 `www.bilibili.com`）时，弹窗问搜索网址模板，`{kw}` 即关键词占位符
+- 内置 B 站 / 爱奇艺 / 优酷 / 腾讯 / 芒果 / AcFun / 动漫花园；认不出的站给三种常见路由候选，可手填（支持 `#/search?keyword={kw}` 这类前端路由）
+- 有「试搜一下」：真开一个标签确认搜出来是对的 —— 模板对不对，只有对方的搜索结果页能证明
+- 点胶囊 → 确认关键词（默认中文名，可改，可复制）→ 新标签打开结果页
+
+**纪律**：搜索型被 `filterSources` 排除在播放候选之外，也不能设为「使用中」——它播不了，徽标写着使用中而播放跳过它就是在骗人。台账里它显示「搜索型」徽标，主操作是搜索而不是设为使用中。
+
 ---
 
 ## 数据
@@ -270,7 +285,7 @@ export NODE_PATH=C:/Users/lxc/.workbuddy/binaries/node/workspace/node_modules
 ```
 
 ```bash
-# 功能测试（共 1071 项：jsdom 833 + 真实浏览器 238）
+# 功能测试（共 1102 项：jsdom 864 + 真实浏览器 238）
 node tools/smoke.js                  # 125 项 · 启动/入库/八页面/主题/导入导出/3D 卡/触摸端/版权
 node tools/test-csv.js               #  30 项 · CSV 解析与表头映射
 node tools/test-sound.js             #  25 项 · WebAudio 音效
@@ -286,6 +301,7 @@ node tools/test-proxy.js             #  30 项 · 代理响应解包、自检分
 node tools/test-bg.js                #  38 项 · 背景图渲染与对比度
 node tools/test-review-edit.js       #  23 项 · 感想编辑/删除：就地更新、确认框、rewatchCount 纪律
 node tools/test-ime-input.js         #  16 项 · 中文输入法防打断：合成期间不重渲、上屏后才触发
+node tools/test-site-search.js       #  31 项 · 搜索型片源：模板推断/拼接、选源排除、不可设为使用中
 
 # 网络实测（依赖真实外网，结果随时间变化）
 node tools/probe-cors-agents.js      # 15 个公共代理 × 3 轮，统计可用率
@@ -400,7 +416,7 @@ node tools/shot-ledger.js           # 出图：台账页 / 编辑弹窗 / 待办
 node tools/shot-ledger-pick.js      # 出图：勾选态 / 勾号特写 / 批量吐司 / 使用中筛选
 ```
 
-当前状态：**1071/1071 全绿**，5 个对比度脚本全部通过 WCAG AA。
+当前状态：**1102/1102 全绿**，5 个对比度脚本全部通过 WCAG AA。
 
 ### 浏览器端验证（CDP）
 

@@ -1205,6 +1205,13 @@ details > summary:hover{ color:var(--accent); }
 .review-item{ position:relative; }
 .review-item::before{ content:""; position:absolute; left:calc(-1 * var(--sp-4) - 6px); top:8px; width:10px; height:10px; border-radius:50%; background:var(--accent); box-shadow:0 0 0 3px var(--accent-soft); }
 .review-head{ display:flex; align-items:center; gap:var(--sp-2); font-size:var(--fs-xs); color:var(--muted); }
+/* 感想条目的编辑/删除：默认淡到几乎看不见，悬停条目时浮现；
+   键盘聚焦时也必须完全可见（不能只靠 hover）。 */
+.review-ops{ margin-left:auto; display:inline-flex; gap:4px; opacity:0; transition:opacity .15s ease; }
+.review-item:hover .review-ops, .review-ops:focus-within{ opacity:1; }
+.icon-ghost-btn{ display:inline-flex; align-items:center; justify-content:center; width:24px; height:24px; padding:0; border:1px solid var(--border); border-radius:var(--r-sm,6px); background:var(--panel-2, transparent); color:var(--muted); cursor:pointer; }
+.icon-ghost-btn:hover{ color:var(--text); border-color:var(--text-2); }
+.icon-ghost-btn:focus-visible{ outline:2px solid var(--accent); outline-offset:1px; opacity:1; }
 .review-round{ padding:1px 8px; border-radius:var(--r-pill); background:var(--accent-soft); color:var(--text); font-weight:600; border:1px solid var(--accent); }
 .review-body{ margin-top:4px; font-size:var(--fs-sm); line-height:1.7; color:var(--text-2); white-space:pre-wrap; }
 .pending-row{ display:flex; align-items:center; gap:var(--sp-3); padding:var(--sp-2) var(--sp-3); border:1px dashed var(--warn); border-radius:var(--r-md); background:var(--panel-2); }
@@ -3949,31 +3956,49 @@ function nextViewRound(an){
   const rs = (an.reviews || []).map(r => Number(r.round) || 0);
   return (rs.length ? Math.max.apply(null, rs) : 0) + 1;
 }
+/* opts.review 传入时为编辑模式：预填该条感想，保存改为就地更新；
+   不传则是记录一次新观看（追加）。 */
 function promptReview(an, opts){
   opts = opts || {};
+  const editing = opts.review || null;
   return new Promise((resolve) => {
-    const suggested = nextViewRound(an);
+    const suggested = editing ? (Number(editing.round) || 1) : nextViewRound(an);
     const root = openModal({
-      title: opts.title || (suggested === 1 ? "记录一次观看" : "记录一次重看"),
+      title: editing ? "编辑这条感想" : (suggested === 1 ? "记录一次观看" : "记录一次重看"),
       narrow: true,
       body:
-        '<p class="hint mb-3">' + esc(an.titleCn) + " · 第 " + suggested + ' 次观看</p>' +
+        '<p class="hint mb-3">' + esc(an.titleCn) + " · " + (editing ? "修改第 " + suggested + " 次观看的记录" : "第 " + suggested + " 次观看") + '</p>' +
         '<div class="field mb-3"><label for="rv-date">观看日期</label>' +
-          '<input class="input" id="rv-date" type="date" data-autofocus value="' + todayISO() + '"></div>' +
+          '<input class="input" id="rv-date" type="date" data-autofocus value="' + attr(editing ? (editing.date || todayISO()) : todayISO()) + '"></div>' +
         '<div class="field mb-3"><label for="rv-round">第几次观看</label>' +
           '<input class="input" id="rv-round" type="number" min="1" max="999" step="1" value="' + suggested + '"></div>' +
         '<div class="field"><label for="rv-content">感想（可留空）</label>' +
-          '<textarea class="textarea" id="rv-content" rows="5" maxlength="4000" placeholder="这次看的心情…"></textarea></div>',
+          '<textarea class="textarea" id="rv-content" rows="5" maxlength="4000" placeholder="这次看的心情…">' + esc(editing ? (editing.content || "") : "") + '</textarea></div>',
       footer: (f) => {
         f.innerHTML =
           '<div class="grow"></div>' +
           '<button class="btn" type="button" id="rv-cancel">取消</button>' +
-          '<button class="btn btn-primary" type="button" id="rv-save">保存</button>';
+          '<button class="btn btn-primary" type="button" id="rv-save">' + (editing ? "保存修改" : "保存") + '</button>';
         f.querySelector("#rv-cancel").addEventListener("click", () => { closeModal(); resolve(null); });
         f.querySelector("#rv-save").addEventListener("click", async () => {
           const date = root.querySelector("#rv-date").value || todayISO();
           const content = root.querySelector("#rv-content").value.trim();
           const round = Math.max(1, Number(root.querySelector("#rv-round").value) || suggested);
+          if(editing){
+            /* 编辑：就地更新这条记录，不动其它条目；
+               重看次数只升不降（改次数不代表少看了一遍）。 */
+            editing.date = dateISO(new Date(date + "T00:00:00"));
+            editing.round = round;
+            editing.content = content;
+            editing.editedAt = new Date().toISOString();
+            an.rewatchCount = Math.max(an.rewatchCount || 0, round - 1);
+            await saveAnime(an);
+            closeModal();
+            toast("已更新第 " + round + " 次观看的感想", "ok");
+            refreshAll();
+            resolve(editing);
+            return;
+          }
           const rev = { id: uid("rv"), date: dateISO(new Date(date + "T00:00:00")), round: round, content: content, createdAt: new Date().toISOString() };
           an.rewatchCount = Math.max((an.rewatchCount || 0) + 1, round - 1);
           if(content) an.reviews = (an.reviews || []).concat([rev]);
@@ -6911,7 +6936,11 @@ function renderDetail(root, id){
         '<button class="btn btn-sm btn-primary" type="button" data-act="rewatch">' + ic("plus",14) + "记录一次重看</button>" +
         (reviews.length
           ? '<div class="review-timeline mt-3">' + reviews.map(r =>
-              '<div class="review-item"><div class="review-head"><span class="review-round">第 ' + (r.round||1) + " 次观看</span><span>" + esc(r.date || "") + "</span></div>" +
+              '<div class="review-item"><div class="review-head"><span class="review-round">第 ' + (r.round||1) + " 次观看</span><span>" + esc(r.date || "") + "</span>" +
+              '<span class="review-ops">' +
+                '<button class="icon-ghost-btn" type="button" data-act="rv-edit" data-rv="' + attr(r.id || "") + '" aria-label="编辑这条感想" title="编辑">' + ic("edit",13) + "</button>" +
+                '<button class="icon-ghost-btn" type="button" data-act="rv-del" data-rv="' + attr(r.id || "") + '" aria-label="删除这条感想" title="删除">' + ic("trash",13) + "</button>" +
+              "</span></div>" +
               (r.content ? '<div class="review-body">' + esc(r.content) + "</div>" : "") + "</div>").join("") + "</div>"
           : '<div class="small muted mt-3">还没有感想。记录一次重看时可以写几句。</div>') +
         "</div></details>" +
@@ -7121,6 +7150,23 @@ function bindDetailActions(root, a){
     if(act === "fav"){ a.favorite = !a.favorite; await saveAnime(a); rerender(); return; }
     if(act === "master"){ a.masterpiece = !a.masterpiece; await saveAnime(a); rerender(); return; }
     if(act === "rewatch"){ await promptReview(a); return; }
+    if(act === "rv-edit" || act === "rv-del"){
+      const rv = (a.reviews || []).find(x => x.id === b.dataset.rv);
+      if(!rv){ rerender(); return; }
+      if(act === "rv-edit"){ await promptReview(a, { review:rv }); return; }
+      const ok = await confirmDialog({
+        title:"删除这条感想",
+        html:"确定删除「第 " + (rv.round||1) + " 次观看 · " + esc(String(rv.date||"").slice(0,10)) + "」这条感想吗？<br><span class=\"hint\">只删这条记录，不影响重看次数与作品本身；删除后无法恢复。</span>",
+        okText:"删除", danger:true
+      });
+      if(ok){
+        a.reviews = (a.reviews || []).filter(x => x.id !== rv.id);
+        await saveAnime(a);
+        toast("已删除这条感想", "ok");
+        rerender();
+      }
+      return;
+    }
     if(act === "edit"){ openAnimeForm({ anime:a }); return; }
     if(act === "del"){
       const ok = await confirmDialog({

@@ -2301,6 +2301,20 @@ function uid(prefix){
 function debounce(fn, ms){
   let t; return function(){ const args = arguments, self = this; clearTimeout(t); t = setTimeout(()=>fn.apply(self,args), ms); };
 }
+/* 中文输入法（IME）安全的 input 绑定。
+   不加守卫的后果：拼音还没上屏时防抖回调就 rerender() 重建输入框，
+   合成被顶掉，用户打一个词断一次（表现为「只剩拼音字母」）。
+   规则：合成期间（compositionstart → compositionend）的 input 事件全部忽略，
+   compositionend 时补触发一次 fn —— 拿到的一定是上屏后的完整文本。
+   Chrome 的 compositionend 在最后一个 input 之后（靠这里补触发），
+   Firefox/Safari 相反（fn 可能跑两次，调用处配 debounce 即可合并）。 */
+function bindIMEInput(el, fn, opts){
+  opts = opts || {};
+  let composing = false;
+  el.addEventListener("compositionstart", () => { composing = true; }, opts);
+  el.addEventListener("compositionend", () => { composing = false; fn(); }, opts);
+  el.addEventListener("input", () => { if(!composing) fn(); }, opts);
+}
 function clampNum(n, min, max){ n = Number(n); if(!isFinite(n)) n = min; return Math.min(max, Math.max(min, n)); }
 function todayISO(){ const d = new Date(); return dateISO(d); }
 function dateISO(d){
@@ -4490,7 +4504,7 @@ function renderLibrary(root){
   };
   const q = root.querySelector("#lib-q");
   if(q){
-    q.addEventListener("input", debounce(() => { libState.rowExpanded = ""; libState.q = q.value; rerender(); const n2 = root.querySelector("#lib-q"); if(n2){ n2.focus(); n2.setSelectionRange(n2.value.length, n2.value.length); } }, 300));
+    bindIMEInput(q, debounce(() => { libState.rowExpanded = ""; libState.q = q.value; rerender(); const n2 = root.querySelector("#lib-q"); if(n2){ n2.focus(); n2.setSelectionRange(n2.value.length, n2.value.length); } }, 300));
   }
   bind("#lib-status","statusId"); bind("#lib-decade","decade"); bind("#lib-year","watchYear"); bind("#lib-grade","watchGrade");
   bind("#lib-studio","studio"); bind("#lib-genre","genre"); bind("#lib-flag","flag"); bind("#lib-sort","sort", true);
@@ -4743,7 +4757,7 @@ function openSearchModal(){
   const stNode = root.querySelector("#s-status");
   const manualBtn = root.querySelector("#s-manual");
   if(kwNode) kwNode.addEventListener("keydown", (e) => { if(e.key === "Enter"){ e.preventDefault(); doSearch(true); } });
-  kwNode && kwNode.addEventListener("input", debounce(() => doSearch(false), 380));
+  kwNode && bindIMEInput(kwNode, debounce(() => doSearch(false), 380));
   manualBtn && manualBtn.addEventListener("click", () => { closeModal(); openAnimeForm({ candidate: { titleCn: kwNode.value.trim(), source:"manual" } }); });
 
   async function doSearch(immediate){
@@ -6752,7 +6766,7 @@ function bindStreamLauncher(root, a){
   input.addEventListener("keydown", e => {
     if(e.key === "Enter"){ e.preventDefault(); play(); }
   }, sig);
-  input.addEventListener("input", debounce(() => {
+  bindIMEInput(input, debounce(() => {
     syncStreamLauncher(root);
     const v = input.value.trim();
     if(!v) return;
@@ -7532,7 +7546,7 @@ function rerenderLedger(){ rerender(); }
    逐个 addEventListener 在 200 行表格里既慢又容易漏。 */
 function bindLedger(root, all, rows){
   const q = root.querySelector("#led-q");
-  if(q) q.addEventListener("input", debounce(() => {
+  if(q) bindIMEInput(q, debounce(() => {
     ledgerState.q = q.value;
     rerenderLedger();
     const n = root.querySelector("#led-q");
@@ -8370,7 +8384,7 @@ function openQuoteImport(){
           '<footer><div class="who">' + esc(q.sourceAnimeTitle) + (q.character ? " · " + esc(q.character) : "") + "</div></footer></article>").join("") +
         "</div>" + (body.length > 6 ? '<p class="hint mt-2">…以及另外 ' + (body.length - 6) + " 条</p>" : "") : "");
   }
-  ta.addEventListener("input", debounce(analyze, 200));
+  bindIMEInput(ta, debounce(analyze, 200));
   root.querySelector("#qi-pick").addEventListener("click", () => {
     const inp = document.createElement("input");
     inp.type = "file"; inp.accept = ".csv,text/csv,text/plain";
@@ -8464,7 +8478,7 @@ function renderQuotes(root){
   root.innerHTML = html;
   root.querySelectorAll("[data-tab]").forEach(b => b.addEventListener("click", () => { quotesState.tab = b.dataset.tab; rerender(); }));
   const q = root.querySelector("#qt-q");
-  if(q) q.addEventListener("input", debounce(() => { quotesState.q = q.value; rerender(); const n = root.querySelector("#qt-q"); if(n){ n.focus(); n.setSelectionRange(n.value.length, n.value.length); } }, 300));
+  if(q) bindIMEInput(q, debounce(() => { quotesState.q = q.value; rerender(); const n = root.querySelector("#qt-q"); if(n){ n.focus(); n.setSelectionRange(n.value.length, n.value.length); } }, 300));
   const s = root.querySelector("#qt-src");
   if(s) s.addEventListener("change", () => { quotesState.filterSource = s.value; rerender(); });
   root.querySelectorAll("[data-act=add]").forEach(b => b.addEventListener("click", () => openQuoteForm(null)));
@@ -8554,7 +8568,7 @@ function openQuoteForm(q){
 function setupAutocomplete(input, listEl){
   let items = [], idx = -1;
   const close = () => { listEl.hidden = true; items = []; idx = -1; };
-  input.addEventListener("input", () => {
+  bindIMEInput(input, () => {
     const kw = normalize(input.value);
     if(!kw){ close(); return; }
     items = Array.from(new Set(state.anime.map(a => a.titleCn).filter(Boolean)))
@@ -10086,7 +10100,7 @@ function bindSettings(root){
       settings[key] = v;
       saveSettings(); afterSettingsChange(true);
     };
-    if(n.type === "range" || n.type === "number" || (n.tagName === "INPUT" && n.type === "text")) n.addEventListener("input", debounce(handler, 220));
+    if(n.type === "range" || n.type === "number" || (n.tagName === "INPUT" && n.type === "text")) bindIMEInput(n, debounce(handler, 220));
     else n.addEventListener("change", handler);
   });
   root.querySelectorAll("[data-cardfield]").forEach(n => n.addEventListener("change", () => {

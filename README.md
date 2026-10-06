@@ -270,7 +270,7 @@ export NODE_PATH=C:/Users/lxc/.workbuddy/binaries/node/workspace/node_modules
 ```
 
 ```bash
-# 功能测试（共 1055 项：jsdom 817 + 真实浏览器 238）
+# 功能测试（共 1071 项：jsdom 833 + 真实浏览器 238）
 node tools/smoke.js                  # 125 项 · 启动/入库/八页面/主题/导入导出/3D 卡/触摸端/版权
 node tools/test-csv.js               #  30 项 · CSV 解析与表头映射
 node tools/test-sound.js             #  25 项 · WebAudio 音效
@@ -285,6 +285,7 @@ node tools/test-tv-skin.js           # 132 项 · TV 影院几何、列数公式
 node tools/test-proxy.js             #  30 项 · 代理响应解包、自检分层、AniList 走代理
 node tools/test-bg.js                #  38 项 · 背景图渲染与对比度
 node tools/test-review-edit.js       #  23 项 · 感想编辑/删除：就地更新、确认框、rewatchCount 纪律
+node tools/test-ime-input.js         #  16 项 · 中文输入法防打断：合成期间不重渲、上屏后才触发
 
 # 网络实测（依赖真实外网，结果随时间变化）
 node tools/probe-cors-agents.js      # 15 个公共代理 × 3 轮，统计可用率
@@ -399,7 +400,7 @@ node tools/shot-ledger.js           # 出图：台账页 / 编辑弹窗 / 待办
 node tools/shot-ledger-pick.js      # 出图：勾选态 / 勾号特写 / 批量吐司 / 使用中筛选
 ```
 
-当前状态：**1055/1055 全绿**，5 个对比度脚本全部通过 WCAG AA。
+当前状态：**1071/1071 全绿**，5 个对比度脚本全部通过 WCAG AA。
 
 ### 浏览器端验证（CDP）
 

@@ -2295,7 +2295,9 @@ function esc(s){
 }
 function attr(s){ return esc(s); }
 function uid(prefix){
-  const rand = (crypto && crypto.randomuuid) ? null : null;
+  /* crypto.randomUUID 可用时优先用它（无碰撞）；旧引擎回落到时间戳+随机串。
+     旧代码这行是半成品死代码：两分支都是 null，且 API 名拼错成 randomuuid。 */
+  if(typeof crypto !== "undefined" && crypto.randomUUID) return (prefix||"id") + "_" + crypto.randomUUID();
   return (prefix||"id") + "_" + Date.now().toString(36) + Math.random().toString(36).slice(2,8);
 }
 function debounce(fn, ms){
@@ -2490,8 +2492,22 @@ const Repo = {
       };
       req.onsuccess = () => { Repo.db = req.result; done("idb"); };
       req.onerror = () => useLS();
-      req.onblocked = () => useLS();
-      setTimeout(() => { if(!finished) useLS(); }, 3000);
+      /* onblocked 不能静默降级：阻塞解除后 open 仍会成功，而应用已经
+         跑在 LS 副本上 —— 本次会话的写入全部进 LS，下次启动被 IDB
+         数据遮蔽，表现为「录的东西丢了」。改为提示用户排除占用，
+         继续等待 open 的真实结果。 */
+      req.onblocked = () => toast("数据库正被其他标签页占用，请关闭本应用的其他标签页后稍候…", "warn", 10000);
+      /* 打开慢 ≠ 打不开。3 秒只是提示，30 秒仍无结果才降级，
+         且降级必须可见 —— 否则用户在降级副本上录数据，重启后「消失」。 */
+      setTimeout(() => {
+        if(finished) return;
+        toast("数据库打开较慢，仍在等待……", "warn", 6000);
+      }, 3000);
+      setTimeout(() => {
+        if(finished) return;
+        useLS();
+        toast("IndexedDB 长时间无响应，本次会话运行在降级存储上，更改可能无法保留。建议刷新页面重试。", "err", 15000);
+      }, 30000);
     });
   },
   tx(store, mode, fn){
@@ -2593,12 +2609,22 @@ const Repo = {
    * 主线程被彻底堵死（这是「导入很卡」的真正原因，不是数据量本身）。
    * 现在合并到一个微任务里只写一次，语义不变（页面关闭前一定落盘）。 */
   _lsTimer: null,
+  _lsQuotaWarned: false,
   persistLS(){
     if(Repo._lsTimer) return;
     Repo._lsTimer = setTimeout(() => {
       Repo._lsTimer = null;
       try{ localStorage.setItem(LS_DATA, JSON.stringify(Repo._mem)); }
-      catch(e){ throw new Error("QUOTA"); }
+      catch(e){
+        /* 降级模式下这里是唯一的落盘点：失败若只 throw，
+           异常发生在定时器回调里没有任何调用方能感知，
+           put 照样返回 true、界面照样弹「已保存」。必须显式上报。 */
+        if(!Repo._lsQuotaWarned){
+          Repo._lsQuotaWarned = true;
+          try{ toast("⚠ 本地存储写入失败（配额不足或被禁用），本次更改可能不会被保存。请先导出备份。", "err", 10000); }catch(e2){}
+        }
+        console.warn("localStorage 写入失败", e);
+      }
     }, 0);
   },
   /* 页面隐藏时立刻落盘：微任务节流在「导入完立刻关标签页」的场景下会丢数据。 */
@@ -3324,7 +3350,8 @@ function cleanText(html){
   s = s.replace(/<br\s*\/?>/gi, "\n");
   s = s.replace(/\[\/?mask\]/gi, "");
   s = s.replace(/<[^>]+>/g, "");
-  s = s.replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'");
+  /* &amp; 必须最后解码：先解它会把源文本里的字面量 &amp;lt; 二次解码成 < */
+  s = s.replace(/&nbsp;/g, " ").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, "&");
   s = s.replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n");
   return s.trim();
 }
@@ -3636,9 +3663,11 @@ function readFormAnime(modalRoot, base){
   an.genres = strToArr(get("f-genres"));
   an.summary = (get("f-summary") || "").trim();
   an.statusId = get("f-statusId") || "st_want";
-  an.watchedEpisodes = Number(get("f-watchedEpisodes")) || 0;
+  /* min/step 只是控件提示，拦不住手输 —— 与表格视图 inlineEdit 同一套钳制，
+     否则表单路径能存进 -5 / 12.5 这样的进度。 */
+  an.watchedEpisodes = Math.max(0, Math.round(Number(get("f-watchedEpisodes")) || 0));
   an.myScore = numOrNull(get("f-myScore"));
-  an.rewatchCount = Number(get("f-rewatchCount")) || 0;
+  an.rewatchCount = Math.max(0, Math.round(Number(get("f-rewatchCount")) || 0));
   an.watchYear = numOrNull(get("f-watchYear"));
   an.watchGrade = get("f-watchGrade") || null;
   an.watchChannel = get("f-watchChannel") || null;
@@ -3656,6 +3685,18 @@ function numOrNull(v){
 function validateDateInput(v){
   const s = String(v || "").trim();
   if(!s) return "";
+  /* 常见手写格式先归一成 YYYY-MM-DD（/ YYYY-MM）：2001-4-5、2001/4/5、
+     2001年4月5日 都是用户会输入的。以前这些一律判非法静默清空，
+     从外部数据带进来的短格式还会在编辑一次后被抹掉。 */
+  const m = /^(\d{4})[年./\-](\d{1,2})(?:[月./\-](\d{1,2})日?)?$/.exec(s);
+  if(m){
+    const mo = Number(m[2]), day = m[3] ? Number(m[3]) : null;
+    if(mo >= 1 && mo <= 12 && (day == null || (day >= 1 && day <= 31))){
+      const p = n => String(n).padStart(2,"0");
+      return m[1] + "-" + p(mo) + (day == null ? "" : "-" + p(day));
+    }
+    return "";
+  }
   if(!parseDateOnly(s)) return "";
   return s;
 }
@@ -3878,13 +3919,13 @@ async function handleDuplicate(an, dup, opts){
   const level = dup.level, exist = dup.match;
   const name = exist.titleCn || exist.titleOriginal;
   if(level === "L1" || level === "L2"){
-    const go = await confirmDialog({
+    const nav = await confirmDialog({
       title: "重复检测",
       html: "《" + esc(name) + "》已在片库中（" + (level === "L1" ? "同一数据源条目" : "标题完全相同") + "）。<br>你可以直接去看看，或仍然新建一条。",
       okText: "去看看",
       cancelText: "仍要新建"
     });
-    if(go){ go("theater", exist.id); return; }
+    if(nav){ go("theater", exist.id); return; }
     await saveAnime(an);
     toast("已新建《" + an.titleCn + "》", "ok");
     refreshAll();
@@ -3930,8 +3971,13 @@ function mergeRecords(base, incoming, opts){
   });
   ["statusId","watchedEpisodes","myScore","watchYear","watchGrade","watchChannel"].forEach(f => {
     const bt = new Date(base.updatedAt || 0).getTime(), it = new Date(incoming.updatedAt || 0).getTime();
-    const pick = it >= bt ? incoming : base;
-    const other = it >= bt ? base : incoming;
+    let pick = it >= bt ? incoming : base;
+    let other = it >= bt ? base : incoming;
+    /* 刚填的表单草稿 updatedAt 恒为 now、恒胜出，但它的「想看 / 0 集」只是
+       表单默认值，不代表用户想清空已有进度 —— 重录同一部作品选「合并」，
+       不该把「看完 / 已看 12 集」重置回零。此时改为让 base 胜出。 */
+    if(pick === incoming && f === "watchedEpisodes" && !Number(pick.watchedEpisodes) && Number(other.watchedEpisodes)){ pick = base; other = incoming; }
+    if(pick === incoming && f === "statusId" && pick.statusId === "st_want" && other.statusId && other.statusId !== "st_want"){ pick = base; other = incoming; }
     let v = pick[f];
     if(v == null || v === "") v = other[f];
     out[f] = v;
@@ -3940,6 +3986,12 @@ function mergeRecords(base, incoming, opts){
   out.masterpiece = !!(base.masterpiece || incoming.masterpiece);
   out.rewatchCount = Math.max(Number(base.rewatchCount) || 0, Number(incoming.rewatchCount) || 0);
   out.sourceIds = Object.assign({}, base.sourceIds || {}, incoming.sourceIds || {});
+  /* 线路：base 本来就没有而备份带过来时搬过去（恢复场景）；
+     base 已有自己的线路则保留 base，不拿表单/备份的线路覆盖。 */
+  if((!Array.isArray(base.sources) || !base.sources.length) && Array.isArray(incoming.sources) && incoming.sources.length){
+    out.sources = incoming.sources;
+    out.activeSourceId = incoming.activeSourceId || "";
+  }
   out.coverUrl = (base.locked && base.locked.coverUrl) || base.coverUrl ? base.coverUrl : (incoming.coverUrl || base.coverUrl);
   const seen = new Set();
   const reviews = (base.reviews || []).concat(incoming.reviews || []).map(r => Object.assign({}, r, { id: r.id || uid("rv") }));
@@ -3965,10 +4017,13 @@ function unionArr(a, b){
 /* ============================================================
    11. 记录一次重看 / 新增感想
    ============================================================ */
-/* nextRound：第几次观看（首次=1，重看一次后新增的为 2，以此类推；允许手动修正） */
+/* nextRound：第几次观看（首次=1，重看一次后新增的为 2，以此类推；允许手动修正）
+   只看有内容的 reviews 不够 —— 感想可留空，留空的观看只进 rewatchCount；
+   与 rewatchCount 取大，避免出现与历史错位/重复的轮次号。 */
 function nextViewRound(an){
   const rs = (an.reviews || []).map(r => Number(r.round) || 0);
-  return (rs.length ? Math.max.apply(null, rs) : 0) + 1;
+  const fromReviews = rs.length ? Math.max.apply(null, rs) + 1 : 1;
+  return Math.max(fromReviews, (Number(an.rewatchCount) || 0) + 1);
 }
 /* opts.review 传入时为编辑模式：预填该条感想，保存改为就地更新；
    不传则是记录一次新观看（追加）。 */
@@ -4014,7 +4069,9 @@ function promptReview(an, opts){
             return;
           }
           const rev = { id: uid("rv"), date: dateISO(new Date(date + "T00:00:00")), round: round, content: content, createdAt: new Date().toISOString() };
-          an.rewatchCount = Math.max((an.rewatchCount || 0) + 1, round - 1);
+          /* 重看次数 = round − 1（全库统一约定，编辑/导入路径均如此）：
+             「记录一次观看」是第 1 次，不算重看。 */
+          an.rewatchCount = Math.max(an.rewatchCount || 0, round - 1);
           if(content) an.reviews = (an.reviews || []).concat([rev]);
           await saveAnime(an);
           closeModal();
@@ -4675,7 +4732,9 @@ async function libraryAction(act, id, root){
      这个不对称正是它难以被发现的原因。 */
   if(act === "add"){ openSearchModal(); return; }
   if(act === "reset-filter"){
-    Object.assign(libState, { q:"", statusId:"", decade:"", watchYear:"", watchGrade:"", studio:"", genre:"", seriesId:null, flag:"" });
+    /* 统一走 resetLibraryFilter —— 这里以前手抄了一份，漏了 rowExpanded：
+       展开组变空后点「清空筛选」网格依旧为空，只有一个出口能出去。 */
+    resetLibraryFilter();
     rerender(); return;
   }
   const a = animeById(id);
@@ -4738,7 +4797,7 @@ registerPage({
    14. 添加新番：搜索 → 选源 → 表单 → 入库
    ============================================================ */
 function openSearchModal(){
-  let lastKeyword = "", timer = null, busy = false;
+  let lastKeyword = "", timer = null, busy = false, pendingKw = "";
   const root = openModal({
     title:"添加新番",
     body:
@@ -4762,7 +4821,12 @@ function openSearchModal(){
 
   async function doSearch(immediate){
     const kw = kwNode.value.trim();
-    if(!kw || busy) return;
+    if(!kw || busy){
+      /* busy 期间的新关键词记下来，请求结束后补跑一次 ——
+         否则 Bangumi 8 秒超时窗口内改词，结果永远停在旧词且无提示。 */
+      if(busy && kw && kw !== lastKeyword) pendingKw = kw;
+      return;
+    }
     if(kw === lastKeyword && !immediate) return;
     lastKeyword = kw;
     clearTimeout(timer);
@@ -4778,6 +4842,14 @@ function openSearchModal(){
     }
     busy = false;
     renderResults(out, kw);
+    /* 用户在等待期间又改了词：用最新关键词补跑一次。
+       输入框此刻已不是那个词的话，交给输入防抖自然触发，不在这里抢跑。 */
+    if(pendingKw && pendingKw !== lastKeyword && kwNode.value.trim() === pendingKw){
+      pendingKw = "";
+      doSearch(false);
+    }else{
+      pendingKw = "";
+    }
   }
   function renderResults(out, kw){
     const errList = out.errors || [];
@@ -5047,8 +5119,18 @@ const EMBED_RULES = [
   { id:"bilibili", name:"哔哩哔哩",
     test:u => /(^|\.)bilibili\.com$|player\.bilibili\.com$/i.test(hostOf(u)),
     build(u){
-      const bvid = pick(u, /bvid=([\w]+)/) || pick(u, /bilibili\.com\/video\/([\w]+)/);
-      const aid = pick(u, /aid=(\d+)/) || pick(u, /bilibili\.com\/video\/av(\d+)/);
+      /* av 号必须先于「路径里随便抓一段当 bvid」判断：
+         /video/av170001 的路径捕获是 "av170001"，
+         旧代码把它当 bvid 拼进 player 地址，内嵌必然报「视频链接失效」。 */
+      let bvid = pick(u, /bvid=([\w]+)/);
+      let aid = pick(u, /aid=(\d+)/);
+      if(!bvid && !aid){
+        const m = u.match(/bilibili\.com\/video\/([\w]+)/);
+        if(m){
+          if(/^av\d+$/i.test(m[1])) aid = m[1].slice(2);
+          else bvid = m[1];
+        }
+      }
       let p = pick(u, /[?&]p=(\d+)/);
       if(!bvid && !aid) return null;
       const src = bvid
@@ -5216,7 +5298,8 @@ function buildSearchUrl(tpl, kw){
   const t = String(tpl || "").trim();
   if(!t) return "";
   const k = String(kw || "").trim();
-  if(!k) return t;
+  /* 空关键词也不能把字面量 {kw} 带出去 —— 那会打开一个必然无效的地址 */
+  if(!k) return t.replace(/\{kw\}/g, "");
   return t.indexOf("{kw}") >= 0 ? t.replace(/\{kw\}/g, encKW(k)) : t + encKW(k);
 }
 /* 搜索用哪个片名：中文名优先，没有再退回原名。
@@ -5321,7 +5404,12 @@ async function mountStreamPlayer(mountEl, raw, statusEl){
   frame.setAttribute("title", "外部播放器");
   frame.src = "about:blank";
 
-  let settled = false;
+  /* 两个独立标志，不能合成一个：
+     旧实现把「拿到解析结果」和「iframe 已加载」混在一个 settled 里，
+     loading 阶段就置真 —— 此后 load 指引与 15 秒兜底全部变成死代码，
+     嵌入被拒的用户只能永远盯着「正在准备播放」。 */
+  let srcAssigned = false;
+  let loadHandled = false;
   let timer = null;
   const clear = () => { if(timer){ clearTimeout(timer); timer = null; } };
 
@@ -5337,8 +5425,8 @@ async function mountStreamPlayer(mountEl, raw, statusEl){
   // 站点被 XFO 拒绝时，Chrome 仍会触发 load（只是内容为空），
   // 因此这里不把它当成功，而是给用户明确的操作指引。
   frame.addEventListener("load", () => {
-    if(settled) return;
-    settled = true; clear();
+    if(!srcAssigned || loadHandled) return;
+    loadHandled = true; clear();
     /* 这里不能再用同步 resolveEmbed —— 番剧链接此刻需要的是
        已换算好的 player 地址，而不是原始 bangumi 页。传入实际 src 重新判定。 */
     const res = resolveEmbed(frame.src);
@@ -5350,18 +5438,20 @@ async function mountStreamPlayer(mountEl, raw, statusEl){
 
   const res = await openExternalPlayer(raw, st => {
     if(st.phase === "error"){
-      settled = true; clear();
+      clear();
       setStatus("err", st.reason);
       return;
     }
-    settled = true; clear();
+    clear();
     if(st.season && st.season.title){
-      setStatus("warn", "已匹配到《" + st.season.title + "》，正在加载播放器…");
+      setStatus("warn", "已匹配到《" + esc(st.season.title) + "》，正在加载播放器…");
     }
+    srcAssigned = true;
     frame.src = st.src;
     // 兜底：load 没来（比如被 CSP 彻底拦住）时给出明确说法
     timer = setTimeout(() => {
-      if(settled) return;
+      if(loadHandled) return;
+      loadHandled = true;
       setStatus("err", "15 秒内没有收到播放器的响应，这几乎可以确定是该网站禁止了第三方嵌入。请在新标签打开。");
     }, 15000);
   });
@@ -5659,7 +5749,10 @@ function compareSourceQuality(a, b){
    直译 MediaSelectionDecider.findByPreference。
    四层字典序：分辨率 → 字幕语言 → 字幕组 → 线路。
    关键：某层匹配不到时在**当前层**继续穷尽，而不是下降到下一层。
-   字幕组匹配不到就换更差的字幕语言，是这个算法最容易写错的地方。 */
+   字幕组匹配不到就换更差的字幕语言，是这个算法最容易写错的地方。
+   （应用内当前选源只走 activeSourceOf + filterSources；本节保留是因为
+   tools/test-source.js 对它有整组行为测试，作为已验证的备用选源器。）
+   ---- 由 tools/test-source.js 覆盖，勿删 ---- */
 function pickByPreference(included, pref){
   pref = pref || {};
   const cand = included.filter(x => x.state === "included").map(x => x.src);
@@ -5943,7 +6036,9 @@ function ledgerDuplicates(rows){
     const seen = new Map();
     (a.sources || []).forEach(s => {
       if(!s || !s.url) return;
-      const k = s.url + "|" + (s.ep == null ? "" : s.ep);
+      /* kind 进 key：搜索型存的是站点首页，和同址的普通线路不是重复 ——
+         用户明确选过「仍按普通线路保存」，去重不能把它当靶子删掉。 */
+      const k = (s.kind === "search" ? "search|" : "") + s.url + "|" + (s.ep == null ? "" : s.ep);
       if(seen.has(k)) out.push({ anime:a, source:s, keepId:seen.get(k) });
       else seen.set(k, s.id);
     });
@@ -6013,11 +6108,7 @@ async function setActiveSources(rows){
  * 两者无法统一换算。所以只做「用户自己声明看到第几集」的轻量记录，
  * 不假装能从播放进度反推 —— 那需要跨域读取播放器内部状态，做不到。
  */
-function streamURLOf(a){
-  if(!a) return settings.stream_url || "";
-  const act = activeSourceOf(a);
-  return act ? act.url : "";
-}
+/* streamURLOf 已删：无调用点也无测试引用，语义与 activeSourceOf(a).url 重复。 */
 
 /* ============================================================
    17.5 原生视频播放器
@@ -6156,7 +6247,23 @@ function mountVideoPlayer(mountEl, srcObj, a, onLineChange){
   let rateBack = null;          /* 长按加速前的倍速，松开要还回去 */
   let dragging = false;
   let interacted = false;       /* 是否已经发生过真实播放，用于 ended 守卫 */
-  let savedPosSec = null;
+  /* ---- 续播进度 ----
+     进度记在「线路」上（同一部番不同线路/集数各记各的）。
+     临时直链（不属于 a.sources 的对象）只在内存里，不落盘。 */
+  let srcPersisted = !!(a && Array.isArray(a.sources) && a.sources.indexOf(srcObj) >= 0);
+  let savedPosSec = (srcObj && Number(srcObj.posSec)) || null;
+  let lastSavedPos = savedPosSec || 0;
+  function persistProgress(force){
+    if(!srcPersisted || !a) return;
+    const t = video.currentTime;
+    if(!t || !Number.isFinite(t)) return;
+    if(!force && Math.abs(t - lastSavedPos) < 5) return;
+    lastSavedPos = t;
+    srcObj.posSec = Math.floor(t);
+    persistAnimeQuiet(a);
+  }
+  const onVisFlush = () => { if(document.hidden) persistProgress(true); };
+  document.addEventListener("visibilitychange", onVisFlush);
 
   function showBadge(text){
     badge.textContent = text;
@@ -6234,6 +6341,9 @@ function mountVideoPlayer(mountEl, srcObj, a, onLineChange){
 
   /* ---- 进度同步 ---- */
   function paint(){
+    /* 拖动中 timeupdate（约 4Hz）会用真实播放位置覆盖拖动预览，
+       进度点在鼠标和播放位置之间来回跳 —— 拖动期间让位。 */
+    if(dragging) return;
     const d = video.duration;
     const pct = Number.isFinite(d) && d > 0 ? (video.currentTime / d) * 100 : 0;
     fill.style.width = pct + "%";
@@ -6246,22 +6356,27 @@ function mountVideoPlayer(mountEl, srcObj, a, onLineChange){
     track.setAttribute("aria-valuenow", String(Math.round(video.currentTime)));
     track.setAttribute("aria-valuemax", String(Number.isFinite(d) ? Math.round(d) : 0));
   }
-  video.addEventListener("timeupdate", paint);
+  video.addEventListener("timeupdate", () => { paint(); persistProgress(false); });
   video.addEventListener("progress", paint);
   video.addEventListener("loadedmetadata", () => {
     paint();
     /* 续播：只在有记录且记录位置离结尾还远时恢复。
        靠得太近就恢复的话，一播出来就立刻结束并触发自动下一集，
        用户看到的是「刚点播放就被跳走」。Animeko 在 EpisodeHistory
-       里也是同一个判断（isFinished 就当没看过）。 */
+       里也是同一个判断（isFinished 就当没看过）。
+       注意单位：finishThresholdMs 是毫秒，时长是秒 —— 不除以 1000
+       的话阈值等于 83 分钟，几乎所有正常续播都会被误判成「快看完」。 */
     if(a && Number.isFinite(savedPosSec) && savedPosSec > 5){
       const d = video.duration;
-      if(!(Number.isFinite(d) && d - savedPosSec < VP.finishThresholdMs)){
+      if(!(Number.isFinite(d) && d - savedPosSec < VP.finishThresholdMs / 1000)){
         try{ video.currentTime = savedPosSec; showBadge("已续播到 " + fmtClock(savedPosSec)); }catch(e){}
       }
     }
   });
   video.addEventListener("play", () => { center.hidden = true; interacted = true; wake(); });
+  /* pause 不落盘：pause 事件异步到达，switchTo 换完 srcObj 后旧视频的
+     pause 才到，会把旧线路的进度写到新线路上。
+     落盘点是 timeupdate（5 秒节流）+ visibilitychange + destroy，够密。 */
   video.addEventListener("pause", () => { center.hidden = false; wake(); });
   video.addEventListener("volumechange", () => {
     btnMute.classList.toggle("is-on", video.muted || video.volume === 0);
@@ -6281,7 +6396,9 @@ function mountVideoPlayer(mountEl, srcObj, a, onLineChange){
   video.addEventListener("ended", () => {
     if(!interacted || !a) return;
     const d = video.duration;
-    if(!(Number.isFinite(d) && d - video.currentTime < VP.finishThresholdMs * 2)) return;
+    if(!(Number.isFinite(d) && d - video.currentTime < VP.finishThresholdMs * 2 / 1000)) return;
+    /* 看完的线路清掉续播点：留着的话下次一播就停在结尾 */
+    if(srcPersisted && srcObj.posSec != null){ srcObj.posSec = null; persistAnimeQuiet(a); }
     const total = Number(a.totalEpisodes) || 0;
     /* 集数以「当前线路声明的集数」为准，没有才回落到已看集数 ——
        用 a.watchedEpisodes 直接推会在「声明看到第 3 集但已看 12 集」时跳到 13，
@@ -6436,8 +6553,10 @@ function mountVideoPlayer(mountEl, srcObj, a, onLineChange){
       const id = b.dataset.srcId;
       const target = list.find(s => s.id === id);
       if(!target || !a) return;
-      a.activeSourceId = id;
-      saveAnime(a);
+      /* 与胶囊列表同一条路：setActiveSource 会同步旧字段并走静默落盘。
+         旧代码直接 saveAnime，会把 updatedAt 刷成现在，
+         正在播时切一条线路就被顶到「最近添加」最前。 */
+      setActiveSource({ anime:a, source:target });
       panel.classList.remove("is-open");
       bSrc.classList.remove("is-on");
       if(onLineChange) onLineChange({ switchTo:target });
@@ -6468,7 +6587,12 @@ function mountVideoPlayer(mountEl, srcObj, a, onLineChange){
     video:video,
     /* 切线路：不停整个播放器，只换 src 并保留进度语义。 */
     switchTo:function(next){
+      persistProgress(true);   /* 旧线路的进度在换 src 前落盘，currentTime 马上就没了 */
       try{ video.pause(); }catch(e){}
+      srcObj = next;
+      srcPersisted = !!(a && Array.isArray(a.sources) && a.sources.indexOf(next) >= 0);
+      savedPosSec = (next && Number(next.posSec)) || null;
+      lastSavedPos = savedPosSec || 0;
       video.src = next.url;
       title.querySelector("b").textContent = next.name || "播放";
       const metaEl = title.querySelector("span");
@@ -6482,6 +6606,8 @@ function mountVideoPlayer(mountEl, srcObj, a, onLineChange){
     },
     getPositionSec:() => video.currentTime,
     destroy:function(){
+      persistProgress(true);   /* 关页/换页前的最后一笔 */
+      document.removeEventListener("visibilitychange", onVisFlush);
       if(idleTimer) clearTimeout(idleTimer);
       if(badgeTimer) clearTimeout(badgeTimer);
       endRamp();
@@ -6662,6 +6788,16 @@ async function addSourceFromInput(root, a){
     if(!choice) return null;                       // 取消：什么都不存
     if(choice.mode === "search"){
       const sName = (nameInput && nameInput.value.trim()) || siteLabelOf(norm);
+      /* 同一首页的搜索型不重复攒（与下方普通线路的同址判重对称）：
+         已存在时改为更新它的搜索模板，而不是再存一条一模一样的。 */
+      const existed = (a.sources || []).find(s => s.kind === "search" && s.url === norm);
+      if(existed){
+        const tplChanged = !!(choice.tpl && existed.searchUrl !== choice.tpl);
+        if(tplChanged){ existed.searchUrl = choice.tpl; await saveAnime(a); }
+        input.value = "";
+        if(nameInput) nameInput.value = "";
+        return { source:existed, duplicate:true, search:true, tplUpdated:tplChanged };
+      }
       const srcS = normalizeSource(
         { url:norm, name:sName, kind:"search", searchUrl:choice.tpl, savedAt:now },
         (a.sources || []).length, now);
@@ -6677,8 +6813,12 @@ async function addSourceFromInput(root, a){
     /* mode === "plain"：尊重用户，按普通线路继续往下存。 */
   }
   /* 同址不重复添加：反复点「添加」会攒出一串一模一样的线路，
-     选源面板里全是重复项。提示已有而不是静默跳过。 */
-  const dup = (a.sources || []).find(s => s.url === norm && (s.ep == null || ep == null || s.ep === ep));
+     选源面板里全是重复项。提示已有而不是静默跳过。
+     只在普通线路之间判重 —— 用户刚在弹窗里明确选了「仍按普通线路保存」，
+     不能因为同址有一条搜索型就把他的选择吞掉；两种形态共存是有意义的。
+     dup 也因此绝不可能是搜索型，下面设 activeSourceId 不破坏
+     「搜索型不能当当前线路」的不变量。 */
+  const dup = (a.sources || []).find(s => s.kind !== "search" && s.url === norm && (s.ep == null || ep == null || s.ep === ep));
   if(dup){
     a.activeSourceId = dup.id;
     await saveAnime(a);
@@ -6883,17 +7023,21 @@ function bindStreamLauncher(root, a){
     mount.hidden = false;
     dropPlayer();
     setStatus("warn", "正在准备播放…");
-    /* 记一次「最近使用」。走 Repo.put 而不是 saveAnime：
-       播放不该算作编辑作品内容，用 saveAnime 会把 updatedAt 刷成现在，
-       于是「随便点一次播放」就能把老作品顶到「最近添加」最前面。 */
+    /* 记一次「最近使用」，走静默落盘 —— 播放不算编辑内容，
+       saveAnime 会把老作品顶到「最近添加」最前。只对真正被播放的
+       那条已存线路记账：播的是输入框直链时不记在已存线路上。 */
+    const savedMatch = a ? (sourcesOf(a) || []).find(s => s && s.url === raw) : null;
     const usedAct = activeSourceOf(a);
-    if(a && usedAct){
+    if(a && usedAct && usedAct.url === raw){
       usedAct.lastUsedAt = nowIso();
       persistAnimeQuiet(a);
     }
-    /* 直链走原生播放器：能读时间轴，所以续播、倍速、片尾自动下一集都能做。 */
+    /* 直链走原生播放器：能读时间轴，所以续播、倍速、片尾自动下一集都能做。
+       判定和挂载必须是同一个地址 —— 输入框里的直链优先；
+       它不匹配任何已存线路时用临时对象起播（进度不落盘），
+       绝不能静默改播已存的当前线路。 */
     if(isDirectPlayable(raw)){
-      const act = usedAct || normalizeSource({ url:raw }, 0, new Date().toISOString());
+      const act = savedMatch || normalizeSource({ url:raw }, 0, new Date().toISOString());
       vp = mountVideoPlayer(mount, act, a, evt => {
         if(evt.failed && evt.message) setStatus("err", evt.message);
         if(evt.switchTo && vp){ vp.switchTo(evt.switchTo); }
@@ -6940,11 +7084,14 @@ function bindStreamLauncher(root, a){
     if(act === "add"){
       const r = await addSourceFromInput(root, a);
       if(r){
-        setStatus(r.search ? "ok" : "ok", r.duplicate
-          ? "这条线路已经存过了，已切到它。"
+        /* 名称与片名是外部/手输数据，setStatus 走 innerHTML，必须过 esc */
+        setStatus("ok", r.duplicate
+          ? (r.search
+            ? (r.tplUpdated ? "已更新该站点的搜索模板。" : "该站点的搜索型片源已存在。")
+            : "这条线路已经存过了，已切到它。")
           : (r.search
-            ? "已存为搜索型片源「" + (r.source.name || "站点") + "」：点它用《" + (a.titleCn || a.titleOriginal || "片名") + "》在这个站里搜索。"
-            : "已添加线路「" + (r.source.name || "线路") + "」。"));
+            ? "已存为搜索型片源「" + esc(r.source.name || "站点") + "」：点它用《" + esc(a.titleCn || a.titleOriginal || "片名") + "》在这个站里搜索。"
+            : "已添加线路「" + esc(r.source.name || "线路") + "」。"));
         if(!r.duplicate) rerender();
       }
       return;
@@ -6974,7 +7121,7 @@ function bindStreamLauncher(root, a){
       if(!res.usable){
         setStatus("warn", "已设为使用中，但这条" + (sourceUnusableReason(target) || "当前不可用") + "，播放时会自动跳过它");
       }else{
-        setStatus("ok", (same ? "当前线路：" : "已切到：") + (target.name || sourceDisplayName(target)) +
+        setStatus("ok", (same ? "当前线路：" : "已切到：") + esc(target.name || sourceDisplayName(target)) +
           (target.ep != null ? " · 第 " + target.ep + " 集" : ""));
       }
       /* 正在播就立刻换源；没在播则只改默认线路，等用户点播放。
@@ -7009,17 +7156,25 @@ function bindStreamLauncher(root, a){
       const cur = activeSourceOf(a);
       if(act === "clear-one" && cur){
         a.sources = a.sources.filter(s => s.id !== cur.id);
-        setStatus("ok", "已清除「" + (cur.name || "线路") + "」。");
+        setStatus("ok", "已清除「" + esc(cur.name || "线路") + "」。");
       }else{
         a.sources = [];
         a.activeSourceId = "";
         a.streamUrl = ""; a.streamEp = null; a.streamUrlAt = "";
         setStatus("warn", "已清除全部线路。");
       }
-      const nx = activeSourceOf(a);
-      /* 旧字段跟着当前线路走，否则详情页会显示已删线路的集数。 */
-      a.streamUrl = nx ? nx.url : "";
-      a.streamEp = nx ? nx.ep : null;
+      /* 旧字段跟着当前线路走 —— 但只在本作品**还有自己的线路**时。
+         清空后 activeSourceOf 会兜到全局 legacy 临时片源（settings.stream_url），
+         把它写回 a.streamUrl 等于把刚删掉的线路固化回去：
+         重进页面「已清除」的线路又回来了。 */
+      const ownLeft = (a.sources || []).filter(s => s && s.url);
+      if(ownLeft.length){
+        const nx = activeSourceOf(a);
+        a.streamUrl = nx ? nx.url : "";
+        a.streamEp = nx ? nx.ep : null;
+      }else{
+        a.streamUrl = ""; a.streamEp = null; a.streamUrlAt = "";
+      }
       await saveAnime(a);
       rerender();
       return;
@@ -7318,7 +7473,7 @@ function episodeRowHTML(a){
           '<span class="tv-ep-no">EP ' + String(i).padStart(2, "0") + "</span>" +
         "</div>" +
         '<div class="tv-ep-body">' +
-          '<div class="tv-ep-name">' + (a.titleCn || a.titleOriginal || "未命名") + "</div>" +
+          '<div class="tv-ep-name">' + esc(a.titleCn || a.titleOriginal || "未命名") + "</div>" +
           '<div class="tv-ep-prog"><i style="width:' + fill + '%"></i></div>' +
         "</div>" +
       "</button>");
@@ -7762,10 +7917,12 @@ function renderLedger(root){
   if(ledgerState.probing && ledgerState.progress){
     const p = ledgerState.progress;
     const pct = p.total ? Math.round(p.done / p.total * 100) : 0;
+    /* 三个 id 给 probeAll 的就地刷新用：批量探测期间不做整页重渲，
+       只更新这几个节点 —— 全量重渲每 5 行一次，上千行时依然卡。 */
     html += '<div class="note-box mb-3"><div style="flex:1">' +
-      '<div class="probe-bar"><span>' + esc(p.label) + " " + p.done + " / " + p.total + "</span>" +
-      '<span style="margin-left:auto">' + pct + "%</span></div>" +
-      '<div class="progress pulse mt-2" style="height:6px"><i style="width:' + pct + '%"></i></div>' +
+      '<div class="probe-bar"><span id="probe-bar-txt">' + esc(p.label) + " " + p.done + " / " + p.total + "</span>" +
+      '<span id="probe-bar-pct" style="margin-left:auto">' + pct + "%</span></div>" +
+      '<div class="progress pulse mt-2" style="height:6px"><i id="probe-bar-fill" style="width:' + pct + '%"></i></div>' +
       "</div></div>";
   }
 
@@ -8004,9 +8161,16 @@ function bindLedger(root, all, rows){
    所以探测期间就地更新状态文本，只有开始/结束才重绘整页。 */
 async function probeOne(row){
   const res = await probeSource(row);
-  await updateSource(row, { health:res });
-  toast(sourceDisplayName(row.source) + "：" + HEALTH_TEXT[res.state] + " · " + res.detail,
-    res.state === "alive" ? "ok" : "warn", 4200);
+  /* 与 probeAll 同一原则：手动失效是判断不是观测，探测不能抹掉它。
+     旧实现单条探测会直接覆盖 —— 用户标了失效的广告站，手滑点一下探测就「复活」了。 */
+  const cur = normalizeHealth(row.source.health);
+  if(cur.state === "dead"){
+    toast("探测结果：" + HEALTH_TEXT[res.state] + "（已保留手动失效标记；要恢复请用「恢复」）", "warn", 5000);
+  }else{
+    await updateSource(row, { health:res });
+    toast(sourceDisplayName(row.source) + "：" + HEALTH_TEXT[res.state] + " · " + res.detail,
+      res.state === "alive" ? "ok" : "warn", 4200);
+  }
   rerenderLedger();
 }
 /* 批量探测：串行 + 每条之间让出主线程。
@@ -8018,6 +8182,20 @@ async function probeAll(){
   ledgerState.probing = true;
   ledgerState.progress = { done:0, total:all.length, label:"正在探测", keys:new Set() };
   rerenderLedger();
+  /* 就地更新进度条。批量探测几百条时每条最多等 9 秒超时，
+     整个循环可能持续几十分钟 —— 不刷新的话进度条全程冻结在 0%，
+     用户无从判断是卡死还是在跑。 */
+  const paintProgress = () => {
+    const p = ledgerState.progress;
+    if(!p) return;
+    const pct = p.total ? Math.round(p.done / p.total * 100) : 0;
+    const txt = document.getElementById("probe-bar-txt");
+    const pctEl = document.getElementById("probe-bar-pct");
+    const fillEl = document.getElementById("probe-bar-fill");
+    if(txt) txt.textContent = p.label + " " + p.done + " / " + p.total;
+    if(pctEl) pctEl.textContent = pct + "%";
+    if(fillEl) fillEl.style.width = pct + "%";
+  };
   let ok = 0, blocked = 0, dead = 0;
   for(const row of all){
     ledgerState.progress.keys.add(ledgerKey(row));
@@ -8028,12 +8206,13 @@ async function probeAll(){
     if(cur.state !== "dead") await updateSource(row, { health:res });
     if(res.state === "alive") ok++; else blocked++;
     ledgerState.progress.done++;
-    /* 每 5 条刷一次进度，避免上千行反复重排 */
+    paintProgress();
+    /* 每条之间让出主线程，进度条与页面保持可响应 */
     if(ledgerState.progress.done % 5 === 0) await new Promise(r => setTimeout(r, 0));
   }
   ledgerState.probing = false;
   ledgerState.progress = null;
-  toast("探测完成：" + ok + " 条可达，" + blocked + " 条不通", ok ? "ok" : "warn", 5000);
+  toast("探测完成：" + ok + " 条可达，" + blocked + " 条不通" + (dead ? "，" + dead + " 条保持手动失效" : ""), ok ? "ok" : "warn", 5000);
   rerenderLedger();
 }
 /* 线路编辑弹窗。字段比详情页多（备注、状态、优先级），
@@ -8126,6 +8305,17 @@ function openSourceEditor(row){
     const subs = Array.from(root.querySelectorAll('#ls-subs input:checked')).map(i => i.value);
     const isDead = root.querySelector("#ls-dead").checked;
     const enabled = root.querySelector("#ls-enabled").checked;
+    /* 失效标记两个方向都必须生效：勾上 → dead；
+       取消 → 从 dead 回到 unknown（旧实现原样保留 dead，取消是静默空操作）；
+       手动改动网址后旧的探测结论立刻作废：
+       拿「上一个地址的可达性」去描述新地址是在骗用户。 */
+    let health;
+    if(norm !== s.url) health = { state:"unknown", at:"", detail:"" };
+    else if(isDead) health = { state:"dead", at:nowIso(), detail:"用户手动标记失效" };
+    else{
+      const h = normalizeHealth(s.health);
+      health = h.state === "dead" ? { state:"unknown", at:"", detail:"" } : h;
+    }
     const ok = await updateSource(row, {
       url: norm,
       name: root.querySelector("#ls-name").value.trim(),
@@ -8137,12 +8327,7 @@ function openSourceEditor(row){
       note: root.querySelector("#ls-note").value.trim(),
       enabled: enabled,
       searchUrl: (root.querySelector("#ls-search") ? root.querySelector("#ls-search").value.trim() : s.searchUrl),
-      /* 手动改动网址后旧的探测结论立刻作废：
-         拿「上一个地址的可达性」去描述新地址是在骗用户。 */
-      health: (norm !== s.url) ? { state:"unknown", at:"", detail:"" }
-        : (isDead ? { state:"dead", at:nowIso(), detail:"用户手动标记失效" }
-                  : { state:normalizeHealth(s.health).state, at:normalizeHealth(s.health).at,
-                      detail:isDead ? "" : normalizeHealth(s.health).detail })
+      health: health
     });
     if(!ok){ msg.textContent = "保存失败，请重试"; return; }
     syncLegacyStreamFields(a);
@@ -9468,12 +9653,9 @@ const chartBuilders = {
     const items = state.statuses.map(s => ({ name: s.name, value: counts[s.id] || 0 }))
       .filter(i => i.value > 0);
     return pieOption(items);
-  },
-  year(){
-    const cats = allWatchYears();
-    const vals = cats.map(y => state.anime.filter(a => yearOf(a.airDate) === y).length);
-    return barOption(cats.map(String), vals, { label:false });
   }
+  /* 「year」builder 已删：从未被任何图表面板挂载（chartPanelHTML 无 year 调用），
+     且实现里把观看年份的横轴配了 airDate 的计数 —— 留着是颗哑雷。 */
 };
 function chartPanelHTML(kind, title, icon, fallbackHTML, height){
   return '<div class="panel"><div class="panel-head">' + ic(icon,16) + "<h3>" + esc(title) + "</h3></div>" +
@@ -9619,7 +9801,17 @@ registerPage({
 /* ============================================================
    24. 导出
    ============================================================ */
-function buildExportPayload(includeBg){
+async function buildExportPayload(includeBg){
+  /* assets（荣誉配图、背景图原件）也要进备份：
+     不带上的话换机后 custom_honors 里的 art 键全部落空。
+     IDB 模式下 all() 返回记录数组；LS 降级模式 assets 存的是键值对象，归一成数组。 */
+  let assets = [];
+  try{
+    const raw = await Repo.all("assets");
+    assets = Array.isArray(raw)
+      ? raw.filter(Boolean)
+      : Object.keys(raw || {}).map(k => ({ key:k, value:raw[k] }));
+  }catch(e){ assets = []; }
   const payload = {
     app: APP_KEY,
     schemaVersion: SCHEMA_VERSION,
@@ -9627,8 +9819,9 @@ function buildExportPayload(includeBg){
     generator: APP_NAME + " " + APP_VERSION,
     anime: state.anime.slice(),
     quotes: state.quotes.slice(),
-    statuses: state.statuses.filter(s => !s.isSystem || true).slice(),
+    statuses: state.statuses.slice(),
     series: state.series.slice(),
+    assets: assets,
     settings: Object.assign({}, settings)
   };
   if(includeBg && settings.bg_image){
@@ -9637,17 +9830,18 @@ function buildExportPayload(includeBg){
   return payload;
 }
 function exportJSON(includeBg){
-  const payload = buildExportPayload(includeBg);
-  const blob = new Blob([JSON.stringify(payload, null, 2)], { type:"application/json" });
-  const d = new Date();
-  const p = (n) => String(n).padStart(2,"0");
-  const name = "animerewind-backup-" + d.getFullYear() + p(d.getMonth()+1) + p(d.getDate()) + ".json";
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url; a.download = name;
-  document.body.appendChild(a); a.click(); a.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 4000);
-  toast("已导出 " + name, "ok");
+  buildExportPayload(includeBg).then(payload => {
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type:"application/json" });
+    const d = new Date();
+    const p = (n) => String(n).padStart(2,"0");
+    const name = "animerewind-backup-" + d.getFullYear() + p(d.getMonth()+1) + p(d.getDate()) + ".json";
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = name;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 4000);
+    toast("已导出 " + name, "ok");
+  }).catch(e => toast("导出失败：" + (e && e.message || e), "err"));
 }
 
 /* ============================================================
@@ -9696,7 +9890,9 @@ function rawToDraft(raw){
   an.studios = Array.isArray(raw.studios) ? raw.studios.map(String) : [];
   an.summary = String(raw.summary || "");
   an.communityScore = numOrNull(raw.communityScore);
-  an.statusId = st ? st.id : "st_want";
+  /* statusId 优先取记录里的真字段（raw.status 按名称兜底，兼容外部工具的备份）。
+     备份里指向自定义状态的 id 由 analyzeImport 的 statusIdMap 重映射后覆盖。 */
+  an.statusId = (raw.statusId && statusById(raw.statusId)) ? raw.statusId : (st ? st.id : "st_want");
   an.watchedEpisodes = Number(raw.watchedEpisodes) || 0;
   an.myScore = numOrNull(clampScore(raw.myScore));
   an.watchYear = numOrNull(raw.watchYear);
@@ -9711,6 +9907,20 @@ function rawToDraft(raw){
   an.seriesId = DEFAULT_SERIES_ID;
   an.source = raw.source || "manual";
   if(raw.sourceIds) an.sourceIds = raw.sourceIds;
+  /* 播放源必须随记录一起迁移 —— 导出端是整记录原样 dump，
+     这里丢了 sources/activeSourceId/旧片源字段，
+     「备份→恢复」就会静默清空整份线路台账（P0）。
+     normalizeSource 会补齐缺省字段并保留原 id。 */
+  an.sources = Array.isArray(raw.sources)
+    ? raw.sources.map((s, i) => normalizeSource(s, i, new Date().toISOString())).filter(Boolean)
+    : [];
+  /* 搜索型片源不能当当前线路（与 addSourceFromInput/setActiveSource 同一不变量） */
+  an.activeSourceId = (typeof raw.activeSourceId === "string" &&
+    an.sources.some(s => s.id === raw.activeSourceId && s.kind !== "search")) ? raw.activeSourceId : "";
+  /* 旧片源字段原样保留：boot 的 migrateSources 靠 streamUrl 迁移老备份 */
+  an.streamUrl = typeof raw.streamUrl === "string" ? raw.streamUrl : "";
+  an.streamEp = (raw.streamEp == null || raw.streamEp === "") ? null : Number(raw.streamEp) || null;
+  an.streamUrlAt = typeof raw.streamUrlAt === "string" ? raw.streamUrlAt : "";
   an.reviews = (Array.isArray(raw.reviews) ? raw.reviews : []).map(r => ({
     id: r.id || uid("rv"), date: validateDateInput(r.date) || todayISO(),
     round: Number(r.round) || 1, content: String(r.content || ""), createdAt: r.createdAt || new Date().toISOString()
@@ -9753,6 +9963,24 @@ function analyzeImport(payload){
     result.warnings.push("备份里的系列清单无法识别，这些作品会归入「默认系列」。");
   }
 
+  /* 状态也先于作品处理：作品 statusId 指向「备份那台机器」的状态 id，
+     自定义状态在本机要按名称复用或新建后重映射（与 seriesIdMap 同理），
+     否则整库状态会被静默归零成「想看」。 */
+  const rawStatuses = Array.isArray(payload.statuses) ? payload.statuses : [];
+  const statusIdMap = {};
+  rawStatuses.forEach(s => {
+    if(!s || !s.name) return;
+    const exist = state.statuses.find(x => normalize(x.name) === normalize(s.name));
+    if(exist){ if(s.id) statusIdMap[s.id] = exist.id; return; }
+    const rec = { id: uid("st"), name:String(s.name).slice(0,20), color: /^#[0-9a-fA-F]{6}$/.test(s.color||"") ? s.color : "#8AB4F8",
+      matchType: s.matchType === "progress" ? "progress" : "manual",
+      progressMin: s.matchType === "progress" ? clampNum(s.progressMin == null ? 0 : s.progressMin, 0, 100) : null,
+      progressMax: s.matchType === "progress" ? clampNum(s.progressMax == null ? 100 : s.progressMax, 0, 100) : null,
+      isSystem:false, schemaVersion:SCHEMA_VERSION };
+    result.statusAdd.push(rec);
+    if(s.id) statusIdMap[s.id] = rec.id;
+  });
+
   const rawAnime = Array.isArray(payload.anime) ? payload.anime : [];
   rawAnime.forEach((raw, i) => {
     const chk = importWarningsFor(raw, i+1);
@@ -9761,6 +9989,8 @@ function analyzeImport(payload){
     const draft = rawToDraft(raw);
     // 按名称重映射到本机 id；映射不到（老备份无系列清单）就落默认系列
     draft.seriesId = (raw.seriesId && seriesIdMap[raw.seriesId]) || DEFAULT_SERIES_ID;
+    // 状态 id 同理重映射：备份的自定义状态此刻已拿到本机新 id
+    if(raw.statusId && statusIdMap[raw.statusId]) draft.statusId = statusIdMap[raw.statusId];
     const d = detectDuplicate(draft);
     if(!d) result.add.push(draft);
     else if(d.level === "L1" || d.level === "L2") result.dup.push({ draft, level:d.level, match:d.match });
@@ -9774,21 +10004,13 @@ function analyzeImport(payload){
     if(exist) result.quoteSkip.push({ q, index:i+1, exist });
     else result.quoteAdd.push({ id: uid("q"), text:String(q.text).slice(0,200), sourceAnimeTitle:String(q.sourceAnimeTitle), character: q.character ? String(q.character).slice(0,50) : null, isBuiltin:false, favorite:!!q.favorite, schemaVersion:SCHEMA_VERSION, createdAt:new Date().toISOString() });
   });
-  const rawStatuses = Array.isArray(payload.statuses) ? payload.statuses : [];
-  rawStatuses.forEach(s => {
-    if(!s || !s.name) return;
-    const exist = state.statuses.find(x => normalize(x.name) === normalize(s.name));
-    if(exist) return;
-    result.statusAdd.push({ id: uid("st"), name:String(s.name).slice(0,20), color: /^#[0-9a-fA-F]{6}$/.test(s.color||"") ? s.color : "#8AB4F8",
-      matchType: s.matchType === "progress" ? "progress" : "manual",
-      progressMin: s.matchType === "progress" ? clampNum(s.progressMin == null ? 0 : s.progressMin, 0, 100) : null,
-      progressMax: s.matchType === "progress" ? clampNum(s.progressMax == null ? 100 : s.progressMax, 0, 100) : null,
-      isSystem:false, schemaVersion:SCHEMA_VERSION });
-  });
   if(payload.settings && typeof payload.settings === "object"){
     Object.keys(DEFAULT_SETTINGS).forEach(k => {
       if(payload.settings[k] !== undefined) result.settingPatch[k] = payload.settings[k];
     });
+    /* 自定义荣誉不在 DEFAULT_SETTINGS 里，但属于用户数据：备份里有就带回来
+       （配套的荣誉配图随 payload.assets 一起迁移，见 applyImport）。 */
+    if(Array.isArray(payload.settings.custom_honors)) result.settingPatch.custom_honors = payload.settings.custom_honors;
   }
   return result;
 }
@@ -9800,36 +10022,47 @@ async function applyImport(analysis, mode, opts){
      顺序反了会写出一批指向不存在系列的记录（boot 的孤儿清理会兜底，
      但那意味着用户刚导入完series 列表是空的，得重开页面才恢复）。 */
   for(const s of analysis.seriesAdd){ await saveSeries(s); }
+  /* 落库走静默路径（不 touch）：备份记录自带 createdAt/updatedAt，
+     saveAnime 会把它们刷成导入时刻，破坏「最近更新」排序和合并优先级。 */
   for(const draft of analysis.add){
-    await saveAnime(draft);
+    upsertLocal(state.anime, draft);
+    await persistAnimeQuiet(draft);
     added++;
   }
   for(const item of analysis.dup){
     if(mode === "skip") { skipped++; continue; }
     if(mode === "overwrite"){
       const over = Object.assign({}, item.draft, { id: item.match.id, createdAt: item.match.createdAt, reviews: mergeUniqueReviews(item.match.reviews, item.draft.reviews), sourceIds: Object.assign({}, item.match.sourceIds, item.draft.sourceIds) });
-      await saveAnime(over);
+      upsertLocal(state.anime, over);
+      await persistAnimeQuiet(over);
       added++;
     } else {
       const mergedRec = mergeRecords(item.match, item.draft, {});
-      await saveAnime(mergedRec);
+      upsertLocal(state.anime, mergedRec);
+      await persistAnimeQuiet(mergedRec);
       merged++;
     }
   }
   for(const item of analysis.suspect){
     const decision = decisions[item.draft.id] || (mode === "skip" ? "skip" : (mode === "overwrite" ? "new" : "skip"));
     if(decision === "merge"){
-      await saveAnime(mergeRecords(item.match, item.draft, {}));
+      const mergedRec = mergeRecords(item.match, item.draft, {});
+      upsertLocal(state.anime, mergedRec);
+      await persistAnimeQuiet(mergedRec);
       merged++;
     } else if(decision === "new"){
-      await saveAnime(item.draft);
+      upsertLocal(state.anime, item.draft);
+      await persistAnimeQuiet(item.draft);
       added++;
     } else skipped++;
   }
   for(const q of analysis.quoteAdd){ await saveQuote(q); }
-  analysis.quoteSkip.forEach(q => {
-    if(q.exist && q.q && q.q.favorite){ q.exist.favorite = true; }
-  });
+  for(const qs of analysis.quoteSkip){
+    if(qs.exist && qs.q && qs.q.favorite && !qs.exist.favorite){
+      qs.exist.favorite = true;
+      await saveQuote(qs.exist);
+    }
+  }
   for(const s of analysis.statusAdd){ await saveStatus(s); }
   // 背景图：备份里带图时，key 必须跟着图一起迁移。
   // 旧代码把图存进一个全新的 "bg_<时间戳>"，却让 settings.bg_image 继续指着
@@ -9860,6 +10093,14 @@ async function applyImport(analysis, mode, opts){
     if(opts.applySettings !== false && settings.bg_image){ settings.bg_image = ""; saveSettings(); }
     bgImageUrl = "";
   }
+  /* 荣誉配图等 assets 必须先于设置落库：
+     custom_honors 里的 art 键指向这些 asset，顺序反了图全部落空。 */
+  const rawAssets = Array.isArray(payloadAssets) ? payloadAssets : [];
+  for(const as of rawAssets){
+    if(!as || !as.key) continue;
+    try{ await Repo.setAsset(String(as.key), as.value); }
+    catch(e){ analysis.warnings.push("资源「" + String(as.key) + "」未能导入：" + (e.message === "QUOTA" ? "本机存储空间不足" : (e && e.message) || e)); }
+  }
   if(opts.applySettings !== false && Object.keys(analysis.settingPatch).length){
     settings = Object.assign({}, DEFAULT_SETTINGS, Object.assign({}, settings, analysis.settingPatch));
     if(analysis.settingPatch.card_fields) settings.card_fields = Object.assign({}, DEFAULT_SETTINGS.card_fields, analysis.settingPatch.card_fields);
@@ -9873,6 +10114,7 @@ async function applyImport(analysis, mode, opts){
   return { added, skipped, merged, quotes: analysis.quoteAdd.length, quoteSkip: analysis.quoteSkip.length, statuses: analysis.statusAdd.length, series: analysis.seriesAdd.length, warnings: analysis.warnings };
 }
 let payloadBg = null;
+let payloadAssets = null;
 function mergeUniqueReviews(a, b){
   const seen = new Set(), out = [];
   (a || []).concat(b || []).forEach(r => {
@@ -9940,7 +10182,18 @@ function openImportDialog(){
       });
       if(!cont){ hint.textContent = "已取消"; return; }
     }
+    /* schemaVersion 只警告不拦截：新版本备份导入旧版本应用时，
+       未知的字段/语义会被静默丢掉，用户至少该被告知这件事。 */
+    if(p.schemaVersion != null && Number(p.schemaVersion) > Number(SCHEMA_VERSION)){
+      const cont = await confirmDialog({
+        title:"备份版本较新",
+        html:"该备份的 schemaVersion 是 <b>" + esc(String(p.schemaVersion)) + "</b>，当前应用是 <b>" + SCHEMA_VERSION + "</b>。<br>新版本特有的字段可能无法导入，确定要尝试吗？",
+        okText:"仍要导入"
+      });
+      if(!cont){ hint.textContent = "已取消"; return; }
+    }
     payloadBg = (p.backgroundImage && p.backgroundImage.dataUrl) ? p.backgroundImage.dataUrl : null;
+    payloadAssets = Array.isArray(p.assets) ? p.assets : null;
     analysis = analyzeImport(p);
     mode = (Array.from(root.querySelectorAll("input[name=impmode]")).find(r => r.checked) || {}).value || "skip";
     renderPreview();
@@ -10643,8 +10896,12 @@ async function settingsAction(act, id, root){
         okText:"删除", danger:true
       });
       if(!ok) return;
-      state.anime.filter(a => a.statusId === id).forEach(a => { a.statusId = "st_want"; });
-      await Promise.all(state.anime.filter(a => a.statusId === "st_want").map(a => saveAnime(a)));
+      /* 只重写「刚被改回来的那批」。旧代码第二个 filter 写成
+         statusId === "st_want"，选中的是库里**全部**想看记录 ——
+         删一个零使用的状态也会把几百条记录的 updatedAt 全刷成现在。 */
+      const touched = state.anime.filter(a => a.statusId === id);
+      touched.forEach(a => { a.statusId = "st_want"; });
+      await Promise.all(touched.map(a => saveAnime(a)));
       await removeStatus(id);
       rerender();
       break;
@@ -10706,9 +10963,12 @@ function afterSettingsChange(soft){
   if(PAGES.some(p => p.settingKey)) buildNav();
   // 当前页正好是被关掉的那个模块时，弹回首页（否则内容还在，只是入口消失）
   if(!pageModuleEnabled(currentPage())){
+    /* 先取页名再切路由： currentPage() 在 state.route = "home" 之后
+       求值的话，toast 永远显示「首页」而不是被关掉的那个模块。 */
+    const closedPage = currentPage().name;
     state.route = "home";
     state.routeId = null;
-    toast("「" + currentPage().name + "」已在设置中关闭，已切回首页", "warn");
+    toast("「" + closedPage + "」已在设置中关闭，已切回首页", "warn");
   }
   if(settingsState.tab === "data") { /* 保持 */ }
   rerender();
@@ -10759,12 +11019,17 @@ async function boot(){
        走 Repo.put 而非 saveAnime：saveAnime 会 touch() 改 updatedAt，
        迁移是数据形态升级不是用户编辑，改了时间戳会让
        「最近添加」排序把所有老作品顶到最前面。
-       判据用「有旧字段却没有 sources」——只有真正需要迁移的才写，
-       免得每次启动都把全库重写一遍。 */
+       判据 = 「有旧字段 streamUrl，但迁移产物 sources 还没落出来」。
+       streamUrl 迁移后不清空（详情页还读它），所以不能只看它 ——
+       把 !a.sources.length 单独算进去更不行：所有本来就没填片源的
+       作品（手动添加不填源是常态）会被每次启动重写一遍。 */
     const needSourceMigrate = state.anime.filter(a =>
-      (a.streamUrl || !Array.isArray(a.sources) || !a.sources.length));
+      a.streamUrl && (!Array.isArray(a.sources) || !a.sources.length));
     if(needSourceMigrate.length){
-      await Promise.all(needSourceMigrate.map(a => Repo.put("anime", a).catch(() => {})));
+      await Promise.all(needSourceMigrate.map(a => {
+        migrateSources(a);
+        return Repo.put("anime", a).catch(() => {});
+      }));
       console.info("已把 " + needSourceMigrate.length + " 部作品的播放源迁移为多线路");
     }
   }catch(e){

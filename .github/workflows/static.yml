@@ -36,8 +36,15 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          # Upload entire repository
-          path: '.'
+          # 显式清单，不上传整个仓库：仓库里还有 tools/（30+ 测试脚本）、
+          # .workbuddy/（内部工作记录）与需求文档，整仓上传等于把它们公开到线上。
+          # 清单是明文字符串，文件改名时 GitHub 不报错，
+          # 用 node tools/verify-workflow.js 把「声明」与磁盘对齐。
+          path: |
+            anime-rewind.html
+            index.html
+            LICENSE
+            .nojekyll
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v5

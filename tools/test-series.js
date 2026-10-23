@@ -355,7 +355,7 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
 
   /* ---------- 12. 导入导出 ---------- */
   const exported = await ev(`
-    const p = buildExportPayload(false);
+    const p = await buildExportPayload(false);
     return JSON.stringify({
       hasSeries: Array.isArray(p.series),
       n: p.series.length,

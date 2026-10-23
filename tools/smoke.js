@@ -169,7 +169,7 @@ function setVal(el, v) {
   setVal(q("#rv-content"), "当年守在电视前");
   click(q("#rv-save"));
   await sleep(150);
-  check("重看次数 +1", () => win.eval("state.anime[0].rewatchCount") === 1 || win.eval("state.anime[0].rewatchCount"));
+  check("首次观看不计重看（重看次数 = round−1）", () => win.eval("state.anime[0].rewatchCount") === 0 || win.eval("state.anime[0].rewatchCount"));
   check("首次感想 round=1", () => win.eval("state.anime[0].reviews[0].round") === 1 || win.eval("JSON.stringify(state.anime[0].reviews)"));
   win.eval("promptReview(state.anime[0])");
   await sleep(80);
@@ -177,6 +177,7 @@ function setVal(el, v) {
   click(q("#rv-save"));
   await sleep(150);
   check("第二次重看感想 round=2", () => win.eval("state.anime[0].reviews.map(r=>r.round).sort().join()") === "1,2" || win.eval("state.anime[0].reviews.map(r=>r.round).join()"));
+  check("第二次观看后重看次数 = 1", () => win.eval("state.anime[0].rewatchCount") === 1 || win.eval("state.anime[0].rewatchCount"));
 
   // 5. 各页面渲染
   for (const route of ["library", "chronicle", "wheel", "theater", "quotes", "settings"]) {
@@ -348,7 +349,7 @@ function setVal(el, v) {
   win.eval("closeModal()");
 
   // 10. 导出载荷
-  const payload = win.eval("JSON.stringify(buildExportPayload(false))");
+  const payload = await win.eval("(async()=>JSON.stringify(await buildExportPayload(false)))()");
   const parsed = JSON.parse(payload);
   check("导出 app 标识正确", () => parsed.app === "anime-rewind" || parsed.app);
   check("导出含作品与语录", () => parsed.anime.length === 1 && parsed.quotes.length === 27 || parsed.anime.length + "/" + parsed.quotes.length);

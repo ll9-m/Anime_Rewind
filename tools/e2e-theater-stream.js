@@ -135,18 +135,23 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
   `);
   check("详情页渲染出播放器面板", JSON.parse(seeded).hasLauncher, seeded);
 
-  // 关键回归：保存番剧链接（此前被 resolveEmbed 拦截）
+  // 关键回归：保存番剧链接（此前被 resolveEmbed 拦截）。
+  // 现行交互是「添加线路」（旧版 data-st="save" 已改为 add）：
+  // 网址 + 集数一次添加，streamUrl/streamEp/streamUrlAt 由 addSourceFromInput 同步。
   const saved = await ev(`
     const input = document.querySelector("#st-url");
     input.value = "https://www.bilibili.com/bangumi/play/ep102167?spm_id_from=333.337.0.0";
+    const ep = document.querySelector("#st-ep");
+    ep.value = "3";
     input.dispatchEvent(new Event("input", { bubbles:true }));
     await new Promise(r=>setTimeout(r,450));
-    document.querySelector('[data-st="save"]').click();
+    document.querySelector('[data-st="add"]').click();
     await new Promise(r=>setTimeout(r,700));
     const a = state.anime.find(x=>x.id==="test-anime-1");
     const status = document.querySelector("#st-status, .stream-panel .note-box");
     return JSON.stringify({
-      streamUrl: a.streamUrl, hasAt: !!a.streamUrlAt,
+      streamUrl: a.streamUrl, hasAt: !!a.streamUrlAt, ep: a.streamEp,
+      srcEp: a.sources && a.sources[0] ? a.sources[0].ep : null,
       statusText: status ? status.innerText.replace(/\\s+/g," ").trim().slice(0,120) : null
     });
   `);
@@ -154,19 +159,10 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
   check("番剧网址能被保存（本次修复的核心）",
     s.streamUrl === "https://www.bilibili.com/bangumi/play/ep102167?spm_id_from=333.337.0.0", saved);
   check("保存后写入时间戳", s.hasAt);
-  check("保存后提示为成功态", /已保存/.test(s.statusText || ""), s.statusText);
-
-  // 集数也要能存
-  const withEp = await ev(`
-    const ep = document.querySelector("#st-ep");
-    ep.value = "3";
-    ep.dispatchEvent(new Event("input", { bubbles:true }));
-    document.querySelector('[data-st="save"]').click();
-    await new Promise(r=>setTimeout(r,600));
-    const a = state.anime.find(x=>x.id==="test-anime-1");
-    return JSON.stringify({ ep:a.streamEp });
-  `);
-  check("集数一并保存", JSON.parse(withEp).ep === 3, withEp);
+  /* 添加成功后界面会重渲回「当前线路：…」的常驻状态，
+     toast 另行弹出 —— 三种文案都算成功态。 */
+  check("保存后提示为成功态", /已添加线路|已存为|当前线路/.test(s.statusText || ""), s.statusText);
+  check("集数一并保存（新线路声明 + 旧字段同步）", s.ep === 3 && s.srcEp === 3, saved);
 
   // 播放：file:// 下 origin=null，番剧换算必然失败（浏览器同源策略）。
   // 正确行为不是挂一个空 iframe，而是跳官方页并说明原因。
@@ -203,23 +199,27 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
   check("刷新后片源仍在（已落盘）", (rl.url || "").indexOf("bangumi/play/ep102167") >= 0, reloaded);
   check("刷新后集数仍在", rl.ep === 3, reloaded);
 
-  // 重新进入详情页，输入框应回填已存网址
+  // 重新进入详情页：已存线路以胶囊列表呈现（输入框只承载「新线路」，不回填旧网址）
   const refill = await ev(`
     go("theater","test-anime-1");
     await new Promise(r=>setTimeout(r,500));
-    const i = document.querySelector("#st-url");
-    const e = document.querySelector("#st-ep");
-    return JSON.stringify({ url: i?i.value:null, ep: e?e.value:null });
+    const pill = document.querySelector('[data-st-line]');
+    const status = document.querySelector("#st-status, .stream-panel .note-box");
+    return JSON.stringify({
+      hasPill: !!pill,
+      pillName: pill ? pill.textContent.trim().slice(0,30) : null,
+      statusText: status ? status.innerText.replace(/\\s+/g," ").trim().slice(0,60) : null
+    });
   `);
   const rf = JSON.parse(refill);
-  check("详情页回填已存网址", (rf.url || "").indexOf("bangumi/play/ep102167") >= 0, refill);
-  check("详情页回填已存集数", rf.ep === "3", refill);
+  check("重进详情页后已存线路出现在线路列表", rf.hasPill, refill);
+  check("当前线路徽标指向它", /当前线路/.test(rf.statusText || ""), refill);
 
   // 仍要拒绝的输入不能被放行
   const bad = await ev(`
     const i = document.querySelector("#st-url");
     i.value = "javascript:alert(1)";
-    document.querySelector('[data-st="save"]').click();
+    document.querySelector('[data-st="add"]').click();
     await new Promise(r=>setTimeout(r,500));
     const a = state.anime.find(x=>x.id==="test-anime-1");
     return JSON.stringify({ url:a.streamUrl });

@@ -66,7 +66,7 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
   check("空格与 & 也被编码", b.enc.indexOf("a%20b%26c") >= 0, built);
   check("模板漏写 {kw} 时末尾追加（不让用户面对点了没反应）",
     b.noTpl === "https://so.example.com/s/%E5%90%AF%E8%88%AA", built);
-  check("关键词为空时不拼脏数据", b.emptyKw === "https://so.example.com/search?q={kw}", built);
+  check("关键词为空时不把字面量 {kw} 带进 URL", b.emptyKw === "https://so.example.com/search?q=", built);
 
   /* ---------- 4. 关键词与命名 ---------- */
   check("关键词取中文名，没有再退回原名",

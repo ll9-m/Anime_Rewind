@@ -1,14 +1,21 @@
-/* 校验 GitHub Pages 工作流声明的上传文件清单
+/* 校验 GitHub Pages 工作流声明的上线文件清单
  *
- * 为什么需要这个：workflow 里path: 块列的是明文字符串，
- * 没有任何机制会在文件被改名/删除时报错 —— 少了index.html
+ * 为什么需要这个：workflow 里的 cp 命令列的是明文字符串，
+ * 没有任何机制会在文件被改名/删除时报错 —— 少了 index.html
  * 就是线上直接 404，而报错发生在 GitHub 的部署日志里，离本地很远。
  * 这个脚本把「声明」与「磁盘实际」对齐，本地就能发现。
+ *
+ * 结构说明：upload-pages-artifact 的 path 参数只接受单个目录，
+ * 不接受文件清单（历史上曾直接把多行清单塞给 path，导致每次
+ * 部署都失败、线上停更在旧版）。所以现在的做法是先在
+ * 「Assemble site directory」步骤里把四个文件 cp 进 site/，
+ * 再 path: 'site' 整目录上传 —— 清单就是那行 cp 命令。
  *
  * 同时校验那份清单本身是否够用：
  *  - 必须含 index.html（Pages 站点根只解析这个文件名）
  *  - 必须含 anime-rewind.html（主应用）
- *  - 不能再含 path: '.'（会把 tools/ 与内部工作记录一起公开）
+ *  - 不能回到 path: '.'（会把 tools/ 与内部工作记录一起公开）
+ *  - path 必须是组装目录（site），不能再是文件清单或整仓
  */
 const fs = require("fs"), path = require("path");
 
@@ -19,30 +26,31 @@ const src = fs.readFileSync(YML, "utf8");
 const checks = [];
 const add = (name, ok, note) => checks.push({ name, ok: !!ok, note: note || "" });
 
-// ---- 取出 path: | 块 ----
-/* 块的结束判据是「出现缩进少于 path 的行」，不能只靠「行首缩进 + 非空」——
-   后面 steps 段的缩进更浅，但正则若写成匹配到文件尾就会把 - name: Deploy
-   之类也当成清单项。按行逐个扫，缩进一旦回退即停。 */
+// ---- 取出 cp 组装行 ----
+/* 组装行形如：cp anime-rewind.html index.html LICENSE .nojekyll site/
+   只认「Assemble site directory」步骤块里的第一行 cp，别处出现的 cp 不算。 */
 const lines = src.split("\n");
-const pathIdx = lines.findIndex(l => /^\s*path:\s*\|\s*$/.test(l));
-add("工作流使用 path: | 多行块", pathIdx >= 0,
-  pathIdx >= 0 ? "第 " + (pathIdx + 1) + " 行" : "未找到 path: | 块");
+const asmIdx = lines.findIndex(l => /name:\s*Assemble site directory/.test(l));
+add("存在「Assemble site directory」组装步骤", asmIdx >= 0,
+  asmIdx >= 0 ? "第 " + (asmIdx + 1) + " 行" : "未找到组装步骤");
 const files = [];
-if (pathIdx >= 0){
-  const indent = (lines[pathIdx].match(/^\s*/) || [""])[0].length;
-  for (let i = pathIdx + 1; i < lines.length; i++){
-    const l = lines[i];
-    if (!l.trim()) continue;
-    const ind = (l.match(/^\s*/) || [""])[0].length;
-    if (ind <= indent) break;          // 缩进回退 = 块结束
-    const t = l.trim();
-    if (t.startsWith("#")) continue;   // 注释行不是清单项
-    files.push(t);
+if (asmIdx >= 0){
+  const cpLine = lines.slice(asmIdx, asmIdx + 8).find(l => /^\s*cp\s+\S/.test(l));
+  if (cpLine){
+    const m = cpLine.trim().match(/^cp\s+(.+?)\s+site\/\s*$/);
+    if (m) m[1].split(/\s+/).filter(Boolean).forEach(f => files.push(f));
   }
 }
-add("声明了具体文件清单", files.length > 0, "共 " + files.length + " 个: " + files.join(", "));
+add("cp 清单解析出文件", files.length > 0, "共 " + files.length + " 个: " + files.join(", "));
 
-// ---- path: '.' 会公开整个仓库 ----
+// ---- path 参数必须是单个目录 ----
+/* upload-pages-artifact@v3 只接受目录。path: | 多行清单 / path: '.' 都是错的。 */
+const pathMatch = src.match(/upload-pages-artifact[\s\S]{0,200}?path:\s*['"]?([\w./-]+)['"]?\s*\n/);
+add("upload-pages-artifact 的 path 指向组装目录 site",
+  !!pathMatch && /^site\/?$/.test(pathMatch[1]),
+  pathMatch ? ("实际是 " + pathMatch[1]) : "未找到 path 参数");
+add("path 不再是多行文件清单（该写法会让部署静默失败）",
+  !/path:\s*\|/.test(src), /path:\s*\|/.test(src) ? "仍是多行清单" : "");
 add("不再用 path: '.' 上传整个仓库", !/path:\s*['"]?\.\s*['"]?\s*$/m.test(src),
   /path:\s*['"]?\.\s*['"]?\s*$/m.test(src) ? "仍为整仓上传" : "");
 

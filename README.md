@@ -50,21 +50,26 @@ python -m http.server 8080       # 然后访问 http://localhost:8080/anime-rewi
 
 ### 自动部署只上传四个文件
 
-workflow 的 `path:` 是显式清单，不是整个仓库：
+workflow 先把四个文件 `cp` 进 `site/` 目录，再把 `path: 'site'` 整目录交给
+`upload-pages-artifact` 上传：
 
 | 文件 | 作用 |
 |---|---|
-| `anime-rewind.html` | 主应用（1.1MB 单文件） |
+| `anime-rewind.html` | 主应用（1.2MB 单文件） |
 | `index.html` | 站点根入口，Pages 只解析这个文件名 |
 | `LICENSE` | CC BY-NC 4.0 全文，许可要求随作品分发 |
 | `.nojekyll` | 不走 Jekyll 构建 |
 
-原本写的是 `path: '.'`（整个仓库），那会把 `tools/` 下 30+ 个测试脚本、
-`.workbuddy/memory/` 的内部工作记录和需求文档一并公开到线上——站点目录等于一个可浏览的源码仓，
-而且每次改测试脚本都会触发一次无意义的重新部署（artifact 变了但页面没变）。
+为什么多一步组装目录：`upload-pages-artifact` 的 `path` 参数**只接受单个目录**。
+曾经直接把多行文件清单塞给 `path:` —— 那次起每次部署都静默失败，
+线上一直停更在旧版（本地全绿、线上看不到新功能，正是这么发生的）。
+清单本身也不能回到 `path: '.'`（整个仓库）：那会把 `tools/` 下 30+ 个测试脚本、
+`.workbuddy/memory/` 的内部工作记录和需求文档一并公开到线上——站点目录等于一个
+可浏览的源码仓，而且每次改测试脚本都会触发一次无意义的重新部署。
 
-> 校验这份清单：`node tools/verify-workflow.js`（16 项）。清单是明文字符串，
-> 文件被改名时 GitHub 不会报错，只会在部署日志里留下一个 404 —— 这个脚本把「声明」和磁盘实际对齐。
+> 校验这份清单：`node tools/verify-workflow.js`（18 项）。清单是那行明文 `cp` 命令，
+> 文件被改名时 GitHub 不会报错，只会在部署日志里留下一个 404 —— 这个脚本把「声明」
+> 和磁盘实际对齐，并守住「path 必须是组装目录」这条纪律。
 
 ### 关于 `index.html`
 

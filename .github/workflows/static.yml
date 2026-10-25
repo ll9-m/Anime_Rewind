@@ -33,18 +33,21 @@ jobs:
         uses: actions/checkout@v4
       - name: Setup Pages
         uses: actions/configure-pages@v5
+      # upload-pages-artifact 的 path 只接受单个目录，不接受文件清单
+      # （此前直接把多行清单塞给 path，每次部署都失败，线上停更在旧版）。
+      # 因此先把要上线的四个文件组装进 site/ 再整目录上传：
+      # 不上传整个仓库 —— tools/（30+ 测试脚本）、.workbuddy/（内部工作记录）
+      # 与需求文档不该被公开到线上。
+      # 清单是明文的 cp 命令，文件改名时 GitHub 不报错，
+      # 用 node tools/verify-workflow.js 把「声明」与磁盘对齐。
+      - name: Assemble site directory
+        run: |
+          mkdir -p site
+          cp anime-rewind.html index.html LICENSE .nojekyll site/
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          # 显式清单，不上传整个仓库：仓库里还有 tools/（30+ 测试脚本）、
-          # .workbuddy/（内部工作记录）与需求文档，整仓上传等于把它们公开到线上。
-          # 清单是明文字符串，文件改名时 GitHub 不报错，
-          # 用 node tools/verify-workflow.js 把「声明」与磁盘对齐。
-          path: |
-            anime-rewind.html
-            index.html
-            LICENSE
-            .nojekyll
+          path: 'site'
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v5

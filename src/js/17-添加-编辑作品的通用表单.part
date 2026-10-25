@@ -183,24 +183,6 @@ function numOrNull(v){
   const n = Number(v);
   return isFinite(n) ? n : null;
 }
-function validateDateInput(v){
-  const s = String(v || "").trim();
-  if(!s) return "";
-  /* 常见手写格式先归一成 YYYY-MM-DD（/ YYYY-MM）：2001-4-5、2001/4/5、
-     2001年4月5日 都是用户会输入的。以前这些一律判非法静默清空，
-     从外部数据带进来的短格式还会在编辑一次后被抹掉。 */
-  const m = /^(\d{4})[年./\-](\d{1,2})(?:[月./\-](\d{1,2})日?)?$/.exec(s);
-  if(m){
-    const mo = Number(m[2]), day = m[3] ? Number(m[3]) : null;
-    if(mo >= 1 && mo <= 12 && (day == null || (day >= 1 && day <= 31))){
-      const p = n => String(n).padStart(2,"0");
-      return m[1] + "-" + p(mo) + (day == null ? "" : "-" + p(day));
-    }
-    return "";
-  }
-  if(!parseDateOnly(s)) return "";
-  return s;
-}
 
 /* 标记手动修订（locked）与自动匹配状态 */
 function commitAnime(an, prev){

@@ -185,6 +185,24 @@ function settingsBodyHTML(){
       '<div class="small muted mt-2" data-proxy-report>' + (settings.data_proxy_url ? "尚未测试。" : "留空则不使用代理。") + "</div>");
     html += setRow("每源搜索结果条数", "1–25",
       '<input class="input" style="width:88px" type="number" min="1" max="25" step="1" data-set="search_limit" value="' + settings.search_limit + '">');
+    /* 自定义抓取数据源：内置源访问不稳时的出路 */
+    const csList = customSources();
+    html += '<div class="sec-title mt-4">' + ic("search",16) + "<span>自定义抓取数据源</span></div>";
+    html += '<div class="small muted mb-3">搜索「添加新番」时与内置源并行跑，结果合并展示。取值规则：选择器取文本，<code>img@src</code> 取属性；点搜索结果时可再按详情选择器抓一页补全字段。目标站不允许跨域时，请求会自动走上面配置的 CORS 代理。</div>';
+    if(!csList.length){
+      html += '<div class="small muted mb-2">还没有自定义源。</div>';
+    }else{
+      html += csList.map(cs =>
+        '<div class="row mb-2" style="align-items:center;gap:10px;flex-wrap:wrap">' +
+          '<b class="truncate" style="max-width:160px">' + esc(cs.name) + "</b>" +
+          '<span class="hint truncate" style="flex:1;min-width:0">' + esc(cs.searchUrl.slice(0, 56)) + (cs.searchUrl.length > 56 ? "…" : "") + "</span>" +
+          '<span class="hint">' + (cs.mode === "json" ? "JSON" : "HTML") + "</span>" +
+          '<label class="checkline"><input type="checkbox" data-cs-toggle="' + attr(cs.id) + '"' + (cs.enabled ? " checked" : "") + "><span>启用</span></label>" +
+          '<button class="btn btn-sm" type="button" data-act="cs-edit" data-id="' + attr(cs.id) + '">' + ic("edit",14) + "编辑</button>" +
+          '<button class="btn btn-sm btn-danger" type="button" data-act="cs-del" data-id="' + attr(cs.id) + '">' + ic("trash",14) + "删除</button>" +
+        "</div>").join("");
+    }
+    html += '<button class="btn btn-sm btn-primary" type="button" data-act="cs-add">' + ic("plus",14) + "添加自定义数据源</button>";
     html += "</div>";
   }
   if(t === "theater"){
@@ -392,6 +410,13 @@ function bindSettings(root){
       afterSettingsChange();
     });
   });
+  root.querySelectorAll("[data-cs-toggle]").forEach(n => n.addEventListener("change", () => {
+    const cs = customSources().find(x => x.id === n.dataset.csToggle);
+    if(!cs) return;
+    cs.enabled = n.checked;
+    saveCustomSources(customSources().slice());
+    toast(cs.name + (cs.enabled ? " 已启用" : " 已停用"), "ok");
+  }));
   root.querySelectorAll("[data-act]").forEach(b => b.addEventListener("click", () => settingsAction(b.dataset.act, b.dataset.id, root)));
   updateUsageText(root);
   // 背景可读性提示跟着遮罩滑块即时刷新。
@@ -420,6 +445,27 @@ async function updateUsageText(root){
 }
 async function settingsAction(act, id, root){
   switch(act){
+    case "cs-add": openCustomSourceForm(null); break;
+    case "cs-edit": {
+      const cs = customSources().find(x => x.id === id);
+      if(!cs){ toast("找不到该自定义源", "warn"); break; }
+      openCustomSourceForm(cs);
+      break;
+    }
+    case "cs-del": {
+      const cs = customSources().find(x => x.id === id);
+      if(!cs) break;
+      const ok = await confirmDialog({
+        title:"删除自定义数据源",
+        html:"确定删除「" + esc(cs.name) + "」吗？已入库的作品不受影响。",
+        okText:"删除", danger:true
+      });
+      if(!ok) break;
+      saveCustomSources(customSources().filter(x => x.id !== id));
+      toast("已删除「" + cs.name + "」", "ok");
+      rerender();
+      break;
+    }
     case "test-proxy": {
       const input = root.querySelector('input[data-set="data_proxy_url"]');
       const box = root.querySelector("[data-proxy-report]");
@@ -736,3 +782,137 @@ registerPage({
   render: renderSettings
 });
 
+/* ---- 自定义数据源表单：新建 / 编辑 / 试搜 ----
+   试搜是表单的核心反馈：选择器对没对上，只有真抓一次才算数 ——
+   与播放源「搜索模板试搜一下」同一设计。 */
+function openCustomSourceForm(existing){
+  const base = normalizeCustomSource(existing || {});
+  const editing = !!(existing && existing.id);
+  const root = openModal({
+    title: editing ? "编辑自定义数据源" : "添加自定义数据源",
+    wide: true,
+    body:
+      '<div class="led-form-grid">' +
+        '<div class="field"><label for="cs-name">名称（结果徽标显示）</label>' +
+          '<input class="input" id="cs-name" data-autofocus maxlength="20" value="' + attr(base.name) + '" placeholder="如：我的收藏站"></div>' +
+        '<div class="field"><label for="cs-url">搜索网址模板（<code>{kw}</code> 替换为片名）</label>' +
+          '<input class="input" id="cs-url" spellcheck="false" value="' + attr(base.searchUrl) + '" placeholder="https://example.com/search?q={kw}"></div>' +
+        '<div class="field"><label for="cs-mode">结果格式</label><select class="select" id="cs-mode">' +
+          '<option value="html"' + (base.mode === "html" ? " selected" : "") + ">HTML 网页（选择器抓取）</option>" +
+          '<option value="json"' + (base.mode === "json" ? " selected" : "") + ">JSON 接口</option></select></div>" +
+      "</div>" +
+      '<div id="cs-html-block">' +
+        '<div class="field mb-3"><label for="cs-item">结果条目选择器（每条结果一个的元素）</label>' +
+          '<input class="input" id="cs-item" spellcheck="false" value="' + attr(base.itemSelector) + '" placeholder=".result-item"></div>' +
+        '<div class="led-form-grid mb-3">' +
+          '<div class="field"><label for="cs-f-title">标题选择器（必填）</label>' +
+            '<input class="input" id="cs-f-title" spellcheck="false" value="' + attr(base.fields.title) + '" placeholder=".title"></div>' +
+          '<div class="field"><label for="cs-f-link">链接选择器（必填，@href）</label>' +
+            '<input class="input" id="cs-f-link" spellcheck="false" value="' + attr(base.fields.link) + '" placeholder="a.title@href"></div>' +
+          '<div class="field"><label for="cs-f-cover">封面选择器（可选，@src）</label>' +
+            '<input class="input" id="cs-f-cover" spellcheck="false" value="' + attr(base.fields.cover) + '" placeholder="img@src"></div>' +
+          '<div class="field"><label for="cs-f-meta">摘要行（可选，自动识别年份）</label>' +
+            '<input class="input" id="cs-f-meta" spellcheck="false" value="' + attr(base.fields.meta) + '" placeholder=".meta"></div>' +
+        "</div>" +
+      "</div>" +
+      '<div id="cs-json-block">' +
+        '<div class="field mb-3"><label for="cs-listpath">列表路径（数组所在，点分隔）</label>' +
+          '<input class="input" id="cs-listpath" spellcheck="false" value="' + attr(base.listPath) + '" placeholder="data.items"></div>' +
+        '<div class="led-form-grid mb-3">' +
+          '<div class="field"><label for="cs-j-title">标题字段路径（必填）</label>' +
+            '<input class="input" id="cs-j-title" spellcheck="false" value="' + attr(base.jfields.title) + '" placeholder="name"></div>' +
+          '<div class="field"><label for="cs-j-link">链接字段路径</label>' +
+            '<input class="input" id="cs-j-link" spellcheck="false" value="' + attr(base.jfields.link) + '" placeholder="url"></div>' +
+          '<div class="field"><label for="cs-j-cover">封面字段路径</label>' +
+            '<input class="input" id="cs-j-cover" spellcheck="false" value="' + attr(base.jfields.cover) + '" placeholder="cover"></div>' +
+        "</div>" +
+      "</div>" +
+      '<details class="mt-3"><summary class="hint">' + ic("film",14) + " 详情页补全（可选：点搜索结果时再抓一页填齐字段）</summary>" +
+        '<label class="checkline mt-2"><input type="checkbox" id="cs-detail"' + (base.detailEnabled ? " checked" : "") + "><span>启用详情抓取</span></label>" +
+        '<div class="led-form-grid mt-2">' +
+          '<div class="field"><label for="cs-d-titleCn">中文名选择器</label><input class="input" id="cs-d-titleCn" spellcheck="false" value="' + attr(base.detailSelectors.titleCn) + '" placeholder="h1.title"></div>' +
+          '<div class="field"><label for="cs-d-titleOriginal">原名选择器</label><input class="input" id="cs-d-titleOriginal" spellcheck="false" value="' + attr(base.detailSelectors.titleOriginal) + '"></div>' +
+          '<div class="field"><label for="cs-d-cover">封面选择器（@src）</label><input class="input" id="cs-d-cover" spellcheck="false" value="' + attr(base.detailSelectors.cover) + '" placeholder=".cover img@src"></div>' +
+          '<div class="field"><label for="cs-d-airDate">首播日期选择器</label><input class="input" id="cs-d-airDate" spellcheck="false" value="' + attr(base.detailSelectors.airDate) + '" placeholder=".date"></div>' +
+          '<div class="field"><label for="cs-d-totalEpisodes">总集数选择器</label><input class="input" id="cs-d-totalEpisodes" spellcheck="false" value="' + attr(base.detailSelectors.totalEpisodes) + '" placeholder=".eps"></div>' +
+          '<div class="field"><label for="cs-d-communityScore">评分选择器</label><input class="input" id="cs-d-communityScore" spellcheck="false" value="' + attr(base.detailSelectors.communityScore) + '" placeholder=".score"></div>' +
+          '<div class="field span-2"><label for="cs-d-summary">简介选择器</label><input class="input" id="cs-d-summary" spellcheck="false" value="' + attr(base.detailSelectors.summary) + '" placeholder=".desc"></div>' +
+          '<div class="field"><label for="cs-d-genres">类型选择器（多值）</label><input class="input" id="cs-d-genres" spellcheck="false" value="' + attr(base.detailSelectors.genres) + '" placeholder=".genres span"></div>' +
+          '<div class="field"><label for="cs-d-studios">制作公司选择器（多值）</label><input class="input" id="cs-d-studios" spellcheck="false" value="' + attr(base.detailSelectors.studios) + '"></div>' +
+        "</div>" +
+      "</details>" +
+      '<div class="field mt-3"><label for="cs-test-kw">试搜关键词</label>' +
+        '<div class="row" style="gap:8px"><input class="input" style="flex:1" id="cs-test-kw" value="犬夜叉">' +
+        '<button class="btn" type="button" id="cs-try">' + ic("search",14) + "试搜一下</button></div>" +
+        '<div class="small muted mt-2" id="cs-test-out">选择器对没对上，试一次才知道。试搜会真的请求目标站（被跨域拦截时自动走代理）。</div>' +
+      "</div>",
+    footer: (f2) => {
+      f2.innerHTML = '<span class="hint" id="cs-msg"></span><div class="grow"></div>' +
+        '<button class="btn" type="button" data-close="1">取消</button>' +
+        '<button class="btn btn-primary" type="button" id="cs-save">保存</button>';
+      f2.querySelector("#cs-save").addEventListener("click", onSave);
+    }
+  });
+  const q = sel => root.querySelector(sel);
+  const syncMode = () => {
+    const json = q("#cs-mode").value === "json";
+    q("#cs-html-block").hidden = json;
+    q("#cs-json-block").hidden = !json;
+  };
+  q("#cs-mode").addEventListener("change", syncMode);
+  syncMode();
+  /* 从表单读出配置（试搜与保存共用） */
+  function readForm(){
+    const fields = { title: q("#cs-f-title").value, link: q("#cs-f-link").value, cover: q("#cs-f-cover").value, meta: q("#cs-f-meta").value };
+    const jfields = { title: q("#cs-j-title").value, link: q("#cs-j-link").value, cover: q("#cs-j-cover").value, meta: "", genres: "" };
+    const detailSelectors = {};
+    ["titleCn","titleOriginal","cover","airDate","totalEpisodes","summary","genres","studios","communityScore"].forEach(k => {
+      const n = q("#cs-d-" + k);
+      detailSelectors[k] = n ? n.value : "";
+    });
+    return normalizeCustomSource({
+      id: base.id,
+      name: q("#cs-name").value,
+      enabled: true,
+      searchUrl: q("#cs-url").value,
+      mode: q("#cs-mode").value,
+      itemSelector: q("#cs-item").value,
+      fields,
+      listPath: q("#cs-listpath").value,
+      jfields,
+      detailEnabled: q("#cs-detail").checked,
+      detailSelectors
+    });
+  }
+  function fieldErr(sel, text){ q("#cs-msg").innerHTML = '<span class="err-text">' + esc(text) + "</span>"; const n = q(sel); if(n) n.focus(); }
+  q("#cs-try").addEventListener("click", async () => {
+    const cs = readForm();
+    const err = customSourceValidate(cs);
+    if(err){ fieldErr("#cs-name", err); return; }
+    const kw = q("#cs-test-kw").value.trim() || "犬夜叉";
+    const out = q("#cs-test-out");
+    out.textContent = "正在试搜「" + kw + "」…";
+    try{
+      const list = await searchCustomSource(cs, kw);
+      out.innerHTML = list.slice(0, 8).map(c =>
+        '<div class="row" style="gap:8px"><span class="truncate" style="flex:1">' + esc(c.titleCn) + "</span>" +
+        (c.coverUrl ? '<img src="' + attr(c.coverUrl) + '" style="width:22px;height:30px;object-fit:cover;border-radius:3px">' : "") +
+        (c.airDate ? '<span class="hint">' + esc(c.airDate) + "</span>" : "") + "</div>").join("") +
+        (list.length > 8 ? '<div class="hint">…共 ' + list.length + " 条</div>" : "");
+    }catch(e){
+      out.innerHTML = '<span class="err-text">' + esc(describeFetchError(e)) + "</span>";
+    }
+  });
+  async function onSave(){
+    const cs = readForm();
+    const err = customSourceValidate(cs);
+    if(err){ fieldErr("#cs-name", err); return; }
+    const list = customSources().slice();
+    const i = list.findIndex(x => x.id === cs.id);
+    if(i >= 0) list[i] = cs; else list.push(cs);
+    saveCustomSources(list);
+    closeModal();
+    toast((editing ? "已更新" : "已添加") + "数据源「" + cs.name + "」", "ok");
+    rerender();
+  }
+}

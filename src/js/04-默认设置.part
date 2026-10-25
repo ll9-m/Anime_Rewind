@@ -20,6 +20,9 @@ const DEFAULT_SETTINGS = {
   episode_minutes: 22,
   src_bangumi_enabled: true,
   src_anilist_enabled: true,
+  /* 自定义抓取数据源（设置 → 数据源 里增删改）：搜索模板 + 选择器/JSON 路径。
+     放进 DEFAULT_SETTINGS 使导入白名单自动带走它（换机不丢配置）。 */
+  custom_sources: [],
   data_proxy_url: "",
   search_limit: 10,
   stream_url: "",

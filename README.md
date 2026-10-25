@@ -30,6 +30,8 @@ python -m http.server 8080       # 然后访问 http://localhost:8080/anime-rewi
 
 **首次使用**：首页 → 右上「添加新番」→ 搜索（Bangumi / AniList）→ 加入片库。
 
+**数据源可以自己加**（设置 → 数据源）：内置 Bangumi / AniList 是默认源，访问不稳定时可以添加自定义抓取源——给一个搜索网址模板（`{kw}` 占位）加几个 CSS 选择器（或直接给 JSON 接口的字段路径），搜索时会与内置源并行跑、结果合并展示；点搜索结果可再按「详情选择器」抓一页补全封面/集数/简介等字段。目标站不允许跨域时，请求自动走同一 CORS 代理链路。配置好不好使，表单里点「试搜一下」立刻见分晓。
+
 ---
 
 ## 部署
@@ -346,6 +348,7 @@ node tools/test-bg.js                #  38 项 · 背景图渲染与对比度
 node tools/test-review-edit.js       #  23 项 · 感想编辑/删除：就地更新、确认框、rewatchCount 纪律
 node tools/test-ime-input.js         #  16 项 · 中文输入法防打断：合成期间不重渲、上屏后才触发
 node tools/test-site-search.js       #  31 项 · 搜索型片源：模板推断/拼接、选源排除、不可设为使用中
+node tools/test-custom-source.js     #  19 项 · 自定义抓取数据源：选择器/JSON 解析、代理壳、searchAll 聚合、详情补全、设置页管理
 
 # 网络实测（依赖真实外网，结果随时间变化）
 node tools/probe-cors-agents.js      # 15 个公共代理 × 3 轮，统计可用率

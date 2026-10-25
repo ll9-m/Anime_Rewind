@@ -285,8 +285,19 @@ async function searchAll(keyword, onPartial){
       if(onPartial) onPartial(out);
     }));
   }
+  customSources().filter(cs => cs.enabled).forEach(cs => {
+    tasks.push(searchCustomSource(cs, keyword).then(list => {
+      out.results = out.results.concat(list);
+      out.sources.push({ name: cs.name, count: list.length, ok:true });
+      if(onPartial) onPartial(out);
+    }).catch(e => {
+      out.errors.push({ name: cs.name, message: describeFetchError(e) });
+      out.sources.push({ name: cs.name, count:0, ok:false });
+      if(onPartial) onPartial(out);
+    }));
+  });
   if(!tasks.length){
-    out.errors.push({ name:"数据源", message:"两个数据源都已在设置中被关闭" });
+    out.errors.push({ name:"数据源", message:"所有数据源都已在设置中被关闭" });
     return out;
   }
   await Promise.allSettled(tasks);
@@ -316,6 +327,12 @@ async function enrichCandidate(c){
       // AniList 搜索结果已是完整字段，仅补充别名
       full.sourceIds = { anilist: String(c.sourceId) };
       full.aliases = (c.synonyms || []).slice(0,6);
+    } else {
+      const cs = customSources().find(x => x.id === c.source);
+      if(cs) return await enrichCustomCandidate(c, cs);
+      // 未知来源（旧备份等）：保守地带上原始 id，不做网络请求
+      full.sourceIds = {};
+      if(c.sourceId != null) full.sourceIds[c.source] = String(c.sourceId);
     }
   }catch(e){
     full._warn = "详情抓取失败，已用搜索结果的基础字段：" + describeFetchError(e);
@@ -327,3 +344,230 @@ async function enrichCandidate(c){
   return full;
 }
 
+
+/* ============================================================
+   8.4 自定义抓取数据源（设置 → 数据源 增删改）
+   ------------------------------------------------------------
+   需求原话：内置源国内访问不稳，「也可以用百度这些靠抓取信息填写」。
+   每个自定义源 = 搜索网址模板 + 取值规则：
+     · html 模式：DOMParser 解析结果页，itemSelector 圈出每条结果，
+       fields 里的选择器取字段 —— .t 取文本，img@src 取属性；
+     · json 模式：listPath 点路径指到数组，jfields 点路径取字段
+       （少数站点/代理直接给 JSON 时用）；
+   点搜索结果时可选再抓详情页补全（detailSelectors）。
+   目标站不允许跨域时走 fetchSourceText：直连失败自动落到
+   设置里配的 CORS 代理（与内置源同一代理链路）。
+   ============================================================ */
+function customSources(){ return Array.isArray(settings.custom_sources) ? settings.custom_sources : []; }
+function saveCustomSources(list){ settings.custom_sources = list; saveSettings(); }
+/* 归一化：截断、补默认值、保 id 稳定。表单保存与导入共用。 */
+function normalizeCustomSource(src){
+  const s = src || {};
+  const pickStr = v => String(v == null ? "" : v).trim().slice(0, 160);
+  const fields = {
+    title: pickStr(s.fields && s.fields.title),
+    link:  pickStr(s.fields && s.fields.link),
+    cover: pickStr(s.fields && s.fields.cover),
+    meta:  pickStr(s.fields && s.fields.meta)
+  };
+  const jfields = {
+    title: pickStr(s.jfields && s.jfields.title),
+    link:  pickStr(s.jfields && s.jfields.link),
+    cover: pickStr(s.jfields && s.jfields.cover),
+    meta:  pickStr(s.jfields && s.jfields.meta),
+    genres: pickStr(s.jfields && s.jfields.genres)
+  };
+  const ds = s.detailSelectors || {};
+  const detailSelectors = {};
+  ["titleCn","titleOriginal","cover","airDate","totalEpisodes","summary","genres","studios","communityScore"].forEach(k => { detailSelectors[k] = pickStr(ds[k]); });
+  return {
+    id: (typeof s.id === "string" && /^cs_[\w-]+$/.test(s.id)) ? s.id : uid("cs"),
+    name: String(s.name || "").trim().slice(0, 20),
+    enabled: s.enabled !== false,
+    searchUrl: pickStr(s.searchUrl),
+    mode: s.mode === "json" ? "json" : "html",
+    itemSelector: pickStr(s.itemSelector),
+    fields,
+    listPath: pickStr(s.listPath),
+    jfields,
+    detailEnabled: s.detailEnabled !== false,
+    detailSelectors
+  };
+}
+function customSourceValidate(cs){
+  if(!cs.name) return "名称必填";
+  if(!/^https?:\/\//i.test(cs.searchUrl.replace(/\{kw\}/g, "X"))) return "搜索网址必须以 http/https 开头";
+  if(cs.mode === "html"){
+    if(!cs.itemSelector) return "HTML 模式需要「结果条目选择器」";
+    if(!cs.fields.title || !cs.fields.link) return "HTML 模式需要「标题」与「链接」选择器";
+  }else{
+    if(!cs.listPath) return "JSON 模式需要「列表路径」";
+    if(!cs.jfields.title) return "JSON 模式需要「标题」字段路径";
+  }
+  return "";
+}
+/* 取值规则：选择器取文本；选择器@属性 取属性。
+   multi = 取所有匹配（类型/公司这类多值字段）。 */
+function extractBySpec(root, spec, multi){
+  const s = String(spec || "").trim();
+  if(!s || !root) return multi ? [] : "";
+  const m = /^([^@]+?)(?:@([\w-]+))?$/.exec(s);
+  if(!m) return multi ? [] : "";
+  const sel = m[1].trim(), attr = m[2];
+  if(multi){
+    return Array.from(root.querySelectorAll(sel))
+      .map(el => (attr ? (el.getAttribute(attr) || "") : (el.textContent || "")))
+      .map(x => x.trim()).filter(Boolean);
+  }
+  const el = root.querySelector(sel);
+  if(!el) return "";
+  return attr ? (el.getAttribute(attr) || "") : (el.textContent || "").trim();
+}
+function resolvePath(obj, path){
+  let cur = obj;
+  String(path || "").split(".").filter(Boolean).forEach(p => { if(cur != null) cur = cur[p]; });
+  return cur;
+}
+function jsonGet(obj, path){
+  const v = resolvePath(obj, path);
+  if(v == null) return "";
+  return typeof v === "object" ? JSON.stringify(v) : String(v);
+}
+/* 抓页面文本：直连 → 失败落到 CORS 代理（若配置）。
+   代理壳（{ contents: 原文 }）在此拆开 —— 文本场景没有 unwrapProxyPayload
+   能复用的 JSON 判据，用「能 parse 成对象且带 contents 字符串」的窄判据。 */
+async function fetchSourceText(url){
+  const tryOnce = async u => {
+    const res = await fetchWithTimeout(u, { headers: { "Accept": "text/html,application/json;q=0.9,*/*;q=0.8" } });
+    if(!res.ok){ const e = new Error("HTTP " + res.status); e.httpStatus = res.status; throw e; }
+    return await res.text();
+  };
+  try{
+    return await tryOnce(url);
+  }catch(err){
+    const p = proxyUrl(url);
+    if(!p) throw err;
+    const e2 = new Error("代理请求也失败了");
+    try{
+      let text = await tryOnce(p);
+      if(text && text.charAt(0) === "{"){
+        try{
+          const j = JSON.parse(text);
+          if(j && typeof j.contents === "string") text = j.contents;
+        }catch(e3){}
+      }
+      return text;
+    }catch(err2){
+      if(err2 && err2.httpStatus) e2.message = "HTTP " + err2.httpStatus;
+      else if(err2 && /Failed to fetch|NetworkError/i.test(err2.message || "")) e2.message = "代理连不上（可在设置里测试代理）";
+      throw e2;
+    }
+  }
+}
+function customCandidateFrom(cs, getValue, baseUrl){
+  const title = String(getValue(cs.mode === "json" ? cs.jfields.title : cs.fields.title) || "").trim();
+  let link = String(getValue(cs.mode === "json" ? cs.jfields.link : cs.fields.link) || "").trim();
+  if(!title) return null;
+  if(link && !/^https?:\/\//i.test(link) && baseUrl){
+    try{ link = new URL(link, baseUrl).href; }catch(e){ link = ""; }
+  }
+  const cover = String(getValue(cs.mode === "json" ? cs.jfields.cover : cs.fields.cover) || "").trim();
+  let coverUrl = cover;
+  if(coverUrl && !/^data:/i.test(coverUrl) && baseUrl){
+    try{ coverUrl = new URL(coverUrl, baseUrl).href; }catch(e){}
+  }
+  const meta = String(getValue(cs.mode === "json" ? cs.jfields.meta : cs.fields.meta) || "").trim();
+  const ym = meta.match(/(19\d{2}|20\d{2})/);
+  return {
+    id: link || title,
+    sourceId: link || title,
+    sourceLabel: cs.name,
+    source: cs.id,
+    titleCn: title,
+    titleOriginal: "",
+    coverUrl: coverUrl,
+    airDate: ym ? ym[1] : "",
+    totalEpisodes: null,
+    summary: "",
+    genres: [],
+    studios: []
+  };
+}
+async function searchCustomSource(cs, keyword){
+  const url = buildSearchUrl(cs.searchUrl, keyword);
+  if(!url) throw new Error("搜索网址模板无效");
+  const text = await fetchSourceText(url);
+  let items;
+  if(cs.mode === "json"){
+    let data;
+    try{ data = JSON.parse(text); }
+    catch(e){ throw new Error("返回内容不是 JSON（该地址可能是网页而非接口，或代理返回了错误页）"); }
+    data = unwrapProxyPayload(data);
+    const arr = resolvePath(data, cs.listPath);
+    if(!Array.isArray(arr)) throw new Error("列表路径「" + cs.listPath + "」没有指到数组");
+    items = arr.map(it => ({ json:true, it, el:null }));
+  }else{
+    const doc = new DOMParser().parseFromString(text, "text/html");
+    const els = Array.from(doc.querySelectorAll(cs.itemSelector));
+    if(!els.length) throw new Error("条目选择器「" + cs.itemSelector + "」没有匹配到任何元素");
+    items = els.map(el => ({ json:false, it:null, el }));
+  }
+  const out = [], seen = new Set();
+  for(const item of items){
+    const getValue = spec => item.json ? jsonGet(item.it, spec) : extractBySpec(item.el, spec, false);
+    const c = customCandidateFrom(cs, getValue, url);
+    if(!c) continue;
+    const key = c.sourceId;
+    if(seen.has(key)) continue;
+    seen.add(key);
+    out.push(c);
+    if(out.length >= clampNum(settings.search_limit,1,25)) break;
+  }
+  if(!out.length) throw new Error("解析到 0 条结果（选择器可能没对上字段）");
+  return out;
+}
+/* 详情页补全：点搜索结果后，按 detailSelectors 再抓一页把字段填齐。
+   只覆盖抓到的非空字段，搜索结果里已有的信息不会被空值清掉。 */
+async function enrichCustomCandidate(c, cs){
+  const full = Object.assign({}, c);
+  full.sourceIds = {};
+  full.sourceIds[cs.id] = String(c.sourceId);
+  if(!cs.detailEnabled) return full;
+  const ds = cs.detailSelectors || {};
+  const hasDetail = Object.keys(ds).some(k => ds[k]);
+  if(!hasDetail || !c.sourceId || !/^https?:/i.test(c.sourceId)) return full;
+  try{
+    const text = await fetchSourceText(c.sourceId);
+    const doc = new DOMParser().parseFromString(text, "text/html");
+    const one = spec => cleanText(extractBySpec(doc, spec, false));
+    const titleCn = one(ds.titleCn);
+    if(titleCn) full.titleCn = titleCn;
+    const titleOriginal = one(ds.titleOriginal);
+    if(titleOriginal) full.titleOriginal = titleOriginal;
+    const cover = String(extractBySpec(doc, ds.cover, false)).trim();
+    if(cover){
+      try{ full.coverUrl = new URL(cover, c.sourceId).href; }catch(e){}
+    }
+    const airDate = one(ds.airDate);
+    if(airDate) full.airDate = validateDateInput(airDate) || airDate;
+    const epsText = one(ds.totalEpisodes);
+    if(epsText){
+      const nm = epsText.match(/\d+/);
+      if(nm) full.totalEpisodes = Number(nm[0]);
+    }
+    const summary = one(ds.summary);
+    if(summary) full.summary = summary;
+    const genres = extractBySpec(doc, ds.genres, true);
+    if(genres.length) full.genres = genres.slice(0, 16);
+    const studios = extractBySpec(doc, ds.studios, true);
+    if(studios.length) full.studios = studios.slice(0, 6);
+    const scoreText = one(ds.communityScore);
+    if(scoreText){
+      const nm = scoreText.match(/\d+(\.\d+)?/);
+      if(nm){ const v = Number(nm[0]); if(v > 0 && v <= 10) full.communityScore = v; }
+    }
+  }catch(e){
+    full._warn = "详情抓取失败，已用搜索结果的基础字段：" + describeFetchError(e);
+  }
+  return full;
+}

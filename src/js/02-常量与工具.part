@@ -211,3 +211,34 @@ function normalizeStreamURL(u){
     return u2.href;
   }catch(e){ return ""; }
 }
+
+/* 搜索网址模板拼接（添加新番的自定义数据源与播放源的「搜索型片源」共用） */
+function encKW(kw){ return encodeURIComponent(String(kw || "").trim()); }
+
+function buildSearchUrl(tpl, kw){
+  const t = String(tpl || "").trim();
+  if(!t) return "";
+  const k = String(kw || "").trim();
+  /* 空关键词也不能把字面量 {kw} 带出去 —— 那会打开一个必然无效的地址 */
+  if(!k) return t.replace(/\{kw\}/g, "");
+  return t.indexOf("{kw}") >= 0 ? t.replace(/\{kw\}/g, encKW(k)) : t + encKW(k);
+}
+
+function validateDateInput(v){
+  const s = String(v || "").trim();
+  if(!s) return "";
+  /* 常见手写格式先归一成 YYYY-MM-DD（/ YYYY-MM）：2001-4-5、2001/4/5、
+     2001年4月5日 都是用户会输入的。以前这些一律判非法静默清空，
+     从外部数据带进来的短格式还会在编辑一次后被抹掉。 */
+  const m = /^(\d{4})[年./\-](\d{1,2})(?:[月./\-](\d{1,2})日?)?$/.exec(s);
+  if(m){
+    const mo = Number(m[2]), day = m[3] ? Number(m[3]) : null;
+    if(mo >= 1 && mo <= 12 && (day == null || (day >= 1 && day <= 31))){
+      const p = n => String(n).padStart(2,"0");
+      return m[1] + "-" + p(mo) + (day == null ? "" : "-" + p(day));
+    }
+    return "";
+  }
+  if(!parseDateOnly(s)) return "";
+  return s;
+}

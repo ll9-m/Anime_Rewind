@@ -44,7 +44,6 @@ const SEARCH_RULES = [
     test:h => /(^|\.)(dmhy\.org|share\.dmhy\.org)$/i.test(h),
     tpl:"https://share.dmhy.org/topics/list?keyword={kw}" }
 ];
-function encKW(kw){ return encodeURIComponent(String(kw || "").trim()); }
 /* 站点首页判定：只看「是不是一个站的根地址」。
    判定窄一点没关系 —— 判成播放页顶多是存成普通线路，
    判成首页才会去问搜索模板，误判的代价不对称。 */
@@ -74,14 +73,6 @@ function inferSearchUrl(home){ const c = searchCandidates(home); return c.length
 /* 把模板拼成最终 URL。模板里没有 {kw} 时按「末尾追加关键词」兜底，
    而不是返回空 —— 用户手填模板时漏写占位符是很常见的，
    静默失败会让「点了没反应」变成最坏的反馈。 */
-function buildSearchUrl(tpl, kw){
-  const t = String(tpl || "").trim();
-  if(!t) return "";
-  const k = String(kw || "").trim();
-  /* 空关键词也不能把字面量 {kw} 带出去 —— 那会打开一个必然无效的地址 */
-  if(!k) return t.replace(/\{kw\}/g, "");
-  return t.indexOf("{kw}") >= 0 ? t.replace(/\{kw\}/g, encKW(k)) : t + encKW(k);
-}
 /* 搜索用哪个片名：中文名优先，没有再退回原名。
    搜索站绝大多数按中文名收录，原名搜不到是常态。 */
 function searchKeywordFor(a){

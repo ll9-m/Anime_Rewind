@@ -6,7 +6,7 @@
 单文件交付：`anime-rewind.html`（约 1.1 MB，含全部 CSS/JS 与内联配图）。
 原生 HTML/CSS/JS，**零构建、零依赖、零后端** —— 双击就能用，也可以直接丢进任意静态托管。
 
-在线体验：<https://anime-rewind.app.workbuddy.host/>
+在线体验（GitHub Pages 正式部署，随 master 自动更新）：<https://ll9-m.github.io/Anime_Rewind/>
 
 > 📄 [`番忆-需求文档.md`](番忆-需求文档.md) —— 完整需求与验收依据（455 行）。
 > 想知道「为什么这么做」而不是「做了什么」，看这份。
@@ -43,7 +43,7 @@ python -m http.server 8080       # 然后访问 http://localhost:8080/anime-rewi
 | **GitHub Pages（自动）** | 什么都不用做 —— 推 `master` 即由 `.github/workflows/static.yml` 自动部署 | 需在 Settings → Pages 把 Source 选为 **GitHub Actions** |
 | **GitHub Pages（手动）** | Settings → Pages → Source 选 `master` / 根目录 → 保存 | 不走 Actions 时用这个 |
 | **Netlify / Vercel / Cloudflare Pages** | 拖整个目录上传，或连仓库选 `master` 分支 | 无需构建命令，输出目录就是仓库根 |
-| **在线体验** | <https://anime-rewind.app.workbuddy.host/> | 已托管的实例，可直接访问 |
+| **在线体验** | <https://ll9-m.github.io/Anime_Rewind/> | GitHub Pages 正式部署，随 master 自动更新 |
 
 > **Source 一定要选 GitHub Actions**：官方模板生成的 workflow 是走 Actions 部署的，
 > 若Source 选了 `master` 分支，两套机制会互相覆盖，行为不稳定。

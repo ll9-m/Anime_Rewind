@@ -220,6 +220,52 @@ const DETAIL_HTML = `<!doctype html><html><body>
   `);
   check("导入：custom_sources 进设置白名单", JSON.parse(r8).carried === true, r8);
 
+  /* ---------- 9. 预置模板（萌娘百科 / 必应中国，2026-10 实测结构） ---------- */
+  /* fetch 桩在运行时用 JSON.stringify 拼接：模板字符串会提前消化 \n 转义，
+     把多行 fixture 拆断成非法字符串字面量。 */
+  const stubFetchWith = async (fx) => {
+    const code = "(async()=>{ window.fetch = async () => ({ ok:true, status:200, headers:new Headers(), text: async () => " + JSON.stringify(fx) + " }); })()";
+    await win.eval(code);
+  };
+  const MOE_FIXTURE = "<ul class=\"mw-search-results\">\n  <li class=\"mw-search-result mw-search-result-ns-0\">\n    <div class=\"mw-search-result-heading\"><a href=\"/%E7%8A%AC%E5%A4%9C%E5%8F%89\" title=\"犬夜叉\"><span class=\"searchmatch\">犬夜叉</span></a></div>\n    <div class=\"searchresult\">从2001年至2004年，每年都推出《犬夜叉》剧场版。</div>\n  </li>\n  <li class=\"mw-search-result mw-search-result-ns-0\">\n    <div class=\"mw-search-result-heading\"><a href=\"/%E6%A1%94%E6%A2%97\" title=\"桔梗\">桔梗</a></div>\n    <div class=\"searchresult\">《犬夜叉》中的角色。</div>\n  </li>\n</ul>";
+  const BING_FIXTURE = "<ol id=\"b_results\"><li class=\"b_algo\">\n  <h2><a href=\"https://baike.baidu.com/item/%E7%8A%AC%E5%A4%9C%E5%8F%89/26878\">犬夜叉（1996年高桥留美子创作的少年漫画）</a></h2>\n  <div class=\"b_caption\"><p class=\"b_lineclamp2\">《犬夜叉》是高桥留美子创作的漫画作品。</p></div>\n</li><li class=\"b_algo\">\n  <h2><a href=\"https://www.bilibili.com/bangumi/play/ep289986\">犬夜叉 - 哔哩哔哩番剧</a></h2>\n  <div class=\"b_caption\"><p>2000年开播的TV动画。</p></div>\n</li></ol>";
+  const r9 = await ev(`
+    const ok = PRESET_CUSTOM_SOURCES.map(p => customSourceValidate(normalizeCustomSource(p)));
+    return JSON.stringify({ n: PRESET_CUSTOM_SOURCES.length, allValid: ok.every(x => x === "") });
+  `);
+  const c9 = JSON.parse(r9);
+  check("预置模板：两条且全部通过配置校验", c9.n === 2 && c9.allValid === true, r9);
+
+  await stubFetchWith(MOE_FIXTURE);
+  const r9a = await ev(`
+    const cs = normalizeCustomSource(PRESET_CUSTOM_SOURCES.find(p => p.name.indexOf("萌娘百科") >= 0));
+    const list = await searchCustomSource(cs, "犬夜叉");
+    return JSON.stringify({ n: list.length, t: list[0] && list[0].titleCn, link: list[0] && list[0].sourceId });
+  `);
+  const c9a = JSON.parse(r9a);
+  check("萌娘百科模板：解析实测 mw-search-result 结构、相对链接补全",
+    c9a.n === 2 && c9a.t === "犬夜叉" && c9a.link === "https://zh.moegirl.org.cn/%E7%8A%AC%E5%A4%9C%E5%8F%89", r9a);
+
+  await stubFetchWith(BING_FIXTURE);
+  const r9b = await ev(`
+    const cs = normalizeCustomSource(PRESET_CUSTOM_SOURCES.find(p => p.name.indexOf("必应") >= 0));
+    const list = await searchCustomSource(cs, "犬夜叉");
+    return JSON.stringify({ n: list.length, t: list[0] && list[0].titleCn, link: list[0] && list[0].sourceId });
+  `);
+  const c9b = JSON.parse(r9b);
+  check("必应中国模板：解析实测 b_algo 结构、保留真实链接",
+    c9b.n === 2 && c9b.t.indexOf("犬夜叉") === 0 && c9b.link.indexOf("https://baike.baidu.com/") === 0, r9b);
+
+  await ev(`openPresetSourcePicker()`);
+  await sleep(150);
+  const presetRows = doc.querySelectorAll("[data-preset]");
+  check("模板弹窗：列出两条模板", presetRows.length === 2);
+  presetRows[1].click();
+  await sleep(150);
+  check("点模板后打开预填表单（萌百）",
+    (doc.querySelector("#cs-name") || {}).value === "萌娘百科（ACG 百科）" &&
+    (doc.querySelector("#cs-item") || {}).value === ".mw-search-result");
+  win.eval("closeModal()");
   /* 清理 */
   await ev('saveCustomSources([]); settings.src_bangumi_enabled = true; settings.src_anilist_enabled = true; saveSettings();');
 

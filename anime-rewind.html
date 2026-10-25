@@ -4762,6 +4762,42 @@ async function enrichCustomCandidate(c, cs){
   }
   return full;
 }
+
+
+/* ---- 预置模板（2026-10 实测定稿）----
+   「国内的百度这些」的实测结论，如实记录：
+   · 百度搜索/百度百科：裸请求分别 302 跳验证页 / 403 拦截，
+     浏览器直连又被 CORS 拦 —— 两头堵死，无法做成可靠模板，不做。
+   · 必应中国（cn.bing.com）：裸请求 200 + 服务端渲染完整结果，
+     b_algo 结构多年稳定，搜片名常直出百科/B 站真实链接。无 ACAO → 需代理。
+   · 萌娘百科（zh.moegirl.org.cn）：MediaWiki 标准搜索结构（实测 mw-search-result），
+     ACG 资料最全；api.php 匿名调用被封但 HTML 搜索页可用。无 ACAO → 需代理。
+   模板只是预填数据的快捷方式：用户点开仍可改、可试搜、可删。 */
+const PRESET_CUSTOM_SOURCES = [
+  {
+    name: "必应中国（网页搜索）",
+    searchUrl: "https://cn.bing.com/search?q={kw}&count=20",
+    mode: "html",
+    itemSelector: "#b_results li.b_algo",
+    fields: { title: "h2 a", link: "h2 a@href", cover: "", meta: ".b_caption p" },
+    detailEnabled: false,
+    _presetNote: "国内可访问的通用网页搜索，搜片名常直出百科 / B 站番剧页的真实链接（不是跳转链）。实测 2026-10 结构稳定。需在上方配置 CORS 代理后使用。"
+  },
+  {
+    name: "萌娘百科（ACG 百科）",
+    searchUrl: "https://zh.moegirl.org.cn/index.php?search={kw}&fulltext=1",
+    mode: "html",
+    itemSelector: ".mw-search-result",
+    fields: { title: ".mw-search-result-heading a", link: ".mw-search-result-heading a@href", cover: "", meta: ".searchresult" },
+    detailEnabled: true,
+    detailSelectors: {
+      titleCn: "#firstHeading",
+      summary: ".mw-parser-output p",
+      cover: ".infobox img@src"
+    },
+    _presetNote: "ACG 资料最全的中文百科，搜索与词条页都是 MediaWiki 标准结构（实测 2026-10）。点搜索结果可再抓词条页补全中文名/简介/封面。需 CORS 代理。"
+  }
+];
 /* ============================================================
    9. 去重检测（§7 三级判重）
    ============================================================ */
@@ -10903,6 +10939,7 @@ function settingsBodyHTML(){
         "</div>").join("");
     }
     html += '<button class="btn btn-sm btn-primary" type="button" data-act="cs-add">' + ic("plus",14) + "添加自定义数据源</button>";
+    html += '<button class="btn btn-sm" type="button" data-act="cs-preset" style="margin-left:8px">' + ic("grid",14) + "从模板添加</button>";
     html += "</div>";
   }
   if(t === "theater"){
@@ -11146,6 +11183,7 @@ async function updateUsageText(root){
 async function settingsAction(act, id, root){
   switch(act){
     case "cs-add": openCustomSourceForm(null); break;
+    case "cs-preset": openPresetSourcePicker(); break;
     case "cs-edit": {
       const cs = customSources().find(x => x.id === id);
       if(!cs){ toast("找不到该自定义源", "warn"); break; }
@@ -11482,6 +11520,34 @@ registerPage({
   render: renderSettings
 });
 
+/* ---- 模板选择弹窗：点一条 → 打开预填好的表单，仍可改可试搜 ---- */
+function openPresetSourcePicker(){
+  openModal({
+    title: "从模板添加数据源",
+    narrow: true,
+    body: PRESET_CUSTOM_SOURCES.map((p, i) =>
+      '<div class="pending-row" style="cursor:pointer" data-preset="' + i + '" role="button" tabindex="0">' +
+        ic("search",16) +
+        '<div style="min-width:0"><b>' + esc(p.name) + "</b>" +
+        '<div class="small muted" style="line-height:1.6">' + esc(p._presetNote) + "</div></div>" +
+        '<span class="hint" style="margin-left:auto;white-space:nowrap">选用 →</span>' +
+      "</div>").join("") +
+      '<div class="small muted mt-3">没有百度：实测百度搜索与百科对程序化请求直接拦截（302 验证页 / 403），做成模板只会永远失败。必应是国内的同位替代。</div>',
+    footer: (f) => {
+      f.innerHTML = '<div class="grow"></div><button class="btn" type="button" data-close="1">取消</button>';
+    }
+  });
+  document.querySelectorAll("[data-preset]").forEach(n => {
+    const open = () => {
+      const p = PRESET_CUSTOM_SOURCES[Number(n.dataset.preset)];
+      if(!p) return;
+      closeModal();
+      openCustomSourceForm(normalizeCustomSource(p));
+    };
+    n.addEventListener("click", open);
+    n.addEventListener("keydown", e => { if(e.key === "Enter" || e.key === " "){ e.preventDefault(); open(); } });
+  });
+}
 /* ---- 自定义数据源表单：新建 / 编辑 / 试搜 ----
    试搜是表单的核心反馈：选择器对没对上，只有真抓一次才算数 ——
    与播放源「搜索模板试搜一下」同一设计。 */

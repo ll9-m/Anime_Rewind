@@ -203,6 +203,7 @@ function settingsBodyHTML(){
         "</div>").join("");
     }
     html += '<button class="btn btn-sm btn-primary" type="button" data-act="cs-add">' + ic("plus",14) + "添加自定义数据源</button>";
+    html += '<button class="btn btn-sm" type="button" data-act="cs-preset" style="margin-left:8px">' + ic("grid",14) + "从模板添加</button>";
     html += "</div>";
   }
   if(t === "theater"){
@@ -446,6 +447,7 @@ async function updateUsageText(root){
 async function settingsAction(act, id, root){
   switch(act){
     case "cs-add": openCustomSourceForm(null); break;
+    case "cs-preset": openPresetSourcePicker(); break;
     case "cs-edit": {
       const cs = customSources().find(x => x.id === id);
       if(!cs){ toast("找不到该自定义源", "warn"); break; }
@@ -782,6 +784,34 @@ registerPage({
   render: renderSettings
 });
 
+/* ---- 模板选择弹窗：点一条 → 打开预填好的表单，仍可改可试搜 ---- */
+function openPresetSourcePicker(){
+  openModal({
+    title: "从模板添加数据源",
+    narrow: true,
+    body: PRESET_CUSTOM_SOURCES.map((p, i) =>
+      '<div class="pending-row" style="cursor:pointer" data-preset="' + i + '" role="button" tabindex="0">' +
+        ic("search",16) +
+        '<div style="min-width:0"><b>' + esc(p.name) + "</b>" +
+        '<div class="small muted" style="line-height:1.6">' + esc(p._presetNote) + "</div></div>" +
+        '<span class="hint" style="margin-left:auto;white-space:nowrap">选用 →</span>' +
+      "</div>").join("") +
+      '<div class="small muted mt-3">没有百度：实测百度搜索与百科对程序化请求直接拦截（302 验证页 / 403），做成模板只会永远失败。必应是国内的同位替代。</div>',
+    footer: (f) => {
+      f.innerHTML = '<div class="grow"></div><button class="btn" type="button" data-close="1">取消</button>';
+    }
+  });
+  document.querySelectorAll("[data-preset]").forEach(n => {
+    const open = () => {
+      const p = PRESET_CUSTOM_SOURCES[Number(n.dataset.preset)];
+      if(!p) return;
+      closeModal();
+      openCustomSourceForm(normalizeCustomSource(p));
+    };
+    n.addEventListener("click", open);
+    n.addEventListener("keydown", e => { if(e.key === "Enter" || e.key === " "){ e.preventDefault(); open(); } });
+  });
+}
 /* ---- 自定义数据源表单：新建 / 编辑 / 试搜 ----
    试搜是表单的核心反馈：选择器对没对上，只有真抓一次才算数 ——
    与播放源「搜索模板试搜一下」同一设计。 */

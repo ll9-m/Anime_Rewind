@@ -29,9 +29,15 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
   check("内置荣誉已重命名为 BUILTIN_HONORS", Array.isArray(evSync("BUILTIN_HONORS")));
   check("旧的 HONORS 常量已不存在", evSync("typeof HONORS") === "undefined", String(evSync("typeof HONORS")));
   const bh = await ev("return BUILTIN_HONORS.map(h=>({id:h.id,art:h.art,metric:h.metric}));");
-  check("内置荣誉共 12 项", bh.length === 12, String(bh.length));
-  check("每项内置荣誉都有 art 键", bh.every(h => !!h.art), JSON.stringify(bh.filter(h => !h.art)));
-  const artKeys = [...new Set(bh.map(h => h.art))];
+  /* 14 项 = 原 12 项 + 十年之约 / 年度重逢（2026-10 新增）。
+     这两项刻意不配 AI 图：honorArtURL 取不到 art 时落到第三级纯色玻璃，
+     是文档化的回退路径，不是缺陷 —— 断言按这个策略写。 */
+  const ARTLESS = ["reunion10", "reyear3"];
+  check("内置荣誉共 14 项", bh.length === 14, String(bh.length));
+  check("除十年之约/年度重逢外都有 art 键",
+    bh.filter(h => ARTLESS.indexOf(h.id) < 0).every(h => !!h.art),
+    JSON.stringify(bh.filter(h => !h.art)));
+  const artKeys = [...new Set(bh.filter(h => h.art).map(h => h.art))];
   check("art 键去重后 ≤ 11（允许共用配图）", artKeys.length <= 11, JSON.stringify(artKeys));
 
   // ---------- 2. AI 配图数据 ----------
@@ -45,8 +51,8 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
   const totalKB = sizes.reduce((a,b)=>a+b,0);
   check("配图总体积在合理区间（100KB–900KB）", totalKB > 100 && totalKB < 900, totalKB + "KB");
 
-  // 内置荣誉的 art 键必须都能在 HONOR_ART 里找到
-  const missing = await ev("return BUILTIN_HONORS.map(h=>h.art).filter(a => !HONOR_ART[a]);");
+  // 内置荣誉的 art 键必须都能在 HONOR_ART 里找到（无 art 的两项跳过）
+  const missing = await ev("return BUILTIN_HONORS.map(h=>h.art).filter(a => a && !HONOR_ART[a]);");
   check("内置荣誉引用的 art 全部存在", missing.length === 0, JSON.stringify(missing));
 
   // ---------- 3. 卡片结构 ----------
@@ -70,7 +76,7 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
   const wall = doc.querySelector("#honor-wall");
   check("首页渲染出荣誉墙容器", !!wall);
   const cards = Array.from(doc.querySelectorAll(".tk"));
-  check("渲染出 12 张荣誉卡", cards.length === 12, "实际 " + cards.length);
+  check("渲染出 14 张荣誉卡", cards.length === 14, "实际 " + cards.length);
   check("卡片含齿孔层 .tk-perf", cards.every(c => !!c.querySelector(".tk-perf")));
   check("卡片含背景层 .tk-bg", cards.every(c => !!c.querySelector(".tk-bg")));
   check("卡片含底部 .tk-foot", cards.every(c => !!c.querySelector(".tk-foot")));
@@ -79,11 +85,13 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
   check("内置卡不带编辑按钮（只有自定义荣誉可编辑）",
     cards.every(c => !c.querySelector('[data-hact="edit"]')), "内置卡出现了编辑按钮");
 
-  // ---------- 4. 内置卡用 AI 图，自定义卡用纯色玻璃 ----------
+  // ---------- 4. 内置卡用 AI 图，无图内置卡与自定义卡用纯色玻璃 ----------
   const withImg = cards.filter(c => c.querySelector(".tk-art"));
   const withGlass = cards.filter(c => c.querySelector(".tk-glass"));
-  check("内置荣誉卡使用 AI 配图", withImg.length === 12, "有图 " + withImg.length);
-  check("未上传图时用纯色玻璃背景", withGlass.length === 0, "不该有玻璃层的卡：" + withGlass.length);
+  /* 十年之约 / 年度重逢没有 AI 配图，走玻璃层 —— 与「无图自定义荣誉」同一回退 */
+  check("有配图的内置卡共 12 张", withImg.length === 12, "有图 " + withImg.length);
+  check("无图卡（2 项新内置 + 场景里的无图自定义）用玻璃层", withGlass.length >= 2,
+    "玻璃层 " + withGlass.length + " 张");
   const imgSrc = withImg[0].querySelector(".tk-art").getAttribute("src");
   check("配图 src 是 JPEG dataURL", /^data:image\/jpeg;base64,/.test(imgSrc), imgSrc.slice(0, 40));
   check("配图 img 带 loading=lazy（不拖慢首屏）", withImg[0].querySelector(".tk-art").getAttribute("loading") === "lazy");

@@ -2394,6 +2394,7 @@ const ICONS = {
      也不会和「已停用」共用的 eye/refresh 图标混淆。 */
   target:"<circle cx='12' cy='12' r='8.2'/><circle cx='12' cy='12' r='2.6' fill='currentColor'/>",
   db:"<ellipse cx='12' cy='5.8' rx='7.5' ry='2.8'/><path d='M4.5 5.8v12.4c0 1.5 3.4 2.8 7.5 2.8s7.5-1.3 7.5-2.8V5.8'/><path d='M4.5 12c0 1.5 3.4 2.8 7.5 2.8s7.5-1.3 7.5-2.8'/>",
+  folder:"<path d='M3 7.2A2.2 2.2 0 0 1 5.2 5h3.6l2.3 2.6h7.7A2.2 2.2 0 0 1 21 9.8v7A2.2 2.2 0 0 1 18.8 19H5.2A2.2 2.2 0 0 1 3 16.8z'/>",
   rewind:"<path d='M11.5 6 4 12l7.5 6z'/><path d='M20.5 6 13 12l7.5 6z'/>",
   sort:"<path d='M7 4v16M4 17l3 3 3-3'/><path d='M13 6h7M13 11h5M13 16h3'/>",
   empty:"<circle cx='12' cy='12' r='9'/><path d='M9 10h.1M15 10h.1'/><path d='M8.5 15.2a4.5 4.5 0 0 0 7 0'/>",
@@ -2441,6 +2442,9 @@ const DEFAULT_SETTINGS = {
   module_wheel: true,
   module_chronicle: true,
   module_charts: true,
+  /* 数据安全与档案完整性（数据页里给开关） */
+  cover_localize: true,     /* 添加作品时把封面抓回本机（仅 IndexedDB 模式生效） */
+  last_backup_at: "",       /* 上次成功导出备份的时间（ISO 串），驱动首页备份提醒 */
   mecha_tags: ["机战","机甲","机器人","机器人动画","SF"]
 };
 
@@ -3554,15 +3558,20 @@ function strToArr(s){ return String(s || "").split(/[、,，;；]/).map(x => x.t
 
 /* 封面兜底占位图（内联 SVG / 文字块，带片名首字）
    图片 error 事件不冒泡，统一在捕获阶段处理，兼容动态插入的封面 */
+/* 封面统一出口：本地缓存优先，远程地址兜底。
+   所有渲染点都必须走这里 —— 直接读 coverUrl 会让本地化的封面永远不显示。 */
+function coverSrcOf(a){
+  return (a && a.coverData) || (a && a.coverUrl) || "";
+}
 function coverImg(a, cls){
-  const url = a && a.coverUrl;
+  const url = coverSrcOf(a);
   const name = (a && (a.titleCn || a.titleOriginal)) || "?";
   const first = esc(String(name).trim().charAt(0) || "?");
   if(!url) return '<div class="placeholder" role="img" aria-label="' + attr(name) + ' 封面缺失">' + first + "</div>";
   return '<img src="' + attr(url) + '" alt="' + attr(name) + ' 封面" loading="lazy"' + (cls ? ' class="' + attr(cls) + '"' : "") + ">";
 }
 function coverThumb(a){
-  const url = a && a.coverUrl;
+  const url = coverSrcOf(a);
   const name = (a && (a.titleCn || a.titleOriginal)) || "?";
   if(!url) return '<div class="placeholder" style="font-size:14px" role="img" aria-label="封面缺失">' + esc(String(name).trim().charAt(0) || "?") + "</div>";
   return '<img src="' + attr(url) + '" alt="' + attr(name) + ' 封面" loading="lazy">';
@@ -3776,6 +3785,7 @@ function openAnimeForm(opts){
       closeModal();
       toast("《" + an.titleCn + "》已入库", "ok");
       refreshAll();
+      localizeCover(an);   // 异步补抓封面，不阻塞入库
       if(opts.onSaved) opts.onSaved(an);
       return;
     }
@@ -3783,6 +3793,7 @@ function openAnimeForm(opts){
     closeModal();
     toast("已保存", "ok");
     refreshAll();
+    localizeCover(an);
   }
 }
 /* 按名称找或建系列。名称比较走 normalize（去空白、大小写归一），
@@ -3914,6 +3925,37 @@ async function compressBgImage(dataUrl, maxEdge, quality){
   }catch(e){ return dataUrl; }
 }
 
+/* 档案完整性：封面跟着记录走。
+   远程 coverUrl（Bangumi/AniList 图床）随时可能失效，
+   开着「封面本地化」时，入库/保存后把封面抓回来、压缩到长边 480 存进记录。
+   失败是常态（跨域、图床 403），静默保留远程地址即可，不值得打扰用户。 */
+async function localizeCover(a){
+  if(!settings.cover_localize || Repo.mode !== "idb") return;
+  if(!a || !a.id || !a.coverUrl || a.coverData) return;
+  if(!/^https?:\/\//i.test(a.coverUrl)) return;    // data:/本地封面本来就是本机的
+  try{
+    const res = await fetch(a.coverUrl, { mode:"cors", referrerPolicy:"no-referrer" });
+    if(!res.ok) return;
+    const blob = await res.blob();
+    if(!/^image\//i.test(String(blob.type || ""))) return;
+    const raw = await new Promise((resolve, reject) => {
+      const fr = new FileReader();
+      fr.onload = () => resolve(fr.result);
+      fr.onerror = () => reject(fr.error || new Error("读取失败"));
+      fr.readAsDataURL(blob);
+    });
+    const packed = await compressBgImage(raw, 480, 0.82);
+    if(!packed || !/^data:image\//i.test(packed) || packed.length > 400 * 1024) return;
+    a.coverData = packed;
+    await persistAnimeQuiet(a);
+  }catch(e){
+    console.info("封面本地化失败（保留远程地址）：", a.titleCn, e && e.message || e);
+  }
+}
+function coverNeedsLocalize(a){
+  return !!(a && a.coverUrl && !a.coverData && /^https?:\/\//i.test(a.coverUrl));
+}
+
 /* L1/L2/L3 处理 */
 async function handleDuplicate(an, dup, opts){
   const level = dup.level, exist = dup.match;
@@ -3929,6 +3971,7 @@ async function handleDuplicate(an, dup, opts){
     await saveAnime(an);
     toast("已新建《" + an.titleCn + "》", "ok");
     refreshAll();
+    localizeCover(an);
     if(opts && opts.onSaved) opts.onSaved(an);
     return;
   }
@@ -3992,11 +4035,15 @@ function mergeRecords(base, incoming, opts){
     out.sources = incoming.sources;
     out.activeSourceId = incoming.activeSourceId || "";
   }
+  /* 本地封面同理：base 没有而 incoming（备份）带了就采纳 */
+  if(!base.coverData && incoming.coverData) out.coverData = incoming.coverData;
   out.coverUrl = (base.locked && base.locked.coverUrl) || base.coverUrl ? base.coverUrl : (incoming.coverUrl || base.coverUrl);
   const seen = new Set();
   const reviews = (base.reviews || []).concat(incoming.reviews || []).map(r => Object.assign({}, r, { id: r.id || uid("rv") }));
   out.reviews = reviews.filter(r => {
-    const k = normalize(r.date) + "|" + normalize(r.content);
+    /* round 进 key：观看记录允许没有感想（content 为空串），
+       同一天看两次（第 1 次、第 2 次）若只按 日期|内容 判重会被误删一条 */
+    const k = normalize(r.date) + "|" + String(Number(r.round) || 1) + "|" + normalize(r.content);
     if(seen.has(k)) return false;
     seen.add(k); return true;
   }).sort((a,b) => String(b.date).localeCompare(String(a.date)));
@@ -4072,7 +4119,9 @@ function promptReview(an, opts){
           /* 重看次数 = round − 1（全库统一约定，编辑/导入路径均如此）：
              「记录一次观看」是第 1 次，不算重看。 */
           an.rewatchCount = Math.max(an.rewatchCount || 0, round - 1);
-          if(content) an.reviews = (an.reviews || []).concat([rev]);
+          /* 观看本身就该留档，感想只是附言 —— 不写感想也记下日期，
+             「上次重温是什么时候」「今年重温了几部」才有数据可用。 */
+          an.reviews = (an.reviews || []).concat([rev]);
           await saveAnime(an);
           closeModal();
           toast("已记录第 " + round + " 次观看", "ok");
@@ -4237,8 +4286,12 @@ function cardHTML(a){
   if(cf.myScore !== false && a.myScore != null) addRow("我的分", ic("starfill",11) + " " + fmtNum(a.myScore));
   if(cf.genres !== false && (a.genres||[]).length) addRow("类型", esc(a.genres.join(" / ")));
   if(a.totalEpisodes != null) addRow("集数", esc(String(a.totalEpisodes)));
-  if((a.rewatchCount||0) > 0) addRow("重看", esc(String(a.rewatchCount)) + " 次");
-  if((a.reviews||[]).length) addRow("感想", esc(String(a.reviews.length)) + " 条");
+  if((a.rewatchCount||0) > 0){
+    addRow("重看", esc(String(a.rewatchCount)) + " 次" +
+      (lastViewingOf(a) ? "（上次 " + esc(lastViewingOf(a)) + "）" : ""));
+  }
+  if(reunionYearsOf(a) != null && reunionYearsOf(a) > 0) addRow("重逢", "时隔 " + reunionYearsOf(a) + " 年");
+  if((a.reviews||[]).length) addRow("观看记录", esc(String(a.reviews.length)) + " 条");
 
   let prog = "";
   if(cf.progress !== false){
@@ -7277,6 +7330,11 @@ function renderDetail(root, id){
 
   const meta = [];
   if(a.airDate) meta.push("<span>首播 <b>" + esc(a.airDate) + "</b></span>");
+  /* 时隔重逢：最近一次观看距首播的年数。语义是「这部作品等了你 N 年」，
+     有观看日期与首播年才显示 —— 数据不全时不硬凑。 */
+  if(reunionYearsOf(a) != null && reunionYearsOf(a) > 0){
+    meta.push('<span class="reunion-tag">' + ic("refresh",13) + " 时隔 <b>" + reunionYearsOf(a) + "</b> 年重逢</span>");
+  }
   meta.push("<span>集数 <b>" + (a.totalEpisodes == null ? "未知" : a.totalEpisodes) + "</b></span>");
   if(a.durationMinutes) meta.push("<span>片长 <b>" + a.durationMinutes + " 分钟</b></span>");
   if((a.studios||[]).length) meta.push("<span>公司 <b>" + esc(a.studios.join("、")) + "</b></span>");
@@ -7364,18 +7422,22 @@ function renderDetail(root, id){
           "</div></div>").join("") + "</div></div>" : "") +
 
       '<details class="mt-4"><summary class="sec-title">' + ic("refresh",16) + "<span>重看与感想</span>" +
-        '<span class="small muted" style="margin-left:auto">' + (reviews.length ? reviews.length + " 条" : "暂无") + "</span></summary>" +
+        '<span class="small muted" style="margin-left:auto">' +
+          (lastViewingOf(a) ? "上次观看 " + esc(lastViewingOf(a)) + " · " : "") +
+          ((a.reviews || []).length ? (a.reviews.length + " 条记录") : "暂无") + "</span></summary>" +
         '<div class="mt-3">' +
-        '<button class="btn btn-sm btn-primary" type="button" data-act="rewatch">' + ic("plus",14) + "记录一次重看</button>" +
+        '<button class="btn btn-sm btn-primary" type="button" data-act="rewatch">' + ic("plus",14) + "记录一次观看</button>" +
+        (legacyViewingGap(a) ? '<div class="small muted mt-2">更早还有 ' + legacyViewingGap(a) + ' 次观看没有留下日期（升级前的旧记录只计次数）。</div>' : "") +
         (reviews.length
           ? '<div class="review-timeline mt-3">' + reviews.map(r =>
               '<div class="review-item"><div class="review-head"><span class="review-round">第 ' + (r.round||1) + " 次观看</span><span>" + esc(r.date || "") + "</span>" +
               '<span class="review-ops">' +
-                '<button class="icon-ghost-btn" type="button" data-act="rv-edit" data-rv="' + attr(r.id || "") + '" aria-label="编辑这条感想" title="编辑">' + ic("edit",13) + "</button>" +
-                '<button class="icon-ghost-btn" type="button" data-act="rv-del" data-rv="' + attr(r.id || "") + '" aria-label="删除这条感想" title="删除">' + ic("trash",13) + "</button>" +
+                '<button class="icon-ghost-btn" type="button" data-act="rv-edit" data-rv="' + attr(r.id || "") + '" aria-label="编辑这条记录" title="编辑">' + ic("edit",13) + "</button>" +
+                '<button class="icon-ghost-btn" type="button" data-act="rv-del" data-rv="' + attr(r.id || "") + '" aria-label="删除这条记录" title="删除">' + ic("trash",13) + "</button>" +
               "</span></div>" +
-              (r.content ? '<div class="review-body">' + esc(r.content) + "</div>" : "") + "</div>").join("") + "</div>"
-          : '<div class="small muted mt-3">还没有感想。记录一次重看时可以写几句。</div>') +
+              (r.content ? '<div class="review-body">' + esc(r.content) + "</div>"
+                         : '<div class="small muted" style="padding:var(--sp-2) 0">（这次没有写感想，点编辑可以补）</div>') + "</div>").join("") + "</div>"
+          : '<div class="small muted mt-3">还没有观看记录。点上面「记录一次观看」，感想可写可不写。</div>') +
         "</div></details>" +
 
       '<div class="divider"></div>' +
@@ -7469,7 +7531,7 @@ function episodeRowHTML(a){
     const label = "第 " + i + " 集" + (isWatched ? "（已看）" : isPlaying ? "（正在看）" : isNext ? "（下一集）" : "（未看）");
     cards.push(
       '<button type="button" class="' + cls + '" data-ep-pick="' + i + '" aria-label="' + attr(label) + '">' +
-        '<div class="tv-ep-still"' + (a.coverUrl ? ' style="background-image:url(' + attr(a.coverUrl) + ')"' : "") + ">" +
+        '<div class="tv-ep-still"' + (coverSrcOf(a) ? ' style="background-image:url(' + attr(coverSrcOf(a)) + ')"' : "") + ">" +
           '<span class="tv-ep-no">EP ' + String(i).padStart(2, "0") + "</span>" +
         "</div>" +
         '<div class="tv-ep-body">' +
@@ -9126,6 +9188,45 @@ function recentReviews(n){
   return out.sort((x,y) => String(y.review.date).localeCompare(String(x.review.date))).slice(0, n || 3);
 }
 
+/* ---- 观看记录 ----
+   每次观看都留档（感想可空），这里集中放派生量：
+   上次观看日期、时隔重逢年数、旧数据里没留下日期的观看次数。 */
+function lastViewingOf(a){
+  let best = "";
+  (a && a.reviews || []).forEach(r => {
+    const d = String(r.date || "");
+    if(/^\d{4}-\d{2}-\d{2}$/.test(d) && d > best) best = d;
+  });
+  return best;
+}
+function lastViewingYearOf(a){
+  const d = lastViewingOf(a);
+  return d ? Number(d.slice(0,4)) : null;
+}
+/* 最近一次观看距首播多少年。没有日期记录或没有首播年 → null */
+function reunionYearsOf(a){
+  const airY = yearOf(a && a.airDate);
+  const lastY = lastViewingYearOf(a);
+  return (airY && lastY) ? Math.max(0, lastY - airY) : null;
+}
+/* 旧数据里「看过但没留下日期」的观看次数：
+   总观看数 = rewatchCount + 1，留下记录的是 reviews 条数，差值即无日期的部分。 */
+function legacyViewingGap(a){
+  if(!a) return 0;
+  return Math.max(0, (Number(a.rewatchCount) || 0) + 1 - (a.reviews || []).length);
+}
+/* 今年重新看过的作品数（「重新」= 此前已有观看记录，含没日期的旧记录） */
+function rewatchedThisYear(){
+  const y = new Date().getFullYear();
+  return state.anime.filter(a => {
+    const hasThisYear = (a.reviews || []).some(r => Number(String(r.date || "").slice(0,4)) === y);
+    if(!hasThisYear) return false;
+    const hadBefore = (Number(a.rewatchCount) || 0) >= 1 ||
+      (a.reviews || []).some(r => { const ry = Number(String(r.date || "").slice(0,4)); return ry && ry < y; });
+    return hadBefore;
+  }).length;
+}
+
 /* ============================================================
    21. 荣誉称号（§10）
    ============================================================ */
@@ -9147,6 +9248,10 @@ const BUILTIN_HONORS = [
   { id:"old90",  cat:"年代",     name:"动画考古队员", desc:"库中最早作品首播早于 1990 年", metric:"oldest1990",        art:"old90" },
   { id:"rew10",  cat:"重看",     name:"回味者",       desc:"全库重看次数累计 ≥ 10",        metric:"rewatches", need:10, art:"rew10" },
   { id:"rew5",   cat:"重看",     name:"五刷大佬",     desc:"单部重看 ≥ 5 次",              metric:"maxRewatch", need:5, art:"rew10" },
+  /* 十年之约 / 年度重逢没有专属 AI 配图：honorArtURL 取不到 HONOR_ART[h.art]
+     会自然落到第三级纯色玻璃背景（用户确认过三级回退的好看标准），先不硬凑图。 */
+  { id:"reunion10", cat:"重看",  name:"十年之约",     desc:"最近一次观看距首播 ≥ 10 年",   metric:"reunion10", need:10 },
+  { id:"reyear3",   cat:"重看",  name:"年度重逢",     desc:"今年重新看过的作品 ≥ 3 部",    metric:"reyear3", need:3 },
   { id:"m10",    cat:"收藏",     name:"神作收藏家",   desc:"神作标记 ≥ 10",                metric:"masterpieces", need:10, art:"m10" },
   { id:"keng",   cat:"趣味",     name:"坑王",         desc:"弃坑 ≥ 10 且弃坑率 > 40%",     metric:"keng",                art:"keng" },
   { id:"mecha",  cat:"趣味",     name:"机战魂",       desc:"含机战/机甲类标签且看完 ≥ 10", metric:"mecha", need:10,   art:"mecha" }
@@ -9173,6 +9278,13 @@ function honorContext(){
   const tags = (settings.mecha_tags || []).map(normalize);
   const mechaCount = doneList.filter(a => (a.genres || []).some(g => tags.indexOf(normalize(g)) >= 0)).length;
   const s = stats();
+  /* 时隔重逢：全库最长的「最近观看年 − 首播年」；
+     年度重逢：今年重新看过（今年有观看记录，且此前已有观看）的作品数。 */
+  let reunionMax = null;
+  state.anime.forEach(a => {
+    const g = reunionYearsOf(a);
+    if(g != null && (reunionMax == null || g > reunionMax)) reunionMax = g;
+  });
   return {
     done: doneList.length,
     decades: decades.size,
@@ -9183,7 +9295,9 @@ function honorContext(){
     drop: s.drop,
     dropRate: s.dropRate,
     total: list.length,
-    mechaCount
+    mechaCount,
+    reunionMax,
+    reyearCount: rewatchedThisYear()
   };
 }
 function honorStatus(h, ctx){
@@ -9200,6 +9314,10 @@ function honorStatus(h, ctx){
     case "masterpieces": return { got: ctx.masterpieces >= h.need, cur: ctx.masterpieces, need: h.need, unit:"部" };
     case "keng":         return { got: ctx.drop >= 10 && ctx.dropRate > 0.4, cur: ctx.drop, need:10, unit:"部弃坑", extra: "弃坑率 " + Math.round(ctx.dropRate*100) + "%" };
     case "mecha":        return { got: ctx.mechaCount >= h.need, cur: ctx.mechaCount, need: h.need, unit:"部机战" };
+    case "reunion10":    return { got: ctx.reunionMax != null && ctx.reunionMax >= h.need,
+                                  cur: ctx.reunionMax == null ? 0 : ctx.reunionMax, need: h.need, unit:"年",
+                                  extra: ctx.reunionMax == null ? "还没有带日期的观看记录" : ("最长时隔 " + ctx.reunionMax + " 年") };
+    case "reyear3":      return { got: ctx.reyearCount >= h.need, cur: ctx.reyearCount, need: h.need, unit:"部今年重逢" };
     default:             return { got:false, cur:0, need:1, unit:"" };
   }
 }
@@ -9653,9 +9771,14 @@ const chartBuilders = {
     const items = state.statuses.map(s => ({ name: s.name, value: counts[s.id] || 0 }))
       .filter(i => i.value > 0);
     return pieOption(items);
+  },
+  /* 观看年份分布：横轴与计数都用 watchYear（你哪一年看的）。
+     旧实现曾把观看年份的横轴配了 airDate 的计数，是颗哑雷；这次接上面板时一并修正。 */
+  year(){
+    const cats = allWatchYears();
+    const vals = cats.map(y => state.anime.filter(a => Number(a.watchYear) === Number(y)).length);
+    return barOption(cats.map(String), vals, { label:false });
   }
-  /* 「year」builder 已删：从未被任何图表面板挂载（chartPanelHTML 无 year 调用），
-     且实现里把观看年份的横轴配了 airDate 的计数 —— 留着是颗哑雷。 */
 };
 function chartPanelHTML(kind, title, icon, fallbackHTML, height){
   return '<div class="panel"><div class="panel-head">' + ic(icon,16) + "<h3>" + esc(title) + "</h3></div>" +
@@ -9698,6 +9821,16 @@ function renderHome(root){
       stat(fmtInt(s.rewatches), "重看次数", "refresh") +
       stat(fmtInt(s.masterpieces), "神作标记", "medal") +
     "</div>";
+
+  // 备份提醒：放在数字带正下方 —— 数据孤本的唯一保险丝，值得这个位置
+  const bk = backupReminder();
+  if(bk){
+    html += '<div class="note-box is-warn mt-4" id="backup-remind">' + ic("warning",16) +
+      "<span>" + esc(bk.text) + "</span>" +
+      '<button class="btn btn-sm" type="button" data-act="backup-now" style="margin-left:auto">' + ic("download",14) + "立即备份</button>" +
+      '<button class="btn btn-sm" type="button" data-act="go-data-settings">' + ic("settings",14) + "去设置</button>" +
+    "</div>";
+  }
 
   // 荣誉摘要
   html += '<div class="honor-card mt-4">' +
@@ -9750,6 +9883,7 @@ function renderHome(root){
   if(settings.module_charts){
     html += '<div class="grid-2 mt-4">';
     html += chartPanelHTML("decade", "年代分布", "chart", rankListHTML(topCount(a => { const d = decadeOf(a.airDate); return d ? [d + "s"] : []; }, state.anime, 8).map(x => ({ k: x[0], v: x[1] })), " 部"));
+    html += chartPanelHTML("year", "观看年份分布", "chart", rankListHTML(allWatchYears().map(y => ({ k: String(y), v: state.anime.filter(a => Number(a.watchYear) === Number(y)).length })), " 部"));
     html += chartPanelHTML("studio", "制作公司", "chart", rankListHTML(topCount(a => a.studios || [], state.anime, 8).map(x => ({ k: x[0], v: x[1] })), " 部"));
     html += chartPanelHTML("genre", "类型分布", "chart", rankListHTML(topCount(a => a.genres || [], state.anime, 8).map(x => ({ k: x[0], v: x[1] })), " 部"));
     html += chartPanelHTML("status", "状态构成", "pie", rankListHTML(state.statuses.map(st => ({ k: st.name, v: state.anime.filter(a => a.statusId === st.id).length })).filter(x => x.v > 0), " 部"));
@@ -9764,6 +9898,14 @@ function renderHome(root){
   // 事件
   const hb = root.querySelector('[data-act="open-honor"]');
   if(hb) hb.addEventListener("click", () => openHonorWall());
+  const bb = root.querySelector('[data-act="backup-now"]');
+  if(bb) bb.addEventListener("click", () => {
+    exportJSON(true);   // 提醒触发的备份一律全量（含背景图），别让用户在危险时刻做选择题
+    const box = root.querySelector("#backup-remind");
+    if(box) box.remove();
+  });
+  const gb2 = root.querySelector('[data-act="go-data-settings"]');
+  if(gb2) gb2.addEventListener("click", () => { settingsState.tab = "data"; go("settings"); });
   const nb = root.querySelector('[data-act="quote-refresh"]');
   if(nb) nb.addEventListener("click", () => { bannerQuote = pickRandomQuote(bannerQuote); rerender(); });
   const fb = root.querySelector('[data-act="quote-fav"]');
@@ -9840,8 +9982,91 @@ function exportJSON(includeBg){
     a.href = url; a.download = name;
     document.body.appendChild(a); a.click(); a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 4000);
+    markBackedUp();
     toast("已导出 " + name, "ok");
   }).catch(e => toast("导出失败：" + (e && e.message || e), "err"));
+}
+
+/* ---- 备份提醒与备份文件夹 ----
+   数据孤本最大的风险不是写错数据，是「清除浏览器数据」一键全没。
+   提醒要温和但可见：首页一条 note，设置页给现状与一键动作。 */
+const BACKUP_REMIND_DAYS = 30;
+function markBackedUp(){
+  settings.last_backup_at = new Date().toISOString();
+  saveSettings();
+}
+function backupAgeDays(){
+  if(!settings.last_backup_at) return null;
+  const t = new Date(settings.last_backup_at).getTime();
+  if(!Number.isFinite(t)) return null;
+  return Math.floor((Date.now() - t) / 86400000);
+}
+function backupFreshText(){
+  const days = backupAgeDays();
+  return days == null ? "从未备份过" : ("上次备份：" + days + " 天前（" + String(settings.last_backup_at).slice(0,10) + "）");
+}
+/* 首页提醒的判据：库有一点规模（≥5 部）且从未备份 / 超过阈值。
+   从不备份的库不提醒到 30 天 —— 那等于从来没用过备份功能。 */
+function backupReminder(){
+  if(state.anime.length < 5) return null;
+  const days = backupAgeDays();
+  if(days == null) return { text:"片库已有 " + state.anime.length + " 部作品，但还从未导出过备份。浏览器数据一旦清除就全部消失。" };
+  if(days >= BACKUP_REMIND_DAYS) return { text:"距上次备份已过去 " + days + " 天，建议重新导出一份。" };
+  return null;
+}
+/* 备份文件夹（File System Access API，仅 Chromium 系 + IndexedDB 模式可用）：
+   目录句柄只能存进 IndexedDB（结构化克隆对象），localStorage 存不了，
+   所以降级模式直接不提供这个功能。 */
+const BACKUP_DIR_KEY = "sys:backup_dir";
+let backupDirHandle = null;
+async function initBackupFolder(){
+  if(Repo.mode !== "idb") return;
+  try{
+    const v = await Repo.getAsset(BACKUP_DIR_KEY);
+    if(v && typeof v === "object" && v.kind === "directory") backupDirHandle = v;
+  }catch(e){}
+}
+function backupFolderAvailable(){
+  return Repo.mode === "idb" && typeof window.showDirectoryPicker === "function";
+}
+async function pickBackupFolder(){
+  try{
+    const handle = await window.showDirectoryPicker({ mode:"readwrite", id:"animerewind-backup" });
+    if(!handle) return null;
+    backupDirHandle = handle;
+    await Repo.setAsset(BACKUP_DIR_KEY, handle);
+    return handle;
+  }catch(e){
+    if(e && e.name === "AbortError") return null;   // 用户取消选择，不是错误
+    toast("无法选择文件夹：" + (e && e.message || e), "err");
+    return null;
+  }
+}
+async function backupToFolder(){
+  if(!backupDirHandle){
+    const picked = await pickBackupFolder();
+    if(!picked) return false;
+  }
+  try{
+    /* 新会话里句柄的写权限要重新授予；这个动作由点击触发，满足用户手势要求 */
+    let perm = await backupDirHandle.queryPermission({ mode:"readwrite" });
+    if(perm !== "granted") perm = await backupDirHandle.requestPermission({ mode:"readwrite" });
+    if(perm !== "granted"){ toast("没有该文件夹的写入权限，请重新选择", "warn"); return false; }
+    const payload = await buildExportPayload(true);   // 文件夹备份默认全量（含背景图）
+    const d = new Date();
+    const p = (n) => String(n).padStart(2,"0");
+    const name = "animerewind-backup-" + d.getFullYear() + p(d.getMonth()+1) + p(d.getDate()) + ".json";
+    const fh = await backupDirHandle.getFileHandle(name, { create:true });
+    const w = await fh.createWritable();
+    await w.write(new Blob([JSON.stringify(payload, null, 2)], { type:"application/json" }));
+    await w.close();
+    markBackedUp();
+    toast("已备份到文件夹：" + name, "ok");
+    return true;
+  }catch(e){
+    toast("备份失败：" + (e && e.message || e), "err");
+    return false;
+  }
 }
 
 /* ============================================================
@@ -9883,6 +10108,8 @@ function rawToDraft(raw){
   an.titleOriginal = String(raw.titleOriginal || "").trim() || null;
   an.aliases = Array.isArray(raw.aliases) ? raw.aliases.map(String) : [];
   if(raw.coverUrl) an.coverUrl = String(raw.coverUrl);
+  /* 本地化的封面随记录走：备份里带 coverData 就搬过来（档案换机不褪色） */
+  if(typeof raw.coverData === "string" && /^data:image\//i.test(raw.coverData)) an.coverData = raw.coverData;
   an.airDate = validateDateInput(raw.airDate) || "";
   an.totalEpisodes = numOrNull(raw.totalEpisodes);
   an.durationMinutes = numOrNull(raw.durationMinutes);
@@ -10118,7 +10345,8 @@ let payloadAssets = null;
 function mergeUniqueReviews(a, b){
   const seen = new Set(), out = [];
   (a || []).concat(b || []).forEach(r => {
-    const k = normalize(r.date) + "|" + normalize(r.content);
+    /* 与 mergeRecords 同一规则：round 进 key，空感想的不同轮次不会互相误杀 */
+    const k = normalize(r.date) + "|" + String(Number(r.round) || 1) + "|" + normalize(r.content);
     if(seen.has(k)) return;
     seen.add(k); out.push(r);
   });
@@ -10518,6 +10746,21 @@ function settingsBodyHTML(){
   }
   if(t === "data"){
     html += '<div class="panel"><div class="panel-head"><h3>数据</h3></div>';
+    html += setRow("备份状态", '<span id="backup-fresh-text">' + esc(backupFreshText()) + '</span>　清理浏览器数据会清掉整个片库，备份是唯一的保险',
+      '<button class="btn btn-sm btn-primary" type="button" data-act="backup-now">' + ic("download",14) + "立即导出备份</button>");
+    if(backupFolderAvailable()){
+      html += setRow("备份文件夹", "一键把全量备份写进所选文件夹（推荐选网盘同步目录），不用每次找下载目录" +
+        (backupDirHandle ? "" : "。当前未选择文件夹"),
+        (backupDirHandle ? '<button class="btn btn-sm btn-primary" type="button" data-act="backup-folder">' + ic("download",14) + "备份到文件夹</button>" : "") +
+        '<button class="btn btn-sm" type="button" data-act="backup-pick">' + ic("folder",14) + (backupDirHandle ? "换一个文件夹" : "选择文件夹") + "</button>" +
+        (backupDirHandle ? '<button class="btn btn-sm" type="button" data-act="backup-clear">' + ic("close",14) + "移除</button>" : ""));
+    }else{
+      html += setRow("备份文件夹", "当前浏览器不支持（需要 Chromium 内核 + IndexedDB 可用），仍可用上面的「立即导出备份」",
+        '<button class="btn btn-sm" type="button" disabled>' + ic("folder",14) + "不可用</button>");
+    }
+    html += setRow("封面本地化", "添加/编辑作品时把封面抓回本机存档（压缩后随记录保存），图床失效也不褪色。仅 IndexedDB 模式生效；关闭后封面继续用远程地址",
+      '<label class="checkline"><input type="checkbox" data-set="cover_localize"' + (settings.cover_localize ? " checked" : "") + "><span>开启</span></label>" +
+      '<button class="btn btn-sm" type="button" data-act="cover-backfill">' + ic("refresh",14) + "为现有作品补齐</button>");
     html += setRow("导出 JSON", "文件名 animerewind-backup-YYYYMMDD.json；默认不含背景图",
       '<label class="checkline small" style="margin-right:8px"><input type="checkbox" id="exp-bg"><span>包含背景图</span></label>' +
       '<button class="btn btn-sm btn-primary" type="button" data-act="export">' + ic("download",14) + "导出数据</button>");
@@ -10911,6 +11154,52 @@ async function settingsAction(act, id, root){
       exportJSON(!!(cb && cb.checked));
       break;
     }
+    case "backup-now": {
+      exportJSON(true);
+      const ft = root.querySelector("#backup-fresh-text");
+      if(ft) ft.textContent = backupFreshText();
+      break;
+    }
+    case "backup-pick": {
+      const h = await pickBackupFolder();
+      if(h){ toast("备份文件夹已设置", "ok"); rerender(); }
+      break;
+    }
+    case "backup-folder": {
+      const ok = await backupToFolder();
+      if(ok){
+        const ft = root.querySelector("#backup-fresh-text");
+        if(ft) ft.textContent = backupFreshText();
+      }
+      break;
+    }
+    case "backup-clear": {
+      backupDirHandle = null;
+      try{ await Repo.delAsset(BACKUP_DIR_KEY); }catch(e){}
+      toast("已移除备份文件夹（已导出的备份文件不受影响）", "ok");
+      rerender();
+      break;
+    }
+    case "cover-backfill": {
+      const need = state.anime.filter(a => settings.cover_localize && a.coverUrl && !a.coverData && Repo.mode === "idb");
+      if(!need.length){ toast("没有需要本地化的封面（可能已全部缓存，或已关闭该功能）", "warn"); break; }
+      const ok = await confirmDialog({
+        title:"缓存现有封面",
+        html:"将为 <b>" + need.length + "</b> 部作品逐个抓取封面并压缩存入本机。<br>取决于网络，可能需要一些时间；失败的作品会保留远程地址。",
+        okText:"开始"
+      });
+      if(!ok) break;
+      let done = 0, failed = 0;
+      for(const a of need){
+        const before = !!a.coverData;
+        await localizeCover(a);
+        if(!!a.coverData !== before && a.coverData) done++; else failed++;
+        toast("封面本地化 " + (done + failed) + " / " + need.length, "info", 1200);
+      }
+      toast("封面本地化完成：成功 " + done + " 部，未成功 " + failed + " 部（多为图床拒绝跨域）", done ? "ok" : "warn", 5000);
+      rerender();
+      break;
+    }
     case "import": openImportDialog(); break;
     case "restore-quotes": {
       const n = await ensureBuiltinQuotes(true);
@@ -11006,6 +11295,9 @@ async function boot(){
       await Promise.all(state.statuses.map(s => Repo.put("statuses", s).catch(() => {})));
     }
     state.series = seriesRaw.map(s => migrateRecord(s, "series")).filter(Boolean);
+    /* 恢复备份文件夹句柄（结构化克隆对象只存得进 IndexedDB）。
+       不 await：它只影响设置页与一键备份的可用性，不该阻塞首屏。 */
+    initBackupFolder();
     /* seriesId 指向的系列可能已被删除（导入了旧备份、手动清过库），
        这类作品要落回默认系列 —— 留一个悬空 id 的话，
        筛选「默认系列」时它们会凭空消失，用户以为作品丢了。 */

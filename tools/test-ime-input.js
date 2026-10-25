@@ -12,7 +12,8 @@ const fs = require("fs");
 const path = require("path");
 const { JSDOM } = require("jsdom");
 
-const html = fs.readFileSync(path.join(__dirname, "..", "anime-rewind.html"), "utf8");
+/* 源码标记按内容匹配：行尾归一到 LF，避免 core.autocrlf 把文件改成 CRLF 时全部失配 */
+const html = fs.readFileSync(path.join(__dirname, "..", "anime-rewind.html"), "utf8").replace(/\r\n/g, "\n");
 let pass = 0, fail = 0;
 const fails = [];
 function check(name, cond, extra){

@@ -1,0 +1,116 @@
+/* ============================================================
+   6. 外观应用
+   ============================================================ */
+let bgImageUrl = "";
+/* 背景图是否真的可渲染。三个条件缺一不可：
+   1. 设置里有 key；2. key 对应的 asset 真的读回来了（读不到就是空串）；
+   3. 读回来的确实是 data URL。
+   旧逻辑在这里写成 settings.theme !== "dark"，而默认主题恰好是 dark，
+   于是默认状态下背景图永远不可见 —— 上传成功、toast 提示成功，界面却毫无变化。 */
+function bgRenderable(){
+  return !!(settings.bg_image && bgImageUrl && /^data:image\//i.test(bgImageUrl));
+}
+function bgLostReason(){
+  if(!settings.bg_image) return "";
+  if(bgImageUrl) return "";
+  return "图片数据已丢失（可能清过浏览器数据，或从旧备份导入）";
+}
+function applyAppearance(){
+  const root = document.documentElement;
+  root.setAttribute("data-theme", settings.theme);
+  root.setAttribute("data-accent", settings.accent_color);
+  root.setAttribute("data-density", settings.density);
+  // UI 套系（与配色主题正交）：档案馆（默认）/ 像素 / 科技。
+  // 三者共用同一套 data-theme 令牌，靠 [data-skin] 覆盖形状与细节，
+  // 这样新增套系不必重写任何布局代码。
+  root.setAttribute("data-skin", UI_SKINS.indexOf(settings.ui_skin) >= 0 ? settings.ui_skin : "archive");
+  const layer = $("#bg-layer"), overlay = $("#bg-overlay");
+  const useBg = bgRenderable();
+  // 空串会写出 url('')，这是非法值，浏览器静默当无背景 —— 失败还要看起来像成功。
+  // 缺图时必须显式写 none。
+  root.style.setProperty("--bg-image", useBg ? 'url("' + bgImageUrl + '")' : "none");
+  root.style.setProperty("--bg-blur", String(useBg ? settings.bg_blur : 0));
+  // 遮罩跟随主题取色：浅色主题用浅色遮罩提亮背景，深色主题用深色遮罩压暗。
+  // 旧代码三个主题一律 rgba(6,10,16,*)，浅色主题下会把背景压成脏灰。
+  const tint = settings.theme === "light" ? "255,255,255" : "6,10,16";
+  root.style.setProperty("--bg-overlay-rgb", tint);
+  // 取用户设定值与可读性下限的较大者：深色主题配纯白背景图时，
+  // 用户设 0.42 只得到 2.48:1，页头等裸露区的正文会看不清。
+  root.style.setProperty("--bg-overlay", String(useBg ? bgEffectiveOverlay() : 0));
+  root.style.setProperty("--panel-opacity", String(settings.panel_opacity));
+  root.style.setProperty("--bg-on", useBg ? "1" : "0");
+  // data-bg 供 CSS 钩子使用（描边只在真的有图时出现，避免无图时留下莫名其妙的框）
+  root.setAttribute("data-bg", useBg ? "on" : "off");
+  layer.style.display = "block";
+  overlay.style.display = "block";
+  /* TV 套系的列数必须在 DOM 就位后算：applyAppearance 早于首屏渲染，
+     此时 .wall 还不存在。留到下一帧再算。 */
+  if(settings.ui_skin === "tv"){ applyTvTokens(); requestAnimationFrame(updateTvColumns); }
+}
+/* 列数公式，直译 Izuko_TV 的 TvPosterWall.tvPosterWallColumns：
+     列数 = floor((可用宽 + 间距) / (最小卡宽 + 间距))
+   +间距 是把最后一个间隙也算进分子，否则边界上会少算一列
+   （1080p 实测：848px → (848+20)/(118+20) ≈ 6.3 → 6 列）。
+   写死列数不可取：窄窗口下卡片被压到不可点，超宽下又留大片空白。 */
+function tvColumnCount(availPx){
+  const gap = TV_LAYOUT.columnSpacing;
+  return Math.max(1, Math.floor((availPx + gap) / (TV_LAYOUT.cardMinWidth + gap)));
+}
+function updateTvColumns(){
+  if(settings.ui_skin !== "tv") return;
+  document.querySelectorAll(".wall").forEach(grid => {
+    /* 用内容区实测宽而不是视口宽：侧栏、滚动条、内边距都在里面，
+       用视口算会多出一两列，卡片被挤到边缘。 */
+    const avail = grid.clientWidth || (grid.parentElement && grid.parentElement.clientWidth) || 0;
+    if(avail <= 0) return;
+    grid.style.setProperty("--tv-cols", String(tvColumnCount(avail)));
+  });
+}
+async function refreshBgImage(){
+  bgImageUrl = "";
+  if(!settings.bg_image) return;
+  const v = await Repo.getAsset(settings.bg_image);
+  bgImageUrl = v && typeof v === "string" ? v : "";
+}
+
+function _srgbToLin(c){ c /= 255; return c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4); }
+function _relLum(rgb){ return 0.2126 * _srgbToLin(rgb[0]) + 0.7152 * _srgbToLin(rgb[1]) + 0.0722 * _srgbToLin(rgb[2]); }
+function _contrastRatio(a, b){
+  const l1 = _relLum(a), l2 = _relLum(b);
+  return (Math.max(l1, l2) + 0.05) / (Math.min(l1, l2) + 0.05);
+}
+function _mixRGB(fg, bg, alpha){
+  return [0, 1, 2].map(i => Math.round(fg[i] * alpha + bg[i] * (1 - alpha)));
+}
+function _hexRGB(h){
+  h = String(h || "").replace("#", "");
+  if(h.length === 3) h = h.split("").map(c => c + c).join("");
+  if(h.length < 6) return [0, 0, 0];
+  return [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16)];
+}
+/* 极端背景（纯黑 / 纯白）下所需的最小遮罩。
+   实际背景图的亮度是未知的（data URL 未解码成像素），所以按两端夹逼取最坏情况 ——
+   纯色海报恰好是最容易崩掉的输入，这样估算是保守且正确的。 */
+function bgRequiredOverlay(){
+  const theme = settings.theme;
+  const tint = theme === "light" ? [255, 255, 255] : [6, 10, 16];
+  const fallbackText = theme === "light" ? "#111820" : "#e8eef5";
+  const textRGB = _hexRGB(getComputedStyle(document.documentElement).getPropertyValue("--text").trim() || fallbackText);
+  let best = 0;
+  for(const raw of [[0, 0, 0], [255, 255, 255]]){
+    for(let o = 0; o <= 0.9601; o += 0.02){
+      if(_contrastRatio(textRGB, _mixRGB(tint, raw, o)) >= 4.6){ best = Math.max(best, o); break; }
+    }
+  }
+  return Math.min(0.92, Math.ceil(best * 50) / 50);
+}
+/* 本次渲染实际使用的遮罩：用户设定值与可读性下限取大者 */
+function bgEffectiveOverlay(){
+  return Math.max(Number(settings.bg_overlay) || 0, bgRequiredOverlay());
+}
+function bgReadabilityText(){
+  const req = bgRequiredOverlay();
+  const cur = Number(settings.bg_overlay) || 0;
+  if(cur + 0.001 >= req) return "裸露区域文字对比度已达标";
+  return "已自动加强遮罩至 " + req + "（你的设定 " + cur + "），以保证浅色/深色背景图下的正文可读";
+}

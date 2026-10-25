@@ -104,7 +104,9 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
     /* showExcluded：排除项默认不出现在返回里，
        这里要看的正是「它被排除了、原因是什么」。 */
     const rows = filterSources(a.sources, { showExcluded:true });
-    const pick = autoSelect(rows, {});
+    /* autoSelect/pickByPreference 作为冗余算法已删除；
+       选源纪律的等价观察点是 activeSourceOf（跳过不可用线路的现行路径） */
+    const pick = { source: activeSourceOf(a) };
     const res = await setActiveSource({ anime:a, source:search });
     return JSON.stringify({
       searchExcluded: rows.find(r => r.original.id === search.id).reason,

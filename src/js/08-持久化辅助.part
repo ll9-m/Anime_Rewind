@@ -1,0 +1,62 @@
+/* ============================================================
+   5. 持久化辅助
+   ============================================================ */
+function touch(a){ a.updatedAt = new Date().toISOString(); return a; }
+function upsertLocal(list, obj){ const i = list.findIndex(x => x.id === obj.id); if(i>=0) list[i]=obj; else list.push(obj); return obj; }
+
+async function persist(kind, obj){
+  try{
+    await Repo.put(kind, obj);
+    return true;
+  }catch(err){
+    if(String(err && err.message) === "QUOTA"){
+      toast("存储空间不足：请先导出备份，或删除自定义背景图 / 本地封面", "err", 6000);
+    } else {
+      toast("保存失败：" + (err && err.message ? err.message : err), "err");
+      console.warn(err);
+    }
+    return false;
+  }
+}
+async function saveAnime(a){
+  touch(a);
+  upsertLocal(state.anime, a);
+  return await persist("anime", a);
+}
+async function removeAnime(id){
+  const i = state.anime.findIndex(a => a.id === id);
+  if(i >= 0) state.anime.splice(i,1);
+  try { await Repo.del("anime", id); return true; }
+  catch(e){ toast("删除失败：" + e.message, "err"); return false; }
+}
+async function saveQuote(q){
+  upsertLocal(state.quotes, q);
+  return await persist("quotes", q);
+}
+async function removeQuote(id){
+  const i = state.quotes.findIndex(q => q.id === id);
+  if(i >= 0) state.quotes.splice(i,1);
+  try { await Repo.del("quotes", id); return true; }
+  catch(e){ toast("删除失败：" + e.message, "err"); return false; }
+}
+async function saveStatus(s){
+  upsertLocal(state.statuses, s);
+  return await persist("statuses", s);
+}
+async function removeStatus(id){
+  const i = state.statuses.findIndex(s => s.id === id);
+  if(i >= 0) state.statuses.splice(i,1);
+  try { await Repo.del("statuses", id); return true; }
+  catch(e){ toast("删除失败：" + e.message, "err"); return false; }
+}
+async function saveSeries(s){
+  upsertLocal(state.series, s);
+  return await persist("series", s);
+}
+async function removeSeries(id){
+  const i = state.series.findIndex(s => s.id === id);
+  if(i >= 0) state.series.splice(i,1);
+  try { await Repo.del("series", id); return true; }
+  catch(e){ toast("删除失败：" + e.message, "err"); return false; }
+}
+

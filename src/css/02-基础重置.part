@@ -1,0 +1,17 @@
+/* ============================================================
+   基础重置
+   ============================================================ */
+*,*::before,*::after{ box-sizing:border-box; }
+html,body{ height:100%; }
+body{
+  margin:0; font-family:var(--font); font-size:var(--fs-md); line-height:1.6;
+  color:var(--text); background:var(--bg); overflow:hidden;
+  -webkit-font-smoothing:antialiased;
+}
+h1,h2,h3,h4,p,figure{ margin:0; }
+button{ font:inherit; color:inherit; }
+input,select,textarea{ font:inherit; color:inherit; }
+ul,ol{ margin:0; padding:0; list-style:none; }
+a{ color:var(--accent); }
+svg{ display:block; }
+

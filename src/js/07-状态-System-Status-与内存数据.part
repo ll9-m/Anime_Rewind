@@ -1,0 +1,135 @@
+/* ============================================================
+   3. 状态 System Status 与内存数据
+   ============================================================ */
+const SYSTEM_STATUSES = [
+  { id:"st_want",    name:"想看", color:"#7c93a8", matchType:"progress", progressMin:0,  progressMax:0,   isSystem:true },
+  { id:"st_watching",name:"在看", color:"#22c3a6", matchType:"progress", progressMin:1,  progressMax:99,  isSystem:true },
+  { id:"st_done",    name:"看过", color:"#4caf7d", matchType:"progress", progressMin:100,progressMax:100, isSystem:true },
+  { id:"st_hold",    name:"搁置", color:"#e0a020", matchType:"manual",   progressMin:null,progressMax:null,isSystem:true },
+  { id:"st_drop",    name:"弃坑", color:"#e05a5a", matchType:"manual",   progressMin:null,progressMax:null,isSystem:true }
+];
+
+/* 系列：把「同一部动画的多季 / 剧场版 / 续作」归到一起。
+   起因是「每部动画都不止一部/一季」—— 库拆平之后，
+   《XX》第一季、第二季、剧场版彼此找不到，像互不相干的作品。
+   anime.seriesId 指向 state.series 里的记录；未归类的作品 seriesId 为空串，
+   UI 层兜底成「默认系列」。默认系列不落库（不占一条记录），
+   否则库里会出现两条同名的默认档，筛选时得选「哪一个默认」才发现问题。 */
+const DEFAULT_SERIES_ID = "";
+function defaultSeries(){ return { id:DEFAULT_SERIES_ID, name:"默认系列", isSystem:true }; }
+
+const state = {
+  anime: [],
+  quotes: [],
+  statuses: SYSTEM_STATUSES.slice(),
+  series: [],
+  route: "home",
+  routeId: null,
+  lastRoute: "home"
+};
+
+function seriesById(id){
+  if(!id) return null;
+  return state.series.find(s => s.id === id) || null;
+}
+function seriesNameOf(a){
+  const s = seriesById(a && a.seriesId);
+  return s ? s.name : "默认系列";
+}
+/* 系列下拉的可选项：默认系列恒在第一位，其余按名称排。
+   库里已无归属作品的系列也保留（用户可能正在整理），避免选项忽有忽无。 */
+function allSeries(){
+  return [defaultSeries()].concat(state.series.slice().sort((x,y) => x.name.localeCompare(y.name, "zh")));
+}
+function seriesOptionsHTML(sel){
+  return allSeries().map(s =>
+    '<option value="' + attr(s.id) + '"' + (String(sel || "") === s.id ? " selected" : "") + ">" + esc(s.name) + "</option>").join("");
+}
+/* 只列出真有作品的系列 + 默认系列（若默认系列下有作品），用于筛选器 */
+function usedSeries(){
+  const used = new Set(state.anime.map(a => a.seriesId || DEFAULT_SERIES_ID));
+  return allSeries().filter(s => used.has(s.id));
+}
+
+function statusById(id){ return state.statuses.find(s => s.id === id) || null; }
+function statusByName(name){
+  const n = normalize(name);
+  return state.statuses.find(s => normalize(s.name) === n) || null;
+}
+function animeById(id){ return state.anime.find(a => a.id === id) || null; }
+function statusColor(a){ const s = statusById(a.statusId); return s ? s.color : "var(--muted)"; }
+function statusName(a){ const s = statusById(a.statusId); return s ? s.name : "未设定"; }
+
+function progressOf(a){
+  if(a.totalEpisodes == null || !a.totalEpisodes) return null;
+  return Math.max(0, Math.min(100, Math.round((a.watchedEpisodes || 0) / a.totalEpisodes * 1000) / 10));
+}
+function isDone(a){
+  const p = progressOf(a);
+  if(p === null) return false;
+  return p >= 100;
+}
+
+/* 自动匹配状态 */
+function autoStatusFor(a){
+  if(!settings.status_auto_match) return null;
+  const cur = statusById(a.statusId);
+  if(cur && cur.matchType === "manual") return null;      // 搁置/弃坑/自定义手动档不被覆盖
+  const p = progressOf(a);
+  if(p === null) return null;                              // 总集数缺失不触发
+  const cands = state.statuses.filter(s => s.matchType === "progress" && s.progressMin != null);
+  const hits = cands.filter(s => p >= s.progressMin && p <= s.progressMax);
+  if(!hits.length) return null;
+  if(hits.length > 1){
+    // 命中多个时优先取区间更窄（更具体）的档；同宽度时取靠前的系统五档
+    hits.sort((a,b) => (a.progressMax - a.progressMin) - (b.progressMax - b.progressMin));
+  }
+  return hits[0].id;
+}
+function applyAutoStatus(a){
+  const nid = autoStatusFor(a);
+  if(nid && nid !== a.statusId){ a.statusId = nid; return true; }
+  return false;
+}
+
+/* 迁移 */
+function migrateRecord(rec, kind){
+  if(!rec || typeof rec !== "object") return null;
+  rec.schemaVersion = rec.schemaVersion == null ? 1 : Number(rec.schemaVersion) || 1;
+  if(kind === "anime"){
+    rec.id = rec.id || uid("an");
+    rec.reviews = Array.isArray(rec.reviews) ? rec.reviews : [];
+    rec.aliases = Array.isArray(rec.aliases) ? rec.aliases : [];
+    rec.genres = Array.isArray(rec.genres) ? rec.genres : [];
+    rec.studios = Array.isArray(rec.studios) ? rec.studios : [];
+    rec.personalTags = Array.isArray(rec.personalTags) ? rec.personalTags : [];
+    rec.sourceIds = rec.sourceIds && typeof rec.sourceIds === "object" ? rec.sourceIds : {};
+    rec.locked = rec.locked && typeof rec.locked === "object" ? rec.locked : {};
+    rec.pending = rec.pending && typeof rec.pending === "object" ? rec.pending : {};
+    rec.watchedEpisodes = Number(rec.watchedEpisodes) || 0;
+    rec.rewatchCount = Number(rec.rewatchCount) || 0;
+    rec.createdAt = rec.createdAt || new Date().toISOString();
+    rec.updatedAt = rec.updatedAt || rec.createdAt;
+    if(!statusById(rec.statusId)) rec.statusId = "st_want";
+    // seriesId 缺失/null 统一成空串，避免 undefined 参与相等判断
+    if(rec.seriesId == null) rec.seriesId = DEFAULT_SERIES_ID;
+    else rec.seriesId = String(rec.seriesId);
+    /* 播放源：旧结构（streamUrl 单值）迁成 sources 数组。
+       这里只做内存迁移，不回写存储 —— 回写由 boot 里的
+       「迁移后立即落盘」统一做，避免 migrateRecord 带副作用
+       （它现在是纯函数，被导入预览等只读路径共用）。 */
+    migrateSources(rec);
+    rec.activeSourceId = String(rec.activeSourceId || "");
+  }
+  if(kind === "quote"){
+    rec.id = rec.id || uid("q");
+    rec.isBuiltin = !!rec.isBuiltin;
+    rec.favorite = !!rec.favorite;
+  }
+  if(kind === "series"){
+    rec.id = rec.id || uid("se");
+    rec.name = String(rec.name || "").trim() || "未命名系列";
+  }
+  return rec;
+}
+

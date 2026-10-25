@@ -1,0 +1,113 @@
+/* ============================================================
+   7. 页面注册与路由
+   ============================================================ */
+const PAGES = [];
+function registerPage(p){ PAGES.push(p); }
+function pageModuleEnabled(p){
+  if(!p.settingKey) return true;
+  return settings[p.settingKey] !== false;
+}
+function buildNav(){
+  const nav = $("#nav-list");
+  nav.innerHTML = PAGES.map(p =>
+    '<button class="nav-item" type="button" data-route="' + p.id + '"' + (pageModuleEnabled(p) ? "" : " hidden") + '>' +
+      ic(p.icon, 18) + "<span>" + esc(p.name) + "</span></button>"
+  ).join("");
+  nav.querySelectorAll("[data-route]").forEach(b => {
+    b.addEventListener("click", () => go(b.dataset.route));
+  });
+}
+function updateNavActive(){
+  $$("#nav-list [data-route]").forEach(b => {
+    const active = b.dataset.route === state.route;
+    if(active) b.setAttribute("aria-current","page"); else b.removeAttribute("aria-current");
+  });
+}
+function updateSidebarInfo(){
+  $("#side-total").textContent = String(state.anime.length);
+  $("#side-store").textContent = Repo.mode === "idb" ? "本机" : "本机(降级)";
+  const hon = currentHonor();
+  const btn = $("#side-honor");
+  if(!settings.module_honor){ btn.hidden = true; return; }
+  btn.hidden = false;
+  const got = BUILTIN_HONORS.find(h => h.id === hon.topId);
+  $("#side-honor-name").textContent = got ? got.name : "初入番门前夜";
+  const nx = hon.nextQuant;
+  $("#side-honor-next").textContent = nx ? ("距 " + nx.name + " 还差 " + Math.max(1, nx.need - nx.cur) + " 部") : "全部数量称号已达成";
+}
+function currentPage(){ return PAGES.find(p => p.id === state.route) || PAGES[0]; }
+function go(route, id){
+  const target = PAGES.find(p => p.id === route);
+  if(!target || !pageModuleEnabled(target)){
+    toast("该功能已在设置中关闭", "warn");
+    return;
+  }
+  state.lastRoute = state.route;
+  state.route = route;
+  state.routeId = id || null;
+  renderRoute();
+  const view = $("#view");
+  view.scrollTop = 0;
+}
+function renderRoute(){
+  const page = currentPage();
+  // 离开首页时图表实例必须显式销毁：否则 chartRegistry 会一直持有上一次的
+  // canvas 与事件总线，用户每来回切一次就多留一份（disposeCharts 由 mountCharts
+  // 内部调用，但非首页根本不会走到 mountCharts，所以这里补一道）。
+  if(!page || page.id !== "home") disposeCharts();
+  const isDetail = page && page.id === "theater" && !!state.routeId;
+  $("#page-title").textContent = isDetail ? "放映厅 · 作品详情" : (page ? page.title : "");
+  $("#page-sub").textContent = page ? (page.sub || "") : "";
+  const actions = $("#page-actions");
+  actions.innerHTML = "";
+  if(page && typeof page.actions === "function") page.actions(actions);
+  updateNavActive();
+  updateSidebarInfo();
+  const view = $("#view");
+  try{
+    if(page && typeof page.render === "function") page.render(view);
+    else view.innerHTML = "";
+  }catch(err){
+    console.warn("[番忆] 页面渲染出错：" + page.id, err);
+    view.innerHTML = '<div class="state-box">' + ic("warning",40) +
+      "<h2>「" + esc(page.title) + "」页面渲染出错</h2>" +
+      '<p class="small">' + esc(String(err && err.message || err)) + "</p>" +
+      '<div class="row"><button class="btn btn-primary" type="button" data-act="retry">重试</button></div></div>';
+    const b = view.querySelector("[data-act=retry]");
+    if(b) b.addEventListener("click", () => renderRoute());
+  }
+  syncSkinLabels(view);
+  syncSkinLabels($("#page-actions"));
+  redrawChartsIfOpen();
+}
+function rerender(){
+  renderRoute();
+  /* TV 套系的列数依赖渲染后的实测宽度，必须每次重渲染后重算。
+     放这里而不是 applyAppearance：那里 DOM 还是旧的。 */
+  if(settings.ui_skin === "tv") updateTvColumns();
+}
+function refreshAll(){
+  updateSidebarInfo();
+  renderRoute();
+}
+/* 科技感按钮的故障层用 content:attr(data-label) 复制按钮文字。
+   CSS 拿不到元素的文本内容，所以每次渲染后统一把可见文本写进 data-label。
+   必须在 renderRoute 之后调用：此时新 DOM 才存在。 */
+function syncSkinLabels(root){
+  if(!root) return;
+  root.querySelectorAll(".btn").forEach(b => {
+    if(b.dataset.label) return;                 // 已注入过（元素未重建）
+    // 去掉图标节点，只取文字，避免 data-label 里混入 SVG 文本
+    const clone = b.cloneNode(true);
+    clone.querySelectorAll("svg").forEach(n => n.remove());
+    const t = (clone.textContent || "").trim();
+    if(t) b.dataset.label = t;
+  });
+}
+/* ---- 全息开关（科技套系下的 checkbox 替身）----
+   原型是固定 150x60 的胶囊，而设置页有近 20 个开关，那样会把标签挤没。
+   这里改成 46x24 的紧凑尺寸，但保留原型的全部元素：
+   轨道扫描线、能量环、滑块内光、切换时的亮色反馈。
+   原型的旋转是常驻的，这里改为仅 hover/focus 时才转：
+   同时有 20 个圆环在转，屏幕上只是一团模糊，而不是科技感。 */
+

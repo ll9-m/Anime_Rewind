@@ -1,0 +1,20 @@
+/* ============================================================
+   童年编年史
+   ============================================================ */
+.chronicle{ display:flex; gap:var(--sp-4); overflow-x:auto; padding-bottom:var(--sp-3); align-items:flex-start; }
+.chron-year{
+  flex:0 0 260px; scroll-snap-align:start;
+  border:1px solid var(--border); border-radius:var(--r-lg); background:var(--panel); overflow:hidden;
+}
+.chron-year > header{ padding:var(--sp-3); border-bottom:1px solid var(--border); background:var(--panel-2); cursor:default; }
+.chron-year > header h3{ font-size:var(--fs-lg); font-weight:700; }
+.chron-year .group-stat{ font-size:11px; color:var(--muted); margin-top:2px; }
+.chron-list{ display:flex; flex-direction:column; gap:var(--sp-2); padding:var(--sp-3); max-height:420px; overflow-y:auto; }
+.chron-item{ display:flex; gap:var(--sp-2); align-items:center; cursor:pointer; padding:4px; border-radius:var(--r-md); }
+.chron-item:hover{ background:var(--panel-2); }
+.chron-thumb{ width:36px; height:48px; flex:0 0 36px; border-radius:4px; overflow:hidden; background:var(--panel-3); }
+.chron-thumb img{ width:100%; height:100%; object-fit:cover; }
+.chron-item .name{ font-size:var(--fs-xs); line-height:1.35; }
+.chron-item .meta{ font-size:11px; color:var(--muted); }
+.chron-unarchived{ border-color:var(--warn); }
+

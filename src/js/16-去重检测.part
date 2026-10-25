@@ -1,0 +1,28 @@
+/* ============================================================
+   9. 去重检测（§7 三级判重）
+   ============================================================ */
+function detectDuplicate(draft){
+  const titleKeys = [draft.titleCn, draft.titleOriginal].concat(draft.aliases || []).filter(Boolean).map(normalize);
+  const mainKey = normalize(draft.titleCn || draft.titleOriginal || "");
+  const y = yearOf(draft.airDate);
+  let best = null;
+  for(const a of state.anime){
+    const aIds = a.sourceIds || {};
+    const dIds = draft.sourceIds || {};
+    let level = null;
+    if((dIds.bangumi && String(aIds.bangumi) === String(dIds.bangumi)) ||
+       (dIds.anilist && String(aIds.anilist) === String(dIds.anilist))){
+      level = "L1";
+    } else {
+      const aKeys = [a.titleCn, a.titleOriginal].concat(a.aliases || []).filter(Boolean).map(normalize);
+      if(titleKeys.some(k => k && aKeys.indexOf(k) >= 0)) level = "L2";
+      else if(mainKey && aKeys.indexOf(mainKey) >= 0 && y && yearOf(a.airDate) === y) level = "L3";
+    }
+    if(level){
+      const rank = { L1:3, L2:2, L3:1 }[level];
+      if(!best || rank > best.rank) best = { level, rank, match:a };
+    }
+  }
+  return best;
+}
+

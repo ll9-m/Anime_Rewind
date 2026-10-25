@@ -1,0 +1,58 @@
+/* ============================================================
+   1. 默认设置（§12）
+   ============================================================ */
+const DEFAULT_SETTINGS = {
+  theme: "dark",
+  ui_skin: "archive",
+  bg_image: "",
+  bg_blur: 8,
+  // 遮罩默认值经过实测标定：tools/bg-contrast.js 会按最坏背景图（浅色主题 + 纯黑图）
+  // 复算混合后的面板底色。0.35 时 muted 最低仅 4.74:1，余量太薄；
+  // 0.42 把最差值推到 5.5:1 以上，留出用户继续调高/调低的空间。
+  bg_overlay: 0.42,
+  panel_opacity: 0.85,
+  accent_color: "cyan",
+  density: "cozy",
+  default_view: "wall",
+  default_sort: "createdAt_desc",
+  card_fields: { communityScore:true, myScore:true, progress:true, year:true, genres:true },
+  status_auto_match: true,
+  episode_minutes: 22,
+  src_bangumi_enabled: true,
+  src_anilist_enabled: true,
+  data_proxy_url: "",
+  search_limit: 10,
+  stream_url: "",
+  /* 开机音是CRT 三兄弟里唯一还活着的：待机屏保与皮肤切换删除后，
+     tv_skin / crt_scanlines / crt_snow 已无作用对象，从默认值里一并移除。
+     老备份里若还带着这三个键，loadSettings 的Object.assign 会原样并进来，
+     不读取、不报错、不影响任何显示 —— 所以旧数据无需迁移。 */
+  crt_power_sound: true,
+  module_quotes: true,
+  module_sources: true,
+  module_honor: true,
+  module_wheel: true,
+  module_chronicle: true,
+  module_charts: true,
+  /* 数据安全与档案完整性（数据页里给开关） */
+  cover_localize: true,     /* 添加作品时把封面抓回本机（仅 IndexedDB 模式生效） */
+  last_backup_at: "",       /* 上次成功导出备份的时间（ISO 串），驱动首页备份提醒 */
+  mecha_tags: ["机战","机甲","机器人","机器人动画","SF"]
+};
+
+let settings = Object.assign({}, DEFAULT_SETTINGS);
+
+function loadSettings(){
+  let raw = null;
+  try { raw = localStorage.getItem(LS_SETTINGS); } catch(e){ raw = null; }
+  let obj = {};
+  if(raw){ try { obj = JSON.parse(raw) || {}; } catch(e){ obj = {}; } }
+  settings = Object.assign({}, DEFAULT_SETTINGS, obj);
+  settings.card_fields = Object.assign({}, DEFAULT_SETTINGS.card_fields, obj.card_fields || {});
+  if(!Array.isArray(settings.mecha_tags) || !settings.mecha_tags.length) settings.mecha_tags = DEFAULT_SETTINGS.mecha_tags.slice();
+}
+function saveSettings(){
+  try { localStorage.setItem(LS_SETTINGS, JSON.stringify(settings)); }
+  catch(e){ toast("设置保存失败：" + e.message, "err"); }
+}
+

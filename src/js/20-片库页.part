@@ -1,0 +1,99 @@
+/* ============================================================
+   13. 片库页
+   ============================================================ */
+function cardHTML(a){
+  const cf = settings.card_fields || {};
+  const p = progressOf(a);
+  const name = a.titleCn || a.titleOriginal || "未命名";
+  const orig = a.titleOriginal && a.titleOriginal !== name ? a.titleOriginal : "";
+
+  // 正面（封面）下方的玻璃字幕块：只放一眼要看的字段
+  let sub = "";
+  if(cf.year !== false && a.airDate) sub += "<span>" + esc(String(a.airDate).slice(0,4)) + "</span>";
+  if(cf.communityScore !== false && a.communityScore != null) sub += '<span class="score-pill">' + ic("star",11) + fmtNum(a.communityScore) + "</span>";
+  if(cf.myScore !== false && a.myScore != null) sub += '<span class="score-pill mine">' + ic("starfill",11) + fmtNum(a.myScore) + "</span>";
+
+  /* 系列徽标：只在真归了类时显示。
+     「默认系列」满库都是时不挂标签 —— 挂满屏的「默认系列」等于没信息。 */
+  const sName = seriesNameOf(a);
+  const inSeries = !!seriesById(a.seriesId);
+  const seriesTag = inSeries
+    ? '<span class="fc-series" title="系列：' + attr(sName) + '">' + ic("grid",10) + esc(sName) + "</span>"
+    : "";
+
+  // 背面：完整元信息
+  let rows = "";
+  const addRow = (k, v) => { if(v) rows += "<div><b>" + esc(k) + "</b><span>" + v + "</span></div>"; };
+  addRow("译名", esc(name));
+  if(inSeries) addRow("系列", esc(sName));
+  if(orig && cf.year !== false) addRow("原名", esc(orig));
+  if((a.studios||[]).length) addRow("制作", esc(a.studios.join("、")));
+  if(cf.communityScore !== false && a.communityScore != null) addRow("社区分", ic("star",11) + " " + fmtNum(a.communityScore));
+  if(cf.myScore !== false && a.myScore != null) addRow("我的分", ic("starfill",11) + " " + fmtNum(a.myScore));
+  if(cf.genres !== false && (a.genres||[]).length) addRow("类型", esc(a.genres.join(" / ")));
+  if(a.totalEpisodes != null) addRow("集数", esc(String(a.totalEpisodes)));
+  if((a.rewatchCount||0) > 0){
+    addRow("重看", esc(String(a.rewatchCount)) + " 次" +
+      (lastViewingOf(a) ? "（上次 " + esc(lastViewingOf(a)) + "）" : ""));
+  }
+  if(reunionYearsOf(a) != null && reunionYearsOf(a) > 0) addRow("重逢", "时隔 " + reunionYearsOf(a) + " 年");
+  if((a.reviews||[]).length) addRow("观看记录", esc(String(a.reviews.length)) + " 条");
+
+  let prog = "";
+  if(cf.progress !== false){
+    prog = p === null
+      ? '<div class="fc-prog"><span>已看 ' + (a.watchedEpisodes||0) + " 集</span></div>"
+      : '<div class="fc-prog"><div class="progress"><i style="width:' + p + '%"></i></div><span>' + (a.watchedEpisodes||0) + "/" + a.totalEpisodes + " · " + Math.round(p) + "%</span></div>";
+  }
+
+  // 卡片右下角原先还有一个常驻的圆形翻面按钮（flipBtn），现已整块删除。
+  // 它在桌面上纯属视觉噪音 —— 鼠标移上去卡片就自己翻了，按钮只是压住封面；
+  // 但触摸设备没有 hover，它曾是唯一的翻面入口。
+  // 现在这个入口由 bindLibraryActions 的「点卡片翻面」承担：
+  // 桌面端行为完全不变，触摸端点一下也能翻面看资料与操作。
+  // 背面只留一个入口。
+  // 原先三个按钮（改状态 / 重看 / 详情）实测点击后全都落到详情页 ——
+  // 根因是 backface-visibility 不阻止命中测试，正面字幕块把背面按钮的
+  // 点击全吃掉，冒泡到卡片的 data-open。修掉之后三者行为才真正不同，
+  // 但卡片正面积极小，三入口挤在一条 44px 宽的余量里点不准，
+  // 合并为「详情」一个：状态与重看在详情页里本来就有（改状态在编辑表单，
+  // 记录重看在「重看与感想」折叠块），功能不丢，操作路径也不变长。
+  return '' +
+  '<article class="card" tabindex="0" data-open="' + attr(a.id) + '" style="--st-color:' + esc(statusColor(a)) + '" aria-label="' + attr(name) + "，" + esc(statusName(a)) + '，按回车查看详情">' +
+    '<div class="card-3d">' +
+      // 正面：封面
+      '<div class="fc-face fc-front">' +
+        '<div class="fc-cover">' + coverImg(a) + "</div>" +
+        '<div class="fc-flags">' +
+          (a.masterpiece ? '<span class="badge badge-master">' + ic("starfill",11) + "神作</span>" : "") +
+          (a.favorite ? '<span class="badge badge-fav">' + ic("heart",11) + "收藏</span>" : "") +
+        "</div>" +
+        '<div class="fc-caption">' +
+          '<div class="fc-tagrow">' +
+            (a.masterpiece || a.favorite ? '<span class="fc-tag">' + esc(statusName(a)) + "</span>" : "") +
+            seriesTag +
+          "</div>" +
+          '<div class="fc-name clamp-2">' + esc(name) + "</div>" +
+          (orig ? '<div class="fc-orig truncate">' + esc(orig) + "</div>" : "") +
+          (sub ? '<div class="fc-sub">' + sub + "</div>" : "") +
+        "</div>" +
+      "</div>" +
+      // 背面：光带装饰 + 资料 + 操作
+      '<div class="fc-face fc-back">' +
+        '<div class="fc-sweep" aria-hidden="true"></div>' +
+        '<div class="fc-orb fc-orb-a" aria-hidden="true"></div>' +
+        '<div class="fc-orb fc-orb-b" aria-hidden="true"></div>' +
+        '<div class="fc-orb fc-orb-c" aria-hidden="true"></div>' +
+        '<div class="fc-body">' +
+          '<div class="fc-title clamp-2">' + esc(name) + "</div>" +
+          '<div class="fc-rows">' + rows + "</div>" +
+          prog +
+        "</div>" +
+        '<div class="fc-acts">' +
+          '<button class="btn btn-sm btn-primary" type="button" data-act="detail" data-id="' + attr(a.id) + '" title="查看详情与播放" aria-label="查看详情与播放">' + ic("play",14) + "详情</button>" +
+        "</div>" +
+      "</div>" +
+    "</div>" +
+  "</article>";
+}
+

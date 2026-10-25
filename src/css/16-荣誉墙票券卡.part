@@ -1,0 +1,158 @@
+/* ============================================================
+   荣誉墙：票券卡（ticket card）
+   ------------------------------------------------------------
+   造型取自复古演出票：上下齿孔、左侧圆缺口、底部条形码。
+   三个实现决策值得说明：
+
+   1)齿孔用 CSS mask 而非 SVG filter
+      原始设计用 feTurbulence + feSpecularLighting 做凹凸质感。
+      12 张卡同时跑 SVG 滤镜会让每次重绘都触发离屏合成，实测明显掉帧；
+      而票券的说服力来自"齿孔轮廓"而非"金属光泽"，所以改用 mask。
+
+   2) 背景图与文字分层
+      图片永远在 .tk-bg 里，上方压一层从浅到深的渐变保证文字对比度。
+      未获得的卡片整体降饱和 + 压暗（filter + opacity），
+      这是"偏灰暗"的实现点 —— 不是换个边框色了事。
+
+   3) 悬停动效克制
+      只做位移与阴影变化，不做缩放：卡片已经密集，
+      缩放会让整行卡片抖动。
+   ============================================================ */
+.tk-grid{ display:grid; grid-template-columns:repeat(auto-fill,minmax(196px,1fr)); gap:var(--sp-5) var(--sp-4); padding:var(--sp-2) 0 var(--sp-3); }
+.tk{
+  --tk-perf:11px;
+  position:relative; display:flex; flex-direction:column; gap:var(--sp-2);
+  aspect-ratio:5/7; padding:calc(var(--tk-perf) + 6px) 15px 13px;
+  border-radius:var(--r-md); overflow:hidden;
+  background:var(--panel-2); border:1px solid var(--border);
+  box-shadow:var(--shadow);
+  transition:transform var(--dur) var(--ease), box-shadow var(--dur) var(--ease);
+  /* 票纸纵向纹理：极淡的重复渐变，静态无开销 */
+  background-image:repeating-linear-gradient(180deg, transparent 0 3px, var(--hairline) 3px 4px);
+}
+.tk:hover{ transform:translateY(-4px); box-shadow:var(--shadow-2); }
+.tk.is-got{ border-color:var(--border-2); }
+
+/* ---- 齿孔：上下各一排半圆缺口 + 两侧圆缺口 ---- */
+.tk-perf{
+  position:absolute; inset:0; z-index:3; pointer-events:none; border-radius:inherit;
+  --p:var(--tk-perf);
+  -webkit-mask:
+    radial-gradient(circle at 50% 0, transparent calc(var(--p) - 1px), #000 calc(var(--p) - 1.5px)),
+    radial-gradient(circle at 50% 100%, transparent calc(var(--p) - 1px), #000 calc(var(--p) - 1.5px)),
+    radial-gradient(circle 7px at left center, transparent 96%, #000 100%),
+    radial-gradient(circle 7px at right center, transparent 96%, #000 100%);
+  mask:
+    radial-gradient(circle at 50% 0, transparent calc(var(--p) - 1px), #000 calc(var(--p) - 1.5px)),
+    radial-gradient(circle at 50% 100%, transparent calc(var(--p) - 1px), #000 calc(var(--p) - 1.5px)),
+    radial-gradient(circle 7px at left center, transparent 96%, #000 100%),
+    radial-gradient(circle 7px at right center, transparent 96%, #000 100%);
+  -webkit-mask-composite:source-in;
+  mask-composite:intersect;
+  background:var(--panel-2);
+  box-shadow:inset 0 0 0 1px var(--border);
+  opacity:.9;
+}
+
+/* ---- 背景层 ---- */
+.tk-bg{ position:absolute; inset:0; z-index:0; overflow:hidden; }
+.tk-art{ width:100%; height:100%; object-fit:cover; display:block; }
+.tk-bg.has-art::after{
+  content:""; position:absolute; inset:0;
+  /* 文字区压深，保证 ≥4.5:1；顶部留一点亮部让图能被看见 */
+  background:linear-gradient(180deg, rgba(4,8,14,.34) 0%, rgba(4,8,14,.55) 38%, rgba(4,8,14,.88) 72%, rgba(4,8,14,.96) 100%);
+}
+/* 纯色玻璃：用户未传图时的默认背景，必须真的好看 */
+.tk-glass{
+  position:absolute; inset:0;
+  background:
+    radial-gradient(120% 90% at 22% 12%, color-mix(in srgb, var(--tk-tint) 62%, transparent), transparent 62%),
+    conic-gradient(from 200deg at 68% 38%, var(--tk-tint), color-mix(in srgb, var(--tk-tint) 40%, #8b5cf6), color-mix(in srgb, var(--tk-tint) 55%, #22d3ee), var(--tk-tint));
+  opacity:.42;
+}
+.tk-glass::after{
+  content:""; position:absolute; inset:0;
+  background:linear-gradient(160deg, rgba(255,255,255,.22), transparent 42%, rgba(0,0,0,.3));
+  mix-blend-mode:overlay;
+}
+
+/* ---- 未获得：整体降饱和并压暗 ---- */
+.tk:not(.is-got) .tk-bg{ filter:saturate(.28) brightness(.52); }
+.tk:not(.is-got) .tk-head,
+.tk:not(.is-got) .tk-cat,
+.tk:not(.is-got) .tk-desc{ color:var(--text-2); }
+.tk:not(.is-got) .tk-head svg{ opacity:.55; }
+.tk:not(.is-got){ background-color:var(--panel); }
+
+/* ---- 文字内容 ---- */
+.tk-head{ position:relative; z-index:2; display:flex; align-items:center; gap:6px; color:var(--text); }
+.tk-head span{ font-size:var(--fs-lg); font-weight:700; letter-spacing:.01em; line-height:1.25; }
+.tk-head svg{ flex:0 0 18px; color:var(--accent); }
+.tk.is-got .tk-head svg{ color:var(--warn); }
+.tk-cat{
+  position:relative; z-index:2; align-self:flex-start;
+  padding:1px 7px; font-size:10.5px; letter-spacing:.06em;
+  border:1px solid var(--hairline); border-radius:var(--r-sm);
+  color:var(--text-2); background:var(--panel-2);
+}
+.tk-desc{ position:relative; z-index:2; font-size:var(--fs-xs); line-height:1.55; color:var(--text-2); }
+.tk-progress{
+  position:relative; z-index:2; height:4px; border-radius:2px;
+  background:var(--panel-3); overflow:hidden;
+}
+.tk-progress > i{ display:block; height:100%; background:var(--accent); opacity:.85; }
+.tk-foot{
+  position:relative; z-index:2; margin-top:auto;
+  display:flex; align-items:center; justify-content:space-between; gap:6px; min-height:22px;
+}
+.tk-seal{
+  padding:1px 8px; font-size:10px; font-weight:700; letter-spacing:.12em;
+  color:#0b1016; background:var(--warn); border-radius:var(--r-sm);
+}
+.tk-prog{ font-family:var(--font-mono); font-size:11px; color:var(--muted); font-variant-numeric:tabular-nums; }
+/* 条形码：纯 box-shadow 画的竖条，不占额外元素 */
+.tk-barcode{
+  width:2px; height:20px; margin-right:2px;
+  box-shadow:
+    5px 0 0 0 currentColor, 7px 0 0 0 currentColor, 11px 0 0 0 currentColor,
+    15px 0 0 0 currentColor, 19px 0 0 0 currentColor, 23px 0 0 0 currentColor,
+    27px 0 0 0 currentColor, 31px 0 0 0 currentColor, 35px 0 0 0 currentColor;
+  color:var(--text); opacity:.5;
+}
+.tk-ops{
+  position:relative; z-index:4;
+  display:flex; gap:4px; flex-wrap:wrap;
+  padding-top:2px; border-top:1px dashed var(--hairline);
+}
+.tk-ops .btn{ min-height:24px; padding:0 7px; font-size:11px; }
+.tk-ops .btn svg{ width:12px; height:12px; }
+
+/* 表单里的缩略图 */
+.hf-thumb{
+  width:100%; max-width:220px; aspect-ratio:16/9; border-radius:var(--r-sm);
+  border:1px solid var(--border); background:var(--panel-2);
+  display:flex; align-items:center; justify-content:center; overflow:hidden; color:var(--muted);
+}
+.hf-thumb img{ width:100%; height:100%; object-fit:cover; }
+
+
+/* 自动补全 */
+.autocomplete{ position:relative; }
+.ac-list{
+  position:absolute; z-index:20; left:0; right:0; top:calc(100% + 4px); max-height:200px; overflow-y:auto;
+  background:var(--panel-2); border:1px solid var(--border-2); border-radius:var(--r-md); box-shadow:var(--shadow-2);
+}
+.ac-list li{ padding:6px var(--sp-3); cursor:pointer; font-size:var(--fs-sm); }
+.ac-list li:hover,.ac-list li[aria-selected="true"]{ background:var(--accent-soft); }
+
+/* 数据源结果列表 */
+.src-result{ display:flex; gap:var(--sp-3); padding:var(--sp-2); border:1px solid var(--border); border-radius:var(--r-md); background:var(--panel-2); cursor:pointer; width:100%; text-align:left; }
+.src-result:hover{ border-color:var(--accent); background:var(--accent-soft); }
+.src-thumb{ width:44px; height:60px; flex:0 0 44px; border-radius:5px; overflow:hidden; background:var(--panel-3); }
+.src-thumb img{ width:100%; height:100%; object-fit:cover; }
+.form-grid{ display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:var(--sp-3); }
+.form-grid .full{ grid-column:1/-1; }
+@media (max-width:900px){ .form-grid{ grid-template-columns:minmax(0,1fr); } }
+
+/*@@CSS3@@*/
+

@@ -1,0 +1,129 @@
+/* ============================================================
+   17. 放映厅 · 外部播放器
+   ------------------------------------------------------------
+   把作品详情页里的「在线观看」变成真的能播，而不只是给个外链。
+
+   现实约束（必须先讲清，否则用户会以为是 bug）：
+   绝大多数视频站用 X-Frame-Options 或 CSP frame-ancestors 禁止被第三方 iframe 嵌入。
+   实测结论：
+     · YouTube   —— /embed/ 官方播放器允许嵌入（首选）
+     · Bilibili  —— player.bilibili.com 不发送 X-Frame-Options，可嵌入（实测 200）
+     · 芒果/爱奇艺/腾讯 —— 部分可嵌入，多数需白名单，失败率较高
+     · 任意网站   —— 取决于对方是否设置 frame-ancestors
+   iframe 被拒时**不会抛错**，只会白屏。所以下面做三件事：
+     1) 按平台规则把用户粘的网址翻译成可嵌入地址（省掉用户自己找 embed 链接）
+     2) 15 秒内没收到 iframe 的 load 事件 → 判定为被拒，直接给出诊断与替代路径
+     3) 永远保留「在新标签打开」按钮 —— 内嵌失败时这是唯一出路
+   ============================================================ */
+const EMBED_RULES = [
+  // YouTube：多种网址形态统一归一
+  { id:"youtube", name:"YouTube",
+    test:u => /(^|\.)(youtube\.com|youtu\.be|youtube-nocookie\.com)$/i.test(hostOf(u)),
+    build(u){
+      const v = pick(u, /[?&]v=([\w-]{6,})/) || pick(u, /youtu\.be\/([\w-]{6,})/) || pick(u, /\/embed\/([\w-]{6,})/) || pick(u, /\/shorts\/([\w-]{6,})/);
+      if(!v) return null;
+      const list = pick(u, /[?&]list=([\w-]+)/);
+      return "https://www.youtube-nocookie.com/embed/" + v + "?rel=0" + (list ? "&list=" + list : "");
+    }},
+  // Bilibili：支持 bvid 与 aid，以及分 P 播放
+  { id:"bilibili", name:"哔哩哔哩",
+    test:u => /(^|\.)bilibili\.com$|player\.bilibili\.com$/i.test(hostOf(u)),
+    build(u){
+      /* av 号必须先于「路径里随便抓一段当 bvid」判断：
+         /video/av170001 的路径捕获是 "av170001"，
+         旧代码把它当 bvid 拼进 player 地址，内嵌必然报「视频链接失效」。 */
+      let bvid = pick(u, /bvid=([\w]+)/);
+      let aid = pick(u, /aid=(\d+)/);
+      if(!bvid && !aid){
+        const m = u.match(/bilibili\.com\/video\/([\w]+)/);
+        if(m){
+          if(/^av\d+$/i.test(m[1])) aid = m[1].slice(2);
+          else bvid = m[1];
+        }
+      }
+      let p = pick(u, /[?&]p=(\d+)/);
+      if(!bvid && !aid) return null;
+      const src = bvid
+        ? "https://player.bilibili.com/player.html?bvid=" + bvid + (p ? "&p=" + p : "") + "&high_quality=1&danmaku=0&autoplay=0"
+        : "https://player.bilibili.com/player.html?aid=" + aid + (p ? "&p=" + p : "") + "&high_quality=1&danmaku=0&autoplay=0";
+      return src;
+    }},
+  /* 爱奇艺的 embed 需要带 tvid 的专用播放器地址，且不同入口规则不一、
+     失败率高。这里不硬猜：能取出 tvid 就交给通用透传并提示可能需要新标签打开，
+     取不到就明确说不支持 —— 好过给一个必定白屏的 iframe。 */
+  { id:"iqiyi", name:"爱奇艺", test:u => /(^|\.)iqiyi\.com$/.test(hostOf(u)),
+    build:u => {
+      const tvid = pick(u, /[?&]tvid=([^&]+)/);
+      if(tvid) return "https://www.iqiyi.com/" + encodeURIComponent(tvid) + ".html";
+      return null;
+    }},
+  { id:"vimeo", name:"Vimeo",
+    test:u => /(^|\.)vimeo\.com$/.test(hostOf(u)),
+    build:u => {
+      // 三种形态都要认：vimeo.com/<id>、vimeo.com/channels/x/<id>、
+      // 以及已经转好的 player.vimeo.com/video/<id>（后者必须原样透传，
+      // 否则用户从别处复制来的播放器地址会被判为无效）
+      const d = pick(u, /player\.vimeo\.com\/video\/(\d+)/)
+        || pick(u, /vimeo\.com\/(?:channels\/[\w-]+\/|groups\/[\w-]+\/videos\/)?(\d+)/);
+      return d ? "https://player.vimeo.com/video/" + d : null;
+    }},
+  { id:"generic", name:"通用网页", test:() => true, build:u => u }
+];
+function pick(u, re){ const m = u.match(re); return m ? m[1] : null; }
+
+/* ---- B 站番剧（/anime/play/*）----
+ *
+ * 起因是一个真实故障：用户粘的是番剧播放页
+ *   https://www.bilibili.com/bangumi/play/ep102167
+ * 而下面的 bilibili 规则只认 BV 号与 av 号，取不到 bvid/aid 就返回 null，
+ * 于是「播放」报解析失败、「保存」也被一起拒绝（保存被错误地依赖了嵌入解析）。
+ *
+ * 关键实测结论（tools/probe-bili-shot.js + tools/probe-bili-api.js）：
+ *   1. player.bilibili.com/player.html?ep_id=102167  虽然 HTTP 200，
+ *      渲染出来是「非常抱歉…视频链接失效」。番剧不能直接用 ep_id 播。
+ *   2. 换成 bvid + cid 立刻正常出画面（实测《漆黑的子弹》24:00）。
+ *   3. 季信息 API（pgc/view/web/season）在真实浏览器页面里 fetch 返回 200，
+ *      带 bvid/cid/episodes 完整数据 —— 所以纯前端就能完成换算，不必加后端。
+ */
+function bilibiliSeasonId(u){
+  // /bangumi/play/ss4181 → season_id=4181；/bangumi/play/ep102167 → 走 ep_id 换算
+  const ss = pick(u, /bangumi\/play\/ss(\d+)/) || pick(u, /[?&]season_id=(\d+)/);
+  if(ss) return { seasonId:ss };
+  const ep = pick(u, /bangumi\/play\/ep(\d+)/) || pick(u, /[?&]ep_id=(\d+)/);
+  if(ep) return { epId:ep };
+  return null;
+}
+const biliSeasonCache = new Map();
+/* 换算番剧 → bvid + cid。返回 { bvid, cid, title, total } 或抛错。
+   带缓存：同一季反复打开不该反复打扰对方接口。 */
+async function fetchBiliSeason(key){
+  const ck = JSON.stringify(key);
+  if(biliSeasonCache.has(ck)) return biliSeasonCache.get(ck);
+  const q = key.epId ? "ep_id=" + key.epId : "season_id=" + key.seasonId;
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), 8000);
+  let data;
+  try{
+    const res = await fetch("https://api.bilibili.com/pgc/view/web/season?" + q,
+      { signal: ctl.signal, credentials:"omit" });
+    if(!res.ok) throw new Error("番剧接口返回 " + res.status);
+    data = await res.json();
+  }catch(e){
+    throw new Error("查不到番剧信息（" + (e && e.message || e) + "）");
+  }finally{ clearTimeout(timer); }
+  if(!data || data.code !== 0 || !data.result) throw new Error("番剧接口没有返回可用数据");
+  const r = data.result;
+  const eps = r.episodes || [];
+  /* ep_id 入口要精确定位到用户点的那一集：接口返回整季，
+     第一集不一定是目标集。 */
+  let target = null;
+  if(key.epId){
+    const want = String(key.epId);
+    target = eps.find(e => String(e.ep_id) === want) || eps.find(e => String(e.bvid) && String(e.link || "").indexOf("ep" + want) >= 0);
+  }
+  const ep = target || eps[0];
+  if(!ep || !ep.bvid || !ep.cid) throw new Error("番剧接口里没有这一集的播放信息");
+  const out = { bvid:ep.bvid, cid:ep.cid, title:r.season_title || r.title || "", total:eps.length };
+  biliSeasonCache.set(ck, out);
+  return out;
+}

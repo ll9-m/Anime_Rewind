@@ -450,7 +450,9 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
      「16.6 → 16.9」的代码块去搜 —— 那段里还夹着播放器面板，
      它切换线路时调saveAnime 是既有行为（另一条路径），
      混进来会让这条断言变成「不许在整个应用里出现 saveAnime」。 */
-  const writeFns = fileSrc.match(/async function persistAnimeQuiet[\s\S]*?\/\* 外部播放器区/);
+  /* 16.6 播放源台账已上移到领域层（2026-10 模块化）：块尾锚点改为
+     同模块内顺序稳定的 setActiveSource，不再依赖「外部播放器区」注释的位置。 */
+  const writeFns = fileSrc.match(/async function persistAnimeQuiet[\s\S]*?async function setActiveSource\b/);
   check("台账写操作代码块存在", !!writeFns, "未找到台账写操作块");
   check("台账写操作不调用 saveAnime",
     !!writeFns && !/saveAnime\(/.test(writeFns[0]),

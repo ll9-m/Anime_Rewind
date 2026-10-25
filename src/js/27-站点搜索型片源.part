@@ -1,0 +1,237 @@
+/* ============================================================
+   站点搜索型片源
+   ------------------------------------------------------------
+   起因：用户不想给每部番都去找具体播放页，只想存「这个站能看番」，
+   点一下让站自己搜。
+
+   这里有一条硬边界要先说清：**浏览器不允许跨域往别人的页面里打字**。
+   iframe 里的第三方页面受同源策略保护，读不到它的搜索框，更别说赋值；
+   而多数站点还会用 X-Frame-Options / CSP frame-ancestors 直接拒绝被嵌入。
+   所以「自动填写动漫名」在技术上只能是这样实现：
+
+     把片名拼进对方站点的搜索 URL（?q= / ?keyword= / 路径段），
+     然后打开这个 URL。
+
+   这几乎是所有站点都支持的（搜索本质就是一次 GET），
+   于是功能做得到，只是形态是「帮你把关键词带过去搜」而不是「替你敲键盘」。
+   打开一律走新标签：站内 iframe 能不能成取决于对方是否允许，
+   失败时给用户的是白屏，而不是「搜到了」。
+   ============================================================ */
+/* tpl 是**模板**而不是最终 URL：{kw} 必须原样保留，
+   交给 buildSearchUrl 在打开那一刻替换。
+   曾经写成 build(origin, kw) 并把 "{kw}" 传进去，
+   结果 encodeURIComponent 把它变成 %7Bkw%7D —— 模板从此永远拼不出关键词。 */
+const SEARCH_RULES = [
+  { id:"bilibili", name:"哔哩哔哩",
+    test:h => /(^|\.)bilibili\.com$/i.test(h),
+    tpl:"https://search.bilibili.com/all?keyword={kw}" },
+  { id:"iqiyi", name:"爱奇艺",
+    test:h => /(^|\.)iqiyi\.com$/i.test(h),
+    tpl:"https://so.iqiyi.com/so/q_{kw}" },
+  { id:"youku", name:"优酷",
+    test:h => /(^|\.)youku\.com$/i.test(h),
+    tpl:"https://so.youku.com/search_video/q_{kw}" },
+  { id:"qq", name:"腾讯视频",
+    test:h => /(^|\.)(v\.qq\.com|qq\.com)$/i.test(h),
+    tpl:"https://v.qq.com/x/search/?q={kw}" },
+  { id:"mgtv", name:"芒果 TV",
+    test:h => /(^|\.)mgtv\.com$/i.test(h),
+    tpl:"https://so.mgtv.com/so/k-{kw}" },
+  { id:"acfun", name:"AcFun",
+    test:h => /(^|\.)acfun\.cn$/i.test(h),
+    tpl:"https://www.acfun.cn/search?keyword={kw}" },
+  { id:"dmhy", name:"动漫花园",
+    test:h => /(^|\.)(dmhy\.org|share\.dmhy\.org)$/i.test(h),
+    tpl:"https://share.dmhy.org/topics/list?keyword={kw}" }
+];
+function encKW(kw){ return encodeURIComponent(String(kw || "").trim()); }
+/* 站点首页判定：只看「是不是一个站的根地址」。
+   判定窄一点没关系 —— 判成播放页顶多是存成普通线路，
+   判成首页才会去问搜索模板，误判的代价不对称。 */
+function isSiteHome(u){
+  const n = normalizeStreamURL(u);
+  if(!n) return false;
+  try{
+    const p = new URL(n);
+    const path = p.pathname.replace(/\/+$/, "");
+    return !path && !p.search && !p.hash;
+  }catch(e){ return false; }
+}
+/* 推断搜索模板：命中内置规则用它，否则给三种最常见的路由形态让用户挑。
+   不猜「一定能用」，而是摆出来 —— 猜错的话用户面对的是搜不出结果的页面，
+   而那是他无法自己修正的（他不知道我们拼了什么 URL）。 */
+function searchCandidates(home){
+  const n = normalizeStreamURL(home);
+  if(!n) return [];
+  let origin = "";
+  try{ origin = new URL(n).origin; }catch(e){ return []; }
+  const host = hostOf(n);
+  const rule = SEARCH_RULES.find(r => r.test(host));
+  if(rule) return [rule.tpl];
+  return [origin + "/search?q={kw}", origin + "/search?keyword={kw}", origin + "/search/{kw}"];
+}
+function inferSearchUrl(home){ const c = searchCandidates(home); return c.length ? c[0] : ""; }
+/* 把模板拼成最终 URL。模板里没有 {kw} 时按「末尾追加关键词」兜底，
+   而不是返回空 —— 用户手填模板时漏写占位符是很常见的，
+   静默失败会让「点了没反应」变成最坏的反馈。 */
+function buildSearchUrl(tpl, kw){
+  const t = String(tpl || "").trim();
+  if(!t) return "";
+  const k = String(kw || "").trim();
+  /* 空关键词也不能把字面量 {kw} 带出去 —— 那会打开一个必然无效的地址 */
+  if(!k) return t.replace(/\{kw\}/g, "");
+  return t.indexOf("{kw}") >= 0 ? t.replace(/\{kw\}/g, encKW(k)) : t + encKW(k);
+}
+/* 搜索用哪个片名：中文名优先，没有再退回原名。
+   搜索站绝大多数按中文名收录，原名搜不到是常态。 */
+function searchKeywordFor(a){
+  if(!a) return "";
+  return String(a.titleCn || a.titleOriginal || "").trim();
+}
+/* 搜索源的默认名字：认得出的站用站点名，认不出用域名 ——
+   「线路 1」这种名字在台账里等于没有名字。 */
+function siteLabelOf(u){
+  const h = hostOf(normalizeStreamURL(u) || u);
+  const r = SEARCH_RULES.find(x => x.test(h));
+  return (r ? r.name : (h || "站点")) + " · 搜索";
+}
+
+/* 宽松校验：只要求有协议头。URL 构造函数会拒绝 javascript: 等伪协议。 */
+/* 把任意网址解析为可嵌入地址；同时告知用户「发生了什么转换」，
+   否则他会以为自己粘的链接被系统偷偷改了。
+   番剧链接需要一次网络换算，所以额外提供异步版 resolveEmbedAsync。 */
+function resolveEmbed(raw){
+  const u = normalizeStreamURL(raw);
+  if(!u) return { ok:false, reason:"网址无效" };
+  for(const r of EMBED_RULES){
+    if(!r.test(u)) continue;
+    const src = r.build(u);
+    if(src) return { ok:true, src, rule:r, changed: src !== u, orig:u };
+    /* 番剧播放页：同步阶段无法换算，但并不是无效链接。
+       标记 needsSeason 交给异步流程，提示语要说清「正在换算」而不是「不支持」。 */
+    if(r.id === "bilibili" && bilibiliSeasonId(u)){
+      return { ok:false, needsSeason:true, reason:"正在换算番剧播放地址…", rule:r, orig:u };
+    }
+    return { ok:false, reason:"没能从这条 " + r.name + " 链接里解析出视频地址，请改用带播放器的网址", rule:r, orig:u };
+  }
+  return { ok:false, reason:"无法识别的网址", orig:u };
+}
+/* 异步解析：内部处理番剧换算。UI 一律走这个。 */
+/* 换算失败时不留死路：把「官方页直接看」的结果一起带回去。
+ *
+ * 实测（tools/probe-file-origin.js）：用 file:// 打开时 origin 是 null，
+ * B 站接口一律 "Failed to fetch"，番剧换算必然失败。这是浏览器的
+ * 同源策略，不是我代码能绕过的 —— 与其让用户对着一个空面板发呆，
+ * 不如明确告诉他「这台机器上无法内嵌，已为你准备官方页面」。
+ */
+async function resolveEmbedAsync(raw){
+  const sync = resolveEmbed(raw);
+  if(sync.ok || !sync.needsSeason) return sync;
+  try{
+    const key = bilibiliSeasonId(sync.orig);
+    const info = await fetchBiliSeason(key);
+    const rule = EMBED_RULES.find(r => r.id === "bilibili");
+    const src = "https://player.bilibili.com/player.html?bvid=" + info.bvid +
+      "&cid=" + info.cid + "&p=1&high_quality=1&danmaku=0&autoplay=0";
+    return { ok:true, src, rule, changed:true, orig:sync.orig, season:info };
+  }catch(e){
+    return {
+      ok:false,
+      needOfficial:true,
+      official:sync.orig,
+      reason:"番剧地址需要联网换算成播放器地址，但当前环境取不到（" +
+        (e && e.message || String(e)) + "）。" +
+        "点「新标签打开」会直接跳到 B 站官方页面观看，片源已经保存好了。",
+      rule:sync.rule, orig:sync.orig
+    };
+  }
+}
+
+/* 打开外部播放器。返回一个状态对象供 UI 挂诊断逻辑。
+   番剧需要网络换算，所以这里改成异步。 */
+async function openExternalPlayer(raw, onStatus){
+  const res = await resolveEmbedAsync(raw);
+  if(!res.ok){
+    onStatus({ phase:"error", reason:res.reason, orig:res.orig || raw });
+    return res;
+  }
+  onStatus({ phase:"loading", src:res.src, rule:res.rule, changed:res.changed, orig:res.orig, season:res.season });
+  return res;
+}
+
+/* 在放映厅页内挂载播放器。返回清理函数。
+   番剧需要先换算 bvid+cid，故为异步；调用方必须 await，
+   否则拿到的 Promise 会被当成清理函数，播放器永远挂不上去。 */
+async function mountStreamPlayer(mountEl, raw, statusEl){
+  const frame = document.createElement("iframe");
+  frame.className = "stream-frame";
+  frame.setAttribute("allow", "accelerometer; autoplay; encrypted-media; picture-in-picture; fullscreen");
+  frame.setAttribute("allowfullscreen", "true");
+  frame.setAttribute("referrerpolicy", "no-referrer");
+  frame.setAttribute("sandbox", "allow-scripts allow-same-origin allow-presentation allow-popups allow-forms");
+  frame.setAttribute("title", "外部播放器");
+  frame.src = "about:blank";
+
+  /* 两个独立标志，不能合成一个：
+     旧实现把「拿到解析结果」和「iframe 已加载」混在一个 settled 里，
+     loading 阶段就置真 —— 此后 load 指引与 15 秒兜底全部变成死代码，
+     嵌入被拒的用户只能永远盯着「正在准备播放」。 */
+  let srcAssigned = false;
+  let loadHandled = false;
+  let timer = null;
+  const clear = () => { if(timer){ clearTimeout(timer); timer = null; } };
+
+  function setStatus(kind, text){
+    if(!statusEl) return;
+    statusEl.className = "note-box " + (kind === "ok" ? "is-ok" : kind === "warn" ? "is-warn" : "is-err");
+    statusEl.innerHTML = (kind === "ok" ? ic("check",16) : kind === "warn" ? ic("warning",16) : ic("info",16)) +
+      "<span>" + text + "</span>";
+  }
+
+  // 外部站点的 CORS 让我们无法可靠探测「加载成功」；
+  // 真正能探测的只有一件事：load 事件是否在合理时间内到来。
+  // 站点被 XFO 拒绝时，Chrome 仍会触发 load（只是内容为空），
+  // 因此这里不把它当成功，而是给用户明确的操作指引。
+  frame.addEventListener("load", () => {
+    if(!srcAssigned || loadHandled) return;
+    loadHandled = true; clear();
+    /* 这里不能再用同步 resolveEmbed —— 番剧链接此刻需要的是
+       已换算好的 player 地址，而不是原始 bangumi 页。传入实际 src 重新判定。 */
+    const res = resolveEmbed(frame.src);
+    setStatus("warn",
+      (res.changed || /player\.bilibili\.com/.test(frame.src)
+        ? "已把链接转换为 B 站播放器地址。" : "") +
+      "如果画面是空白或提示无法播放，说明该网站禁止被嵌入或需要登录（这是对方站点的设置，不是本应用的问题）。请用「新标签打开」。");
+  });
+
+  const res = await openExternalPlayer(raw, st => {
+    if(st.phase === "error"){
+      clear();
+      setStatus("err", st.reason);
+      return;
+    }
+    clear();
+    if(st.season && st.season.title){
+      setStatus("warn", "已匹配到《" + esc(st.season.title) + "》，正在加载播放器…");
+    }
+    srcAssigned = true;
+    frame.src = st.src;
+    // 兜底：load 没来（比如被 CSP 彻底拦住）时给出明确说法
+    timer = setTimeout(() => {
+      if(loadHandled) return;
+      loadHandled = true;
+      setStatus("err", "15 秒内没有收到播放器的响应，这几乎可以确定是该网站禁止了第三方嵌入。请在新标签打开。");
+    }, 15000);
+  });
+
+  /* 换不出来（needOfficial）就不要挂一个空 iframe，
+     也不返回清理函数 —— 返回 { needOfficial } 让调用方决定下一步。 */
+  if(res && !res.ok && res.needOfficial){
+    return { needOfficial:true, official:res.official, reason:res.reason };
+  }
+
+  mountEl.innerHTML = "";
+  mountEl.appendChild(frame);
+  return () => { clear(); try{ frame.src = "about:blank"; }catch(e){} };
+}
+

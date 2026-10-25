@@ -1,0 +1,307 @@
+/* ============================================================
+   TV 套系（参考 Izuko_TV 的电视端布局）
+   ------------------------------------------------------------
+   与前三套的根本差别不在配色，在「信息密度与滚动方向」：
+   档案馆是文档式的纵向长页，TV 是图像式的横向卡行。
+   所以这里改的是布局几何，不是换皮。
+
+   底色用深灰 #2C2C2E 而不是纯黑 —— 这条来自 Izuko_TV 的实测结论：
+   Apple TV App 在 Android TV 上的页面底色是 (44,44,46)，
+   而网页版 tv.apple.com 的 #1F1F1F 在电视上与纯黑分不出来。
+   深浅两套都要跟着调，浅色同理不能纯白（大片亮底刺眼）。 */
+[data-skin="tv"]{
+  --sidebar-w:48px;                /* 收起态占位宽：与内容左缘对齐 */
+  --card-min:118px;                /* 海报卡最小宽，对应「一屏 6 张」 */
+  /* --rail-w / --rail-w-open / --tv-bleed / --tv-gap / --card-min
+     由 applyTvTokens() 从 TV_LAYOUT 写入，值与 JS 常量同源。
+     这里的字面值只是首屏兜底（applyTvTokens 未跑时也能看）。 */
+  --rail-w:48px;
+  --rail-w-open:216px;
+  --tv-bleed:64px;                 /* 下出血 */
+  --tv-card-radius:8px;
+  --tv-gap:20px;
+  --tv-secondary:.5;               /* 次要文字淡一档，与轻抬起配比 */
+  --r-lg:var(--tv-card-radius);
+  --r-xl:12px;
+}
+[data-skin="tv"][data-theme="dark"]{
+  --bg:#2C2C2E; --bg-deep:#232325;
+  --panel:#333336; --panel-2:#3A3A3D; --panel-3:#434347;
+  --text:#F2F2F7; --text-2:#C7C7CC; --muted:#98989D;
+  --border:rgba(255,255,255,.1); --border-2:rgba(255,255,255,.18);
+  --hairline:rgba(255,255,255,.08);
+}
+[data-skin="tv"][data-theme="light"]{
+  /* 浅色不是纯白：Izuko_TV 用 #BFC4C7，理由是电视上大片亮底刺眼。
+     muted 压到 #4E4E54 —— 原先的 #5A5A60 在 #BFC4C7 上只有 3.89:1，
+     达不到 WCAG AA 的 4.5:1。换底色就得重算，不能沿用档案馆套系的结论。 */
+  --bg:#BFC4C7; --bg-deep:#B4B9BD;
+  --panel:#CDD2D5; --panel-2:#D6DBDE; --panel-3:#DFE3E6;
+  --text:#141416; --text-2:#3A3A3E; --muted:#4E4E54;
+  --border:rgba(0,0,0,.12); --border-2:rgba(0,0,0,.2);
+  --hairline:rgba(0,0,0,.1);
+}
+[data-skin="tv"][data-theme="glass"]{
+  --bg:#2A2A2C; --bg-deep:#202022;
+  --panel:rgba(58,58,62,.72); --panel-2:rgba(66,66,70,.66); --panel-3:rgba(76,76,80,.6);
+  --text:#F2F2F7; --text-2:#C7C7CC; --muted:#98989D;
+  --border:rgba(255,255,255,.13); --border-2:rgba(255,255,255,.22);
+}
+
+/* 侧栏：收起态只留图标，聚焦/悬停时右侧浮出文字并压一层羽化遮罩。
+   内容整体右移让开收起宽度，不重排 —— 重排会在浮出的瞬间抖动。 */
+[data-skin="tv"] #sidebar{
+  /* 基础规则是 flex:0 0 var(--sidebar-w)，flex-basis 在 flex 容器里
+     优先于 width —— 只改 :hover 的 width 的话展开根本不会发生。
+     两处都要改。
+     position:relative 同样必要：::after 羽化遮罩是 absolute，
+     没有定位祖先时会贴到 #shell 上铺满整屏，而不是侧栏右缘的 180px。 */
+  position:relative;
+  width:var(--rail-w);
+  flex:0 0 var(--rail-w);
+  overflow:hidden;
+  transition:width var(--dur) var(--ease), flex-basis var(--dur) var(--ease);
+  background:var(--panel);
+}
+/* 羽化遮罩：原先照搬 Izuko_TV 的 TV_RAIL_SCRIM_WIDTH 做右缘渐隐。
+   那个前提是「侧栏浮在内容之上」（Compose 里 Rail 覆盖在 Surface 上）。
+   本项目的侧栏是 flex 布局里的独立不透明栏（#sidebar 自己有 background），
+   文字本来就不压在内容上，不需要羽化保护。
+   更糟的是 ::after 作为最后一个子元素 z 序在内容之上 ——
+   展开动画期间那层半透明渐变会把自己的文字洗成残影，
+   底部「收录总数/数据位置」几乎看不见。
+   去掉这层；展开态靠宽度过渡就够了。 */
+[data-skin="tv"] #sidebar:hover,
+[data-skin="tv"] #sidebar:focus-within{
+  width:var(--rail-w-open);
+  flex-basis:var(--rail-w-open);
+}
+/* 收起态必须让文字「不占布局」而不是「透明」。
+   opacity:0 的元素照样占位，而 .brand 是 justify-content:center ——
+   居中的是「图标 + 隐藏文字」这个整体（28+12+文字宽，远大于 48px），
+   两侧溢出被 overflow:hidden 裁掉，图标被推出左缘、只剩半个字露在中间。
+   上游用 AnimatedVisibility(expanded)，语义就是「不参与布局」，对应 display:none。
+   收起态不渲染文字，展开态再显示：宽度过渡本身已有 --dur，
+   文字在侧栏展开到位时出现，视觉上可接受。 */
+[data-skin="tv"] #sidebar .brand-text,
+[data-skin="tv"] #sidebar .nav-item span,
+[data-skin="tv"] #sidebar .side-honor span,
+[data-skin="tv"] #sidebar .side-stat{
+  display:none;
+  /* 展开后 216px 装不下长的系列名/称号名，不 nowrap 会折成两行把
+     整个侧栏撑高，导航项跟着错位。收起态 display:none 不受影响。 */
+  white-space:nowrap;
+}
+[data-skin="tv"] #sidebar:hover .brand-text,
+[data-skin="tv"] #sidebar:hover .nav-item span,
+[data-skin="tv"] #sidebar:focus-within .nav-item span,
+[data-skin="tv"] #sidebar:hover .side-honor span,
+[data-skin="tv"] #sidebar:hover .side-stat span,
+[data-skin="tv"] #sidebar:hover .side-stat b{ display:revert; }
+/* .side-stat 不能跟着一起 revert。
+   revert 回滚到「作者样式」，而基础 .side-stat 的 display:flex 恰好
+   也是作者样式的一部分——但这条规则里同时被自己的 display:none 覆盖过，
+   revert 的「回滚到作者样式」与本规则的声明处在同一条规则内，
+   最终算出来是 block：数值被挤到第二行，展开态只看得见「收录总数」
+   而看不见数字。逐个显式写回，别图省事。 */
+[data-skin="tv"] #sidebar:hover .side-stat,
+[data-skin="tv"] #sidebar:focus-within .side-stat{ display:flex; }
+/* 底部信息在收起态是一个纯图标方块：整块居中，文字不参与布局 */
+[data-skin="tv"] .side-honor{ justify-content:center; padding:var(--sp-2) 0; }
+[data-skin="tv"] #sidebar:hover .side-honor{ justify-content:flex-start; padding:var(--sp-2) var(--sp-3); }
+/* 导航图标块：32px 方块 + 6px 圆角，取自 TvNavigationSideRail。
+   宽度只在收起态压到 32px —— 展开态必须放回 100%，
+   否则文字被塞进 32px 宽的框里逐字换行。 */
+[data-skin="tv"] .nav-item{
+  width:32px; height:32px; border-radius:6px; justify-content:flex-start;
+  padding:0; margin:2px auto; flex:0 0 auto;
+}
+[data-skin="tv"] #sidebar:hover .nav-item,
+[data-skin="tv"] #sidebar:focus-within .nav-item{
+  width:100%; height:auto; margin:2px 0; padding:9px var(--sp-3);
+  justify-content:flex-start;
+}
+[data-skin="tv"] .nav-item span{ margin-left:var(--sp-3); }
+/* 品牌区收起时只留 mark（文字 display:none 后无需再靠 justify-content 补偿） */
+[data-skin="tv"] .brand{ justify-content:center; padding:var(--sp-3) 0; }
+[data-skin="tv"] #sidebar:hover .brand,
+[data-skin="tv"] #sidebar:focus-within .brand{ justify-content:flex-start; padding:var(--sp-2) var(--sp-2) var(--sp-4); }
+[data-skin="tv"] .brand-mark{ width:28px; height:28px; }
+
+/* 海报卡：两行定高番名。
+   一行番名也占两行高 —— 换焦点时排版不跳，这条极易漏，做了就明显。 */
+[data-skin="tv"] .card{ border-radius:var(--tv-card-radius); }
+[data-skin="tv"] .fc-face{
+  border-radius:var(--tv-card-radius);
+  border:1px solid rgba(255,255,255,.08);
+  overflow:hidden;
+}
+[data-skin="tv"] .fc-caption{ padding:var(--sp-2) var(--sp-2) var(--sp-3); }
+[data-skin="tv"] .fc-name{
+  min-height:calc(2 * 1.5em);      /* 两行定高 */
+  line-height:1.5;
+  font-size:var(--fs-sm);
+}
+[data-skin="tv"] .fc-orig,
+[data-skin="tv"] .fc-sub{ opacity:var(--tv-secondary); }
+/* 静止投影 + 聚焦抬起，两层交叉淡入。
+   抬起幅度与文字淡度要配比：抬起大就文字全亮，抬起小就该淡一档。 */
+[data-skin="tv"] .card .fc-face{ box-shadow:0 1px 4px rgba(0,0,0,.4); }
+/* 抬起不能只写 transform:scale(1.06) 挂在 .fc-face 上。
+   背面自身带着 rotateY(180deg)——那行被整体覆盖掉之后，
+   父级 .card-3d 已经转了 180°，背面就转到了侧面，
+   被自己的 backface-visibility:hidden 干掉；正面同理。
+   表现是「卡片翻过去是一片空白」。
+   所以正面只缩放、背面在保留自身旋转的前提下缩放。
+   抬升不靠 z-index：preserve-3d 元素上z-index 不参与渲染排序，
+   写了不会生效。scale 本身就把卡片顶到视觉上层。 */
+[data-skin="tv"] .card:hover .fc-front,
+[data-skin="tv"] .card:focus-visible .fc-front{
+  transform:scale(1.06);
+  box-shadow:0 12px 34px rgba(0,0,0,.55);
+}
+[data-skin="tv"] .card:hover .fc-back,
+[data-skin="tv"] .card:focus-visible .fc-back{
+  transform:rotateY(180deg) scale(1.06);
+  box-shadow:0 12px 34px rgba(0,0,0,.55);
+}
+[data-skin="tv"] .card:focus-visible{ outline:2px solid var(--accent); outline-offset:3px; }
+/* 进度条贴封面底缘，两端内缩圆角半径 */
+[data-skin="tv"] .fc-prog .progress{ height:3px; border-radius:2px; }
+/* 无封面时的占位大字（coverImg 取番名首字）要与字幕块拉开对比。
+   基础字幕块渐变从 .58 起，而 .placeholder 用的 --fs-2xl 大字在
+   TV 的 118px 窄卡上正好落在渐变最透的那一段，透出来像两层字叠在一起。
+   只压暗占位层本身，不动字幕块 —— 改字幕块会连带影响所有套系的
+   白底海报可读性（那条曲线是按纯白封面最坏情况验证的）。 */
+[data-skin="tv"] .fc-front .placeholder{
+  background:var(--panel-3);
+  color:var(--muted);
+  /* 大字降到 fs-xl：--fs-2xl 在 118px 宽的卡上会顶到字幕块 */
+  font-size:var(--fs-xl);
+}
+
+/* 片库网格：列数由 JS 按 (宽 +间距) / (最小卡宽 + 间距) 算，
+   写死列数会在某些宽度下出现「空一列」或卡片挤成一条。 */
+[data-skin="tv"] .wall{
+  grid-template-columns:repeat(var(--tv-cols, 6), minmax(0, 1fr));
+  gap:var(--tv-gap);
+}
+[data-skin="tv"] .wall{ padding-bottom:var(--tv-bleed); }
+
+/* 横滑卡行（「组标题 + 横滑行」的 TV 结构） */
+.tv-row{ margin-bottom:var(--sp-5); }
+.tv-row-head{
+  display:flex; align-items:baseline; gap:var(--sp-3);
+  padding:0 var(--sp-4) var(--sp-3);
+}
+.tv-row-head h3{
+  margin:0; font-size:var(--fs-lg); font-weight:600; color:var(--text);
+}
+.tv-row-head .hint{ font-size:var(--fs-sm); }
+.tv-row-scroll{
+  display:flex; gap:var(--tv-gap);
+  overflow-x:auto; overflow-y:hidden;
+  padding:0 var(--sp-4) var(--sp-4);
+  scroll-snap-type:x proximity;
+  scrollbar-width:thin;
+}
+.tv-row-scroll > *{ scroll-snap-align:start; flex:0 0 auto; }
+.tv-row-scroll .card{ width:var(--card-min); }
+/* 「更多」玻璃卡：模糊小图 + 玻璃色 + 左上斜向高光 + 中央圆钮加号。
+   取自 TvNativeCardView 的 TV_NATIVE_MORE_GLASS_DARK。 */
+.tv-more{
+  width:var(--card-min); aspect-ratio:2/3;
+  border-radius:var(--tv-card-radius);
+  display:flex; flex-direction:column; align-items:center; justify-content:center; gap:var(--sp-3);
+  background:var(--panel-2);
+  border:1px solid rgba(255,255,255,.12);
+  color:var(--text-2); cursor:pointer;
+  position:relative; overflow:hidden;
+  transition:transform var(--dur-fast) var(--ease), box-shadow var(--dur-fast) var(--ease);
+}
+.tv-more::before{
+  content:""; position:absolute; inset:0;
+  background:linear-gradient(135deg, rgba(255,255,255,.16) 0%, transparent 60%);
+}
+.tv-more:hover{ transform:scale(1.06); box-shadow:0 12px 34px rgba(0,0,0,.55); }
+.tv-more-icon{
+  width:34px; height:34px; border-radius:50%;
+  display:inline-flex; align-items:center; justify-content:center;
+  background:rgba(255,255,255,.16); border:1px solid rgba(255,255,255,.35);
+  color:var(--text);
+}
+.tv-more span{ font-size:var(--fs-sm); }
+
+/* 剧集卡行（详情页）：16:9 剧照 + 集号集名 + 3px 进度条。
+   尺寸与配比全部取自 FocusEpisodesSection：cellWidth/cellHeight = 256/144
+   （刚好 16:9）、圆角 6、进度条 3px、已看卡压暗到 .45。 */
+.tv-ep-row{
+  display:flex; gap:var(--sp-3); overflow-x:auto; padding:0 var(--sp-4) var(--sp-3);
+  scrollbar-width:thin;
+}
+.tv-ep{
+  flex:0 0 auto; width:256px;
+  border-radius:6px; overflow:hidden; cursor:pointer; text-align:left;
+  border:1px solid rgba(255,255,255,.1);
+  background:var(--panel-2); color:var(--text); padding:0;
+  position:relative;
+  transition:transform var(--dur-fast) var(--ease), box-shadow var(--dur-fast) var(--ease);
+}
+.tv-ep:hover{ transform:scale(1.04); box-shadow:0 8px 22px rgba(0,0,0,.5); }
+.tv-ep:focus-visible{ outline:2px solid var(--accent); outline-offset:2px; }
+.tv-ep-still{
+  aspect-ratio:16/9; width:100%;
+  background:var(--panel-3) center/cover no-repeat;
+  position:relative;
+  display:flex; align-items:flex-end; padding:var(--sp-2);
+}
+/* 剧照底部压暗：卡底 .85 的黑渐变到半高处全透明，
+   取自 FocusEpisodesSection 的 EPISODE_STILL_SCRIM_ALPHA(.85) /
+   _START(.5)。这里用渐变 stop 写 50% 而不是用元素 height 凑 ——
+   height 只能控制压暗区的总高，写70% 的话卡底亮一截、集号读不清。 */
+.tv-ep-still::after{
+  content:""; position:absolute; inset:0;
+  background:linear-gradient(to top, rgba(0,0,0,.85) 0%, rgba(0,0,0,0) 50%);
+  pointer-events:none;
+}
+.tv-ep-no{
+  position:relative; z-index:1;
+  font-family:var(--font-mono); font-size:var(--fs-sm); color:#fff; opacity:.85;
+}
+.tv-ep-body{ padding:var(--sp-2); }
+.tv-ep-name{
+  font-size:var(--fs-xs); opacity:.85; line-height:1.4;
+  display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden;
+  min-height:calc(2 * 1.4em);   /* 两行定高，换焦点不跳 */
+}
+.tv-ep-prog{ height:3px; border-radius:2px; background:rgba(255,255,255,.3); margin-top:var(--sp-2); }
+.tv-ep-prog i{ display:block; height:100%; border-radius:2px; background:var(--accent); }
+/* 四态：看过的一律压暗，在播的保留高亮 —— 与上游 isWatched / isPlaying 一致。
+   压暗值 .45 对齐 EPISODE_PAST_CARD_DIM_ALPHA。 */
+.tv-ep.is-watched .tv-ep-still::after{ background:linear-gradient(to top, rgba(0,0,0,.45) 0%, rgba(0,0,0,0) 50%); }
+.tv-ep.is-watched{ opacity:var(--tv-ep-dim, .45); }
+.tv-ep.is-playing{ border-color:var(--accent); }
+/* 「下一集」：正在播的那一集之后、还没看的那一集。
+   上游用 isPicked 表达「你选中的那一集」，这里对齐成「下一集待看」——
+   电视上一步要跨几集才能找到，标出来省得数格子。 */
+.tv-ep.is-next{ border-color:var(--accent); border-style:dashed; }
+
+/* 顶栏：玻璃胶囊。失焦比得焦更快（90ms vs 150ms）——
+   焦点离开的那个比新拿到焦点的先落回去，漏掉会觉得「焦点黏黏的」。 */
+[data-skin="tv"] #topbar{
+  background:rgba(255,255,255,.05);
+  backdrop-filter:blur(20px) saturate(150%);
+  border-bottom:1px solid rgba(255,255,255,.08);
+}
+[data-skin="tv"] .topbar-actions .btn{
+  background:rgba(255,255,255,.1); border:1px solid rgba(255,255,255,.1);
+}
+[data-skin="tv"] .topbar-actions .btn:hover{ background:rgba(255,255,255,.2); }
+
+/* TV 套系不需要全息装饰与故障按钮 */
+[data-skin="tv"] .btn::before,
+[data-skin="tv"] .btn::after{ display:none; }
+[data-skin="tv"] .holo-field .hf-glow,
+[data-skin="tv"] .holo-field .hf-edge{ display:none; }
+[data-skin="tv"] .holo-switch{ display:none; }
+

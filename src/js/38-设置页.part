@@ -1,0 +1,738 @@
+/* ============================================================
+   26. 设置页
+   ============================================================ */
+const SETTINGS_SECTIONS = [
+  { key:"look",      name:"外观" },
+  { key:"library",   name:"片库" },
+  { key:"series",    name:"系列" },
+  { key:"status",    name:"自定义状态" },
+  { key:"source",    name:"数据源" },
+  { key:"theater",   name:"放映厅" },
+  { key:"modules",   name:"功能开关" },
+  { key:"data",      name:"数据" },
+  { key:"about",     name:"关于" }
+];
+const settingsState = { tab:"look" };
+function setRow(label, desc, ctrlHTML){
+  return '<div class="setting-row"><div><div>' + esc(label) + "</div>" +
+    (desc ? '<div class="desc">' + desc + "</div>" : "") + "</div>" +
+    '<div class="ctrl">' + ctrlHTML + "</div></div>";
+}
+/* 背景图状态三态：有图且可渲染 / 设了 key 但图丢了 / 压根没设。
+   第三种最容易和第二种混淆，所以文案里必须出现可区分的字眼。 */
+function bgStatusText(){
+  if(bgRenderable()){
+    return "背景图已生效 · " + humanSize(bgImageUrl.length) +
+      " · 缩放已压到 1920px 内，可在页面任意位置看到";
+  }
+  const lost = bgLostReason();
+  if(lost) return lost + "。请重新上传一张图片。";
+  return "尚未上传背景图。上传后会自动压缩到长边 1920px，三个主题都可用。";
+}
+function bgSettingsDesc(){
+  if(bgRenderable()) return "当前「" + ({ dark:"深色", light:"浅色", glass:"液态玻璃" }[settings.theme] || settings.theme) + "」主题下正在显示";
+  const lost = bgLostReason();
+  if(lost) return '<span class="err-text">' + esc(lost) + "</span>";
+  return "上传本地图片作为页面背景，深色 / 浅色 / 玻璃主题均可用";
+}
+function bgThumbHTML(){
+  if(bgRenderable()) return '<img src="' + esc(bgImageUrl) + '" alt="">';
+  if(bgLostReason()) return '<span class="bg-thumb-x">' + ic("warning",16) + "</span>";
+  return '<span class="bg-thumb-x">' + ic("image",16) + "</span>";
+}
+/* ---- 背景可读性保障 ----
+   面板区（.panel）在深色/浅色主题下是不透明的，背景图透不过去，正文底色恒为 --panel。
+   真正依赖遮罩的是「裸露背景区」：页头、面板间隙、网格空隙。
+   实测（tools/bg-contrast.js）：深色主题配纯白背景图时，遮罩 0.42 只有 2.48:1，
+   正文直接读不清 —— 这不是提示能解决的，得由代码兜底。
+
+   做法：算出「让纯黑与纯白两种极端背景都达标」的最小遮罩，
+   把它作为本次渲染的实际遮罩（不低于用户设定值）。
+   代价是极端背景图会被压得比较暗，但这比看不清正文好得多；
+   而对绝大多数中间调背景图，实际遮罩仍等于用户设定值，不影响观感。*/
+function renderSettings(root){
+  let side = '<div class="settings-nav">' + SETTINGS_SECTIONS.map(s =>
+    '<button type="button" data-sec="' + s.key + '" aria-current="' + (settingsState.tab === s.key) + '">' + esc(s.name) + "</button>").join("") + "</div>";
+  let body = settingsBodyHTML();
+  root.innerHTML = '<div class="settings-layout">' + side + '<div class="col">' + body + "</div></div>";
+  root.querySelectorAll("[data-sec]").forEach(b => b.addEventListener("click", () => { settingsState.tab = b.dataset.sec; rerender(); }));
+  bindSettings(root);
+}
+function settingsBodyHTML(){
+  const t = settingsState.tab;
+  let html = "";
+  if(t === "look"){
+    html += '<div class="panel"><div class="panel-head"><h3>外观</h3></div>';
+    html += setRow("主题", "深色 / 浅色 / 液态玻璃，切换即时生效",
+      '<div class="seg" role="group" aria-label="主题">' +
+      [["dark","深色"],["light","浅色"],["glass","液态玻璃"]].map(([v,n]) =>
+        '<button type="button" data-set="theme" data-val="' + v + '" aria-pressed="' + (settings.theme === v) + '">' + n + "</button>").join("") + "</div>");
+    /* UI 套系与主题正交：主题控制配色，套系控制形状与材质与布局。 */
+    html += setRow("UI 套系", "档案馆（现有）· 像素 8-bit · 科技全息 · TV 影院。TV 影院为大图横滑卡排布，可折叠侧栏",
+      '<div class="seg" role="group" aria-label="UI 套系">' +
+      [["archive","档案馆"],["pixel","像素 8-bit"],["holo","科技全息"],["tv","TV 影院"]].map(([v,n]) =>
+        '<button type="button" data-set="ui_skin" data-val="' + v + '" aria-pressed="' + (settings.ui_skin === v) + '">' + n + "</button>").join("") + "</div>");
+    html += setRow("强调色", "4–6 个预设，不提供自由取色以保证可读性",
+      ACCENTS.map(a => '<button class="swatch" type="button" data-set="accent_color" data-val="' + a.key + '" aria-pressed="' + (settings.accent_color === a.key) + '" title="' + esc(a.name) + '" aria-label="' + esc(a.name) + '" style="background:' + a.demo + '"></button>').join(""));
+    html += setRow("背景图", bgSettingsDesc(),
+      '<div class="bg-picker">' +
+        '<div class="bg-thumb" id="bg-thumb" aria-hidden="true">' + bgThumbHTML() + "</div>" +
+        '<div class="bg-picker-act">' +
+        '<button class="btn btn-sm" type="button" data-act="bg-upload">' + ic("upload",14) + (settings.bg_image ? "更换" : "上传图片") + "</button>" +
+        '<button class="btn btn-sm" type="button" data-act="bg-clear"' + (settings.bg_image ? "" : " disabled") + ">" + ic("trash",14) + "移除</button>" +
+        "</div></div>");
+    html += setRow("背景模糊", settings.bg_blur + " px",
+      '<input type="range" min="0" max="20" step="1" data-set="bg_blur" value="' + settings.bg_blur + '" aria-label="背景模糊"' + (bgRenderable() ? "" : " disabled") + ">");
+    html += setRow("背景遮罩", "压暗/提亮背景以保证裸露区域文字对比度 ≥ 4.5:1，当前 " + settings.bg_overlay,
+      '<input type="range" min="0" max="0.92" step="0.02" data-set="bg_overlay" value="' + settings.bg_overlay + '" aria-label="背景遮罩"' + (bgRenderable() ? "" : " disabled") + ">");
+    // 状态行：把「图到底生效没有」摆在明面上。这是本次修复的核心 ——
+    // 旧版上传后只有一句 toast，用户无法区分「已生效但被面板盖住」和「压根没生效」。
+    html += '<div class="bg-status' + (bgRenderable() ? " is-ok" : "") + '" id="bg-status">' +
+      ic(bgRenderable() ? "check" : "info", 14) +
+      "<span>" + esc(bgStatusText()) + (bgRenderable() ? '<b class="bg-readability">' + esc(bgReadabilityText()) + "</b>" : "") + "</span></div>";
+    html += setRow("玻璃面板不透明度", settings.theme === "glass" ? "当前 " + settings.panel_opacity : "仅玻璃主题生效",
+      '<input type="range" min="0.4" max="1" step="0.05" data-set="panel_opacity" value="' + settings.panel_opacity + '" aria-label="面板不透明度"' + (settings.theme === "glass" ? "" : " disabled") + '>');
+    html += setRow("密度", "舒适 / 紧凑，影响卡片尺寸与行距",
+      '<div class="seg" role="group" aria-label="密度">' +
+      [["cozy","舒适"],["compact","紧凑"]].map(([v,n]) =>
+        '<button type="button" data-set="density" data-val="' + v + '" aria-pressed="' + (settings.density === v) + '">' + n + "</button>").join("") + "</div>");
+    html += "</div>";
+  }
+  if(t === "library"){
+    html += '<div class="panel"><div class="panel-head"><h3>片库</h3></div>';
+    html += setRow("默认视图", "封面墙 / 卡行 / 表格",
+      '<div class="seg" role="group" aria-label="默认视图">' +
+      /* 卡行只对 TV 影院套系有意义，别的套系下列表里根本不显示它。
+         若用户先在 TV 套系选了卡行、之后切回档案馆，settings 里仍留着
+         "rows" —— 这时默认视图按钮一个都不亮，看着像功能坏了。
+         所以非 TV 套系下额外显示当前实际生效的那一个。 */
+      [["wall","封面墙"],["table","表格"]]
+        .concat(settings.ui_skin === "tv" ? [["rows","卡行"]] : (settings.default_view === "rows" ? [["rows","卡行（需 TV 影院）"]] : []))
+        .map(([v,n]) => '<button type="button" data-set="default_view" data-val="' + v + '" aria-pressed="' + (settings.default_view === v) + '">' + n + "</button>").join("") + "</div>");
+    html += setRow("默认排序", "", '<select class="select" data-set="default_sort">' +
+      SORTS.map(s => '<option value="' + attr(s.key) + '"' + (settings.default_sort === s.key ? " selected" : "") + ">" + esc(s.name) + "</option>").join("") + "</select>");
+    html += setRow("卡片字段显隐", "控制封面墙卡片上哪些信息显示",
+      [["communityScore","社区评分"],["myScore","我的评分"],["progress","进度"],["year","首播年"],["genres","类型"]].map(([k,n]) =>
+        '<label class="checkline small"><input type="checkbox" data-cardfield="' + k + '"' + (settings.card_fields[k] !== false ? " checked" : "") + "><span>" + n + "</span></label>").join(""));
+    html += setRow("集数自动匹配状态", "改动已看集数后自动切换状态；搁置/弃坑为手动档不被覆盖",
+      '<label class="checkline"><input type="checkbox" data-set="status_auto_match"' + (settings.status_auto_match ? " checked" : "") + "><span>开启</span></label>");
+    html += setRow("单集时长（分钟）", "用于估算总观看时长",
+      '<input class="input" style="width:88px" type="number" min="1" max="600" step="1" data-set="episode_minutes" value="' + settings.episode_minutes + '">');
+    html += "</div>";
+  }
+  if(t === "series"){
+    const orphan = state.anime.filter(a => a.seriesId && !seriesById(a.seriesId)).length;
+    html += '<div class="panel"><div class="panel-head"><h3>系列</h3>' +
+      '<button class="btn btn-sm btn-primary hint" type="button" data-act="se-add" style="margin-left:auto">' + ic("plus",14) + "新建系列</button></div>" +
+      '<p class="hint mb-3">把同一部动画的多季、剧场版、续作归到一起。片库可按系列筛选与排序，' +
+      "作品详情页会列出同系列的其他作品方便跳转。未归类的作品归入「默认系列」（不占记录，不可删除）。</p>" +
+      (orphan ? '<div class="note-box is-warn mb-3">' + ic("warning",16) +
+        "<span>有 " + orphan + " 部作品指向已不存在的系列，刷新后会归回默认系列。</span></div>" : "") +
+      (state.series.length
+        ? state.series.slice().sort((a,b) => a.name.localeCompare(b.name, "zh")).map(s => {
+            const used = state.anime.filter(a => a.seriesId === s.id).length;
+            return '<div class="status-editor mb-3">' +
+              '<span class="badge badge-src nowrap">' + used + " 部</span>" +
+              '<input class="input" style="max-width:220px" value="' + attr(s.name) + '" data-sefield="name" data-id="' + attr(s.id) + '" aria-label="系列名称">' +
+              '<div class="row" style="margin-left:auto">' +
+                '<button class="btn btn-sm" type="button" data-act="se-view" data-id="' + attr(s.id) + '">在片库查看</button>' +
+                '<button class="btn btn-sm btn-icon" type="button" data-act="se-del" data-id="' + attr(s.id) + '" title="删除系列" aria-label="删除系列">' + ic("trash",14) + "</button>" +
+              "</div>" +
+            "</div>";
+          }).join("")
+        : '<div class="state-box">' + ic("grid",32) +
+          "<h3>还没有自定义系列</h3><p class=\"small\">先在「添加新番 / 编辑资料」里填一个系列名，或点右上角新建。</p></div>") +
+      "</div>";
+  }
+  if(t === "status"){
+    html += '<div class="panel"><div class="panel-head"><h3>自定义状态</h3>' +
+      '<button class="btn btn-sm btn-primary hint" type="button" data-act="st-add" style="margin-left:auto">' + ic("plus",14) + "新增状态</button></div>" +
+      '<p class="hint mb-3">系统默认五档可改名改色，不可删除。自定义状态可配进度区间（闭区间百分比）或纯手动。</p>' +
+      state.statuses.map(s =>
+        '<div class="status-editor mb-3">' +
+          '<input type="color" value="' + attr(s.color) + '" data-stfield="color" data-id="' + attr(s.id) + '" aria-label="' + esc(s.name) + ' 颜色">' +
+          '<input class="input" style="max-width:160px" value="' + attr(s.name) + '" data-stfield="name" data-id="' + attr(s.id) + '"' + (s.isSystem ? "" : "") + ' aria-label="状态名称">' +
+          '<select class="select" style="max-width:120px" data-stfield="matchType" data-id="' + attr(s.id) + '">' +
+            '<option value="progress"' + (s.matchType === "progress" ? " selected" : "") + ">按进度区间</option>" +
+            '<option value="manual"' + (s.matchType === "manual" ? " selected" : "") + ">仅手动</option>" +
+          "</select>" +
+          (s.matchType === "progress"
+            ? '<span class="small muted nowrap">进度 ' +
+              '<input class="input input-num" type="number" min="0" max="100" data-stfield="progressMin" data-id="' + attr(s.id) + '" value="' + (s.progressMin == null ? 0 : s.progressMin) + '" aria-label="最小进度">% – ' +
+              '<input class="input input-num" type="number" min="0" max="100" data-stfield="progressMax" data-id="' + attr(s.id) + '" value="' + (s.progressMax == null ? 100 : s.progressMax) + '" aria-label="最大进度">%</span>'
+            : '<span class="small muted">手动档</span>') +
+          '<div class="row" style="margin-left:auto">' +
+            (s.isSystem ? '<span class="badge badge-src">系统档</span>'
+                        : '<button class="btn btn-sm btn-icon" type="button" data-act="st-del" data-id="' + attr(s.id) + '" title="删除" aria-label="删除">' + ic("trash",14) + "</button>") +
+          "</div>" +
+        "</div>").join("") +
+      "</div>";
+  }
+  if(t === "source"){
+    html += '<div class="panel"><div class="panel-head"><h3>数据源</h3></div>';
+    html += setRow("Bangumi（番组计划）", "主源：中文资料与老番 / 国产动画最全",
+      '<label class="checkline"><input type="checkbox" data-set="src_bangumi_enabled"' + (settings.src_bangumi_enabled ? " checked" : "") + "><span>启用</span></label>");
+    html += setRow("AniList", "补日番，GraphQL 接口可直连",
+      '<label class="checkline"><input type="checkbox" data-set="src_anilist_enabled"' + (settings.src_anilist_enabled ? " checked" : "") + "><span>启用</span></label>");
+    html += setRow("CORS 代理地址",
+      "只在浏览器直连被跨域拦截时才用得上。拼接方式：<code>代理前缀 + encodeURIComponent(目标URL)</code>，<b>代理需转发请求方法与请求体</b>（搜索是 POST）。" +
+      "<br><b>实测提醒：</b>常见公共代理（allorigins、corsproxy.io、codetabs 等）在中国大陆多数<b>连不上、被限流或已要 API Key</b>，没有一个能保证长期可用。" +
+      "AniList 本身可直连，通常不需要代理；真正需要代理的往往是 Bangumi。填完请先点右侧「测试」。",
+      '<div style="display:flex;gap:8px;align-items:center">' +
+        '<input class="input" style="flex:1" data-set="data_proxy_url" value="' + attr(settings.data_proxy_url) + '" placeholder="https://你的代理/?url=">' +
+        '<button class="btn" type="button" data-act="test-proxy">测试</button>' +
+      "</div>" +
+      '<div class="small muted mt-2" data-proxy-report>' + (settings.data_proxy_url ? "尚未测试。" : "留空则不使用代理。") + "</div>");
+    html += setRow("每源搜索结果条数", "1–25",
+      '<input class="input" style="width:88px" type="number" min="1" max="25" step="1" data-set="search_limit" value="' + settings.search_limit + '">');
+    html += "</div>";
+  }
+  if(t === "theater"){
+    html += '<div class="panel"><div class="panel-head">' + ic("theater",16) + "<h3>放映厅</h3></div>";
+    /* 皮肤 / 扫描线 / 雪花三项原本控制待机屏保。屏保按用户要求删除后，
+       这三项已无作用对象 —— 留在设置里就是三个改了不起任何效果的开关，
+       比删掉更糟（用户会以为坏了）。保留开机音效：它是独立路径。 */
+    html += setRow("开机音效", "CRT 通电「啪」+ 街机 8-bit 主题动机，Web Audio 实时合成，首次点击后才允许发声",
+      '<label class="checkline"><input type="checkbox" data-set="crt_power_sound"' + (settings.crt_power_sound ? " checked" : "") + "><span>开启</span></label>" +
+      '<button class="btn btn-sm" type="button" data-act="sound-test">' + ic("play",14) + "试听</button>");
+    html += setRow("播放地址", "在放映厅的作品详情下方填写。每部作品单独保存，换番不会互相覆盖；「看到第几集」也会一并记录",
+      '<button class="btn btn-sm" type="button" data-act="go-theater">' + ic("film",14) + "去放映厅</button>");
+    html += "</div>";
+  }
+  if(t === "modules"){
+    html += '<div class="panel"><div class="panel-head"><h3>功能开关</h3></div>';
+    html += setRow("语录模块", "首页横幅 / 屏保 / 语录本", '<label class="checkline"><input type="checkbox" data-set="module_quotes"' + (settings.module_quotes ? " checked" : "") + "><span>启用</span></label>");
+    html += setRow("荣誉称号", "侧边栏称号与荣誉墙", '<label class="checkline"><input type="checkbox" data-set="module_honor"' + (settings.module_honor ? " checked" : "") + "><span>启用</span></label>");
+    html += setRow("重看转盘", "", '<label class="checkline"><input type="checkbox" data-set="module_wheel"' + (settings.module_wheel ? " checked" : "") + "><span>启用</span></label>");
+    html += setRow("童年编年史", "", '<label class="checkline"><input type="checkbox" data-set="module_chronicle"' + (settings.module_chronicle ? " checked" : "") + "><span>启用</span></label>");
+    html += setRow("统计图表", "关闭后首页只保留数字带与列表", '<label class="checkline"><input type="checkbox" data-set="module_charts"' + (settings.module_charts ? " checked" : "") + "><span>启用</span></label>");
+    html += setRow("播放源管理", "全库线路台账：探测失效、批量清理。关闭后侧栏不再显示该页面", '<label class="checkline"><input type="checkbox" data-set="module_sources"' + (settings.module_sources ? " checked" : "") + "><span>启用</span></label>");
+    html += "</div>";
+  }
+  if(t === "data"){
+    html += '<div class="panel"><div class="panel-head"><h3>数据</h3></div>';
+    html += setRow("备份状态", '<span id="backup-fresh-text">' + esc(backupFreshText()) + '</span>　清理浏览器数据会清掉整个片库，备份是唯一的保险',
+      '<button class="btn btn-sm btn-primary" type="button" data-act="backup-now">' + ic("download",14) + "立即导出备份</button>");
+    if(backupFolderAvailable()){
+      html += setRow("备份文件夹", "一键把全量备份写进所选文件夹（推荐选网盘同步目录），不用每次找下载目录" +
+        (backupDirHandle ? "" : "。当前未选择文件夹"),
+        (backupDirHandle ? '<button class="btn btn-sm btn-primary" type="button" data-act="backup-folder">' + ic("download",14) + "备份到文件夹</button>" : "") +
+        '<button class="btn btn-sm" type="button" data-act="backup-pick">' + ic("folder",14) + (backupDirHandle ? "换一个文件夹" : "选择文件夹") + "</button>" +
+        (backupDirHandle ? '<button class="btn btn-sm" type="button" data-act="backup-clear">' + ic("close",14) + "移除</button>" : ""));
+    }else{
+      html += setRow("备份文件夹", "当前浏览器不支持（需要 Chromium 内核 + IndexedDB 可用），仍可用上面的「立即导出备份」",
+        '<button class="btn btn-sm" type="button" disabled>' + ic("folder",14) + "不可用</button>");
+    }
+    html += setRow("封面本地化", "添加/编辑作品时把封面抓回本机存档（压缩后随记录保存），图床失效也不褪色。仅 IndexedDB 模式生效；关闭后封面继续用远程地址",
+      '<label class="checkline"><input type="checkbox" data-set="cover_localize"' + (settings.cover_localize ? " checked" : "") + "><span>开启</span></label>" +
+      '<button class="btn btn-sm" type="button" data-act="cover-backfill">' + ic("refresh",14) + "为现有作品补齐</button>");
+    html += setRow("导出 JSON", "文件名 animerewind-backup-YYYYMMDD.json；默认不含背景图",
+      '<label class="checkline small" style="margin-right:8px"><input type="checkbox" id="exp-bg"><span>包含背景图</span></label>' +
+      '<button class="btn btn-sm btn-primary" type="button" data-act="export">' + ic("download",14) + "导出数据</button>");
+    html += setRow("导入 JSON", "支持跳过 / 智能合并 / 覆盖三种去重模式，导入前必看预览报告",
+      '<button class="btn btn-sm" type="button" data-act="import">' + ic("upload",14) + "导入文件</button>");
+    html += setRow("恢复内置语录包", "重新补回被遗漏的内置语录（不会删除自建语录）",
+      '<button class="btn btn-sm" type="button" data-act="restore-quotes">' + ic("refresh",14) + "恢复</button>");
+    html += setRow("存储占用", '<span id="usage-text">计算中…</span>',
+      '<button class="btn btn-sm" type="button" data-act="usage">' + ic("db",14) + "重新计算</button>");
+    html += setRow("清空全部数据", "删除作品、感想、语录、自定义状态与设置，<b>不可恢复</b>",
+      '<button class="btn btn-sm btn-danger" type="button" data-act="wipe">' + ic("trash",14) + "清空</button>");
+    html += "</div>";
+  }
+  if(t === "about"){
+    /* 版权与许可放在「关于」里，而不是只写进 meta ——
+       meta 里的声明机器读得到但人看不见，而 CC BY-NC 的署名义务
+       恰恰是「让人知道这是谁做的、什么条件下能用」。
+       这个 html 是单文件交付、极易被单独转发，
+       拿走文件的人看不到仓库里的 README，这里的文字就是唯一的声明载体。 */
+    html += '<div class="panel"><div class="panel-head"><h3>关于</h3></div>' +
+      '<div class="col">' +
+        '<div class="row gap-3"><svg width="40" height="40" viewBox="0 0 32 32" style="color:var(--accent)"><rect x="1" y="1" width="30" height="30" rx="7" fill="none" stroke="currentColor" stroke-width="1.4" opacity=".45"/><path d="M18 8.5 9.6 16 18 23.5V18h7.4v-4H18z" fill="currentColor"/></svg>' +
+        "<div><b>" + esc(APP_NAME) + "</b><div class=\"small muted\">版本 " + esc(APP_VERSION) + " · schema v" + SCHEMA_VERSION + "</div></div></div>" +
+        '<p class="small" style="line-height:1.8">这是一个纯本地运行的个人童年动画档案馆。<b>所有数据仅保存在本机浏览器里</b>（IndexedDB ' +
+        (Repo.mode === "idb" ? "可用" : "不可用，已降级到 localStorage") + '），不会上传到任何服务器，也没有账号系统。<br>' +
+        "清理浏览器数据会一并清掉片库，请定期使用「导出 JSON」做备份。<br>" +
+        "封面与作品资料来自 Bangumi（番组计划）与 AniList，版权归各自权利人所有。</p>" +
+
+        /* 许可块单独用 panel 套 panel 区分：它不是功能说明而是法律声明，
+           混在正文小字里容易被当成可忽略的信息。 */
+        '<div class="panel" style="background:var(--panel-2)">' +
+          '<div class="panel-head"><h4 style="font-size:var(--fs-sm)">版权与许可</h4></div>' +
+          '<div class="col" style="gap:var(--sp-2)">' +
+            '<div class="small" style="line-height:1.85">' +
+              "源代码采用 <b>CC BY-NC 4.0</b>（署名-非商业性使用）许可。<br>" +
+              "© 2026 <a href=\"https://github.com/ll9-m\" target=\"_blank\" rel=\"noopener noreferrer\">ll9-m</a> · " +
+              '<a href="https://creativecommons.org/licenses/by-nc/4.0/" target="_blank" rel="noopener noreferrer">协议全文</a>' +
+            "</div>" +
+            '<div class="small muted" style="line-height:1.8">' +
+              "可自由复制、修改、二次创作，用于个人学习与非商业用途，条件是保留署名。<br>" +
+              "<b>不可用于任何商业用途</b>，也不得去除署名信息。" +
+            "</div>" +
+            "<details style=\"margin-top:var(--sp-1)\"><summary class=\"small muted\" style=\"cursor:pointer\">第三方素材说明（不在此许可范围内）</summary>" +
+              '<div class="small muted" style="line-height:1.8;margin-top:var(--sp-2)">' +
+                "· 作品资料与封面：来自 Bangumi / AniList 公开 API，仅本机缓存，不随代码分发<br>" +
+                "· 内置语录台词（" + BUILTIN_QUOTES.length + " 条）：台词属原作作者与版权方，仅作个人收藏<br>" +
+                "· 荣誉墙配图：AI 生成，已内联于本文件<br>" +
+                "· 字体 Outfit / JetBrains Mono：SIL Open Font License<br>" +
+                "· ECharts：Apache-2.0，走 CDN 引入<br>" +
+                "· 「Anime Rewind」「番忆」为本项目名称，非作品名称；与收录的任何作品无隶属或背书关系" +
+              "</div>" +
+            "</details>" +
+          "</div>" +
+        "</div>" +
+      "</div></div>";
+  }
+  return html;
+}
+/* 按当前套系升级设置页控件。
+   必须在 bindSettings 里、绑定事件之前调用。
+   铁律：只「搬动」原始 input，绝不新建 —— 新建元素不会带上原有监听，
+   开关会变成点不动的死物（这正是自定义套系最容易踩的坑）。 */
+function upgradeSkinWidgets(root){
+  const skin = UI_SKINS.indexOf(settings.ui_skin) >= 0 ? settings.ui_skin : "archive";
+  if(skin !== "holo") return;
+  // checkbox → 全息开关
+  root.querySelectorAll(".checkline").forEach(line => {
+    if(line.querySelector(".holo-switch")) return;   // 已升级
+    const input = line.querySelector("input[type=checkbox]");
+    if(!input) return;
+    const textSpan = Array.from(line.querySelectorAll("span")).find(sp => !sp.querySelector("input"));
+    const label = (textSpan ? textSpan.textContent : "") || "开关";
+    if(!input.id) input.id = "sw_" + uid("s");
+    // 组装：轨道 label + 滑块 + 能量环，原 input 放最前面保持可点区域
+    const wrap = document.createElement("span");
+    wrap.className = "holo-switch";
+    const track = document.createElement("label");
+    track.className = "hs-track";
+    track.htmlFor = input.id;
+    const thumb = document.createElement("span"); thumb.className = "hs-thumb";
+    const ring = document.createElement("span"); ring.className = "hs-ring";
+    const sr = document.createElement("span"); sr.className = "sr-only"; sr.textContent = label;
+    wrap.appendChild(input); wrap.appendChild(track); wrap.appendChild(thumb); wrap.appendChild(ring);
+    const labelText = document.createElement("span");
+    labelText.textContent = label;
+    line.innerHTML = "";
+    line.appendChild(wrap);
+    line.appendChild(labelText);
+  });
+  // 输入框 → 全息描边（纯装饰，不动 input 本身）
+  root.querySelectorAll(".field").forEach(f => {
+    if(f.classList.contains("holo-field")) return;
+    const ctl = f.querySelector(".input,.select,.textarea");
+    if(!ctl) return;
+    f.classList.add("holo-field");
+    const edge = document.createElement("span"); edge.className = "hf-edge";
+    const glow = document.createElement("span"); glow.className = "hf-glow";
+    f.insertBefore(glow, ctl);
+    f.insertBefore(edge, ctl);
+  });
+}
+function bindSettings(root){
+  root.querySelectorAll("[data-set][data-val]").forEach(b => b.addEventListener("click", () => {
+    settings[b.dataset.set] = b.dataset.val;
+    saveSettings(); afterSettingsChange();
+  }));
+  upgradeSkinWidgets(root);
+  root.querySelectorAll("input[type=checkbox][data-set]").forEach(n => n.addEventListener("change", () => {
+    settings[n.dataset.set] = n.checked;
+    saveSettings(); afterSettingsChange();
+  }));
+  root.querySelectorAll("select[data-set],input[type=number][data-set],input[type=range][data-set],input.input[data-set]").forEach(n => {
+    const handler = () => {
+      const key = n.dataset.set;
+      if(n.type === "checkbox") return;
+      let v = n.value;
+      if(n.type === "range" || (/^(episode_minutes|search_limit)$/.test(key))) v = Number(v);
+      if((/^(bg_blur|bg_overlay|panel_opacity)$/.test(key))) { v = Number(v); }
+      settings[key] = v;
+      saveSettings(); afterSettingsChange(true);
+    };
+    if(n.type === "range" || n.type === "number" || (n.tagName === "INPUT" && n.type === "text")) bindIMEInput(n, debounce(handler, 220));
+    else n.addEventListener("change", handler);
+  });
+  root.querySelectorAll("[data-cardfield]").forEach(n => n.addEventListener("change", () => {
+    settings.card_fields[n.dataset.cardfield] = n.checked;
+    saveSettings(); rerender();
+  }));
+  root.querySelectorAll("[data-stfield]").forEach(n => {
+    const commit = async () => {
+      const s = state.statuses.find(x => x.id === n.dataset.id);
+      if(!s) return;
+      const f = n.dataset.stfield;
+      if(f === "name"){
+        const name = n.value.trim();
+        if(!name){ n.value = s.name; return; }
+        s.name = name;
+      } else if(f === "color"){ s.color = n.value; }
+      else if(f === "matchType"){ s.matchType = n.value; if(n.value === "manual"){ s.progressMin = null; s.progressMax = null; } else { s.progressMin = s.progressMin == null ? 0 : s.progressMin; s.progressMax = s.progressMax == null ? 100 : s.progressMax; } }
+      else if(f === "progressMin"){ s.progressMin = clampNum(n.value,0,100); }
+      else if(f === "progressMax"){ s.progressMax = clampNum(n.value,0,100); }
+      await saveStatus(s);
+    };
+    if(n.tagName === "SELECT") n.addEventListener("change", async () => { await commit(); rerender(); });
+    else n.addEventListener("change", async () => { await commit(); afterSettingsChange(); });
+  });
+  /* 系列重命名。要拦同名：两个同名系列会让筛选器出现两项一样的名字，
+     用户选哪个都说不清，选错一次就以为归类坏了。 */
+  root.querySelectorAll("[data-sefield]").forEach(n => {
+    n.addEventListener("change", async () => {
+      const s = state.series.find(x => x.id === n.dataset.id);
+      if(!s) return;
+      const name = n.value.trim();
+      if(!name){ n.value = s.name; return; }
+      if(name.length > 30){ n.value = s.name; toast("系列名最长 30 字", "warn"); return; }
+      if(state.series.some(x => x.id !== s.id && normalize(x.name) === normalize(name))){
+        n.value = s.name;
+        toast("已存在同名系列", "warn");
+        return;
+      }
+      s.name = name;
+      await saveSeries(s);
+      toast("已重命名为「" + name + "」", "ok");
+      afterSettingsChange();
+    });
+  });
+  root.querySelectorAll("[data-act]").forEach(b => b.addEventListener("click", () => settingsAction(b.dataset.act, b.dataset.id, root)));
+  updateUsageText(root);
+  // 背景可读性提示跟着遮罩滑块即时刷新。
+  // 不能靠 afterSettingsChange 整页重渲染：拖动滑块时每 220ms 重建整个设置页，
+  // 会把用户正在拖的 input 换掉，手感断掉还可能吞掉后续事件。
+  const bgOv = root.querySelector('input[data-set="bg_overlay"]');
+  if(bgOv){
+    bgOv.addEventListener("input", () => {
+      const line = root.querySelector(".bg-readability");
+      if(line) line.textContent = bgReadabilityText();
+    });
+  }
+}
+async function updateUsageText(root){
+  const node = root ? root.querySelector("#usage-text") : document.querySelector("#usage-text");
+  if(!node) return;
+  const est = await Repo.usage();
+  let bytes = est.usage;
+  if(!bytes){
+    try{
+      bytes = new Blob([JSON.stringify({ a:state.anime, q:state.quotes, s:state.statuses }) + (bgImageUrl || "")]).size;
+    }catch(e){ bytes = 0; }
+  }
+  node.textContent = state.anime.length + " 部作品 / " + state.quotes.length + " 条语录 · 约 " + humanSize(bytes) +
+    (est.quota ? "（配额约 " + humanSize(est.quota) + "）" : "");
+}
+async function settingsAction(act, id, root){
+  switch(act){
+    case "test-proxy": {
+      const input = root.querySelector('input[data-set="data_proxy_url"]');
+      const box = root.querySelector("[data-proxy-report]");
+      const prefix = (input && input.value || "").trim();
+      if(!prefix){
+        if(box) box.textContent = "请先填写代理地址。";
+        toast("请先填写代理地址", "warn");
+        return;
+      }
+      if(box) box.textContent = "正在测试…";
+      const r = await diagnoseProxy(prefix);
+      if(!box) return;
+      /* 报告要能指出「哪一层坏了」。只说「失败」的话，
+         用户在「网络不通」「没 CORS 头」「要 API Key」之间无从下手，
+         只能一个个换地址碰运气。 */
+      const tone = r.ok ? "fav" : "master";
+      const head = r.ok ? "可用" : ("失败：" + r.stage);
+      box.innerHTML = '<span class="badge badge-' + tone + '">' + esc(head) + "</span> " + esc(r.detail) +
+        '<div class="small muted" style="margin-top:4px">探测目标 AniList 的 GET 返回 ' +
+        (r.status === null ? "无响应" : "HTTP " + r.status) +
+        "（它本就不接受 GET，这个状态属正常）；CORS 头：" +
+        (r.cors === null ? "未收到响应" : (r.cors ? "有" : "无")) + "</div>";
+      toast(r.ok ? "代理可用" : ("代理" + r.stage + "不可用"), r.ok ? "ok" : "warn");
+      return;
+    }
+    case "se-add": {
+      openModal({
+        title:"新建系列", narrow:true,
+        body:'<div class="field"><label for="se-name">系列名称</label>' +
+          '<input class="input" id="se-name" data-autofocus maxlength="30" placeholder="如：漆黑的子弹"></div>' +
+          '<p class="hint mt-3">同一部动画的多季、剧场版请用同一个系列名。归类后可在片库按系列筛选，' +
+          "作品详情页也会列出同系列的其他作品。</p>",
+        footer:(f) => {
+          f.innerHTML = '<div class="grow"></div><button class="btn" type="button" data-close="1">取消</button>' +
+            '<button class="btn btn-primary" type="button" id="se-save">创建</button>';
+          f.querySelector("#se-save").addEventListener("click", async () => {
+            const name = f.ownerDocument.querySelector("#se-name").value.trim();
+            if(!name){ toast("系列名称必填", "warn"); return; }
+            if(state.series.some(s => normalize(s.name) === normalize(name))){ toast("已存在同名系列", "warn"); return; }
+            const rec = await ensureSeries(name);
+            if(!rec){ toast("创建失败，请重试", "err"); return; }
+            closeModal();
+            toast("已创建系列「" + rec.name + "」", "ok");
+            rerender();
+          });
+        }
+      });
+      break;
+    }
+    case "se-del": {
+      const s = state.series.find(x => x.id === id);
+      if(!s) return;
+      const used = state.anime.filter(a => a.seriesId === id);
+      const ok = await confirmDialog({
+        title:"删除系列",
+        html:"确定删除系列「" + esc(s.name) + "」吗？" +
+          (used.length
+            ? "<br><b>其中 " + used.length + " 部作品会归回「默认系列」，作品本身不会被删除。</b>"
+            : "<br>该系列下没有作品。") +
+          '<br><span class="hint">只是想改名字的话，直接在左侧输入框改更省事。</span>',
+        okText:"删除系列", danger:true
+      });
+      if(!ok) return;
+      // 先把作品落回默认系列，再删系列 —— 反序会留下一批指向已删 id 的孤儿
+      for(const a of used){ a.seriesId = DEFAULT_SERIES_ID; await saveAnime(a); }
+      await removeSeries(id);
+      toast(used.length ? ("已删除系列，" + used.length + " 部作品归回默认系列") : "已删除系列", "ok");
+      afterSettingsChange();
+      break;
+    }
+    case "se-view": {
+      const s = state.series.find(x => x.id === id);
+      if(!s) return;
+      libState.seriesId = id;
+      libState.q = "";
+      go("library");
+      toast("已筛选系列「" + s.name + "」", "ok", 2600);
+      break;
+    }
+    case "bg-upload": {
+      const input = document.createElement("input");
+      input.type = "file"; input.accept = "image/*";
+      input.addEventListener("change", async () => {
+        const file = input.files && input.files[0];
+        if(!file) return;
+        try{
+          toast("正在读取并压缩图片…","info",30000);
+          const raw = await readFileAsDataURL(file);
+          const dataUrl = await compressBgImage(raw);
+          const rawKB = Math.round(raw.length / 1024), outKB = Math.round(dataUrl.length / 1024);
+          const key = "bg_" + Date.now().toString(36);
+          await Repo.setAsset(key, dataUrl);
+          // 写完立刻回读：写成功不等于读得回来（配额临界、事务被中止都会在这里暴露）。
+          // 旧代码不校验，直接 toast「背景图已更新」，随后界面毫无变化。
+          const back = await Repo.getAsset(key);
+          if(!back || typeof back !== "string") throw new Error("图片已写入但读不回来");
+          if(settings.bg_image && settings.bg_image !== key){ try{ await Repo.delAsset(settings.bg_image); }catch(e){} }
+          settings.bg_image = key;
+          saveSettings();
+          bgImageUrl = back;
+          applyAppearance();
+          rerender();
+          if(!bgRenderable()) throw new Error("图片数据格式无法用于背景");
+          toast("背景图已更新" + (outKB < rawKB ? "（" + rawKB + "KB → " + outKB + "KB）" : "") + "，可在页面任意位置看到","ok",3200);
+        }catch(e){
+          const msg = e.message === "QUOTA" ? "存储空间不足，无法保存背景图" : ("保存失败：" + e.message);
+          toast(msg, "err", 6000);
+          // 失败后必须把状态摆平：清掉可能半写入的 key，重置外观层，
+          // 否则会留下一条「设置里有图、实际读不出来」的僵尸状态。
+          try{
+            bgImageUrl = "";
+            applyAppearance();
+          }catch(e2){}
+        }
+      });
+      input.click();
+      break;
+    }
+    case "bg-clear": {
+      if(!settings.bg_image) return;
+      const ok = await confirmDialog({ title:"移除背景图", html:"确定移除当前自定义背景图吗？", okText:"移除" });
+      if(!ok) return;
+      try{ await Repo.delAsset(settings.bg_image); }catch(e){}
+      settings.bg_image = ""; saveSettings(); bgImageUrl = "";
+      applyAppearance(); rerender();
+      toast("背景图已移除","ok");
+      break;
+    }
+    case "sound-test":
+      if(!previewPowerSound()) toast("无法播放：请确认开机音效已开启，且浏览器未禁止音频","warn",4000);
+      break;
+    case "go-theater":
+      go("theater");
+      break;
+    case "st-add": {
+      const exists = state.statuses.filter(s => s.matchType === "progress");
+      openModal({
+        title:"新增自定义状态", narrow:true,
+        body:'<div class="field mb-3"><label for="ns-name">名称</label><input class="input" id="ns-name" data-autofocus maxlength="20" placeholder="如：差亿点看完"></div>' +
+          '<div class="field mb-3"><label for="ns-color">颜色</label><input type="color" id="ns-color" value="#8AB4F8" style="width:56px;height:36px"></div>' +
+          '<div class="field"><label for="ns-type">匹配方式</label><select class="select" id="ns-type">' +
+            '<option value="manual">仅手动</option><option value="progress">按进度区间</option></select></div>' +
+          '<div class="row mt-3" id="ns-range" hidden><span class="small muted nowrap">进度 ' +
+            '<input class="input input-num" id="ns-min" type="number" min="0" max="100" value="90">% – ' +
+            '<input class="input input-num" id="ns-max" type="number" min="0" max="100" value="99">%</span></div>' +
+          '<p class="hint mt-3" id="ns-msg"></p>',
+        footer:(f) => {
+          f.innerHTML = '<div class="grow"></div><button class="btn" type="button" data-close="1">取消</button>' +
+            '<button class="btn btn-primary" type="button" id="ns-save">保存</button>';
+          f.querySelector("#ns-save").addEventListener("click", async () => {
+            const name = f.ownerDocument.querySelector("#ns-name").value.trim();
+            const color = f.ownerDocument.querySelector("#ns-color").value;
+            const type = f.ownerDocument.querySelector("#ns-type").value;
+            const pmin = Number(f.ownerDocument.querySelector("#ns-min").value);
+            const pmax = Number(f.ownerDocument.querySelector("#ns-max").value);
+            const msg = f.ownerDocument.querySelector("#ns-msg");
+            if(!name){ msg.innerHTML = '<span class="err-text">名称必填</span>'; return; }
+            if(state.statuses.some(s => normalize(s.name) === normalize(name))){ msg.innerHTML = '<span class="err-text">已存在同名状态</span>'; return; }
+            if(type === "progress"){
+              if(pmin > pmax){ msg.innerHTML = '<span class="err-text">区间下限不能大于上限</span>'; return; }
+              const conflict = state.statuses.find(s => s.matchType === "progress" && !(pmax < s.progressMin || pmin > s.progressMax));
+              if(conflict){ msg.innerHTML = '<span class="err-text">与「' + esc(conflict.name) + "」（" + conflict.progressMin + "%–" + conflict.progressMax + '%）区间冲突，请调整</span>'; return; }
+            }
+            await saveStatus({ id: uid("st"), name, color, matchType: type, progressMin: type === "progress" ? pmin : null, progressMax: type === "progress" ? pmax : null, isSystem:false, schemaVersion:SCHEMA_VERSION });
+            closeModal(); toast("已新增状态「" + name + "」","ok"); rerender();
+          });
+        }
+      });
+      setTimeout(() => {
+        const sel = $("#ns-type"), range = $("#ns-range");
+        if(sel && range) sel.addEventListener("change", () => { range.hidden = sel.value !== "progress"; });
+      }, 40);
+      break;
+    }
+    case "st-del": {
+      const s = state.statuses.find(x => x.id === id);
+      if(!s || s.isSystem) return;
+      const used = state.anime.filter(a => a.statusId === id).length;
+      const ok = await confirmDialog({
+        title:"删除自定义状态",
+        html:"确定删除状态「" + esc(s.name) + "」吗？" + (used ? "<br><b>有 " + used + " 部作品正在使用它，删除后这些作品会回到「想看」。</b>" : ""),
+        okText:"删除", danger:true
+      });
+      if(!ok) return;
+      /* 只重写「刚被改回来的那批」。旧代码第二个 filter 写成
+         statusId === "st_want"，选中的是库里**全部**想看记录 ——
+         删一个零使用的状态也会把几百条记录的 updatedAt 全刷成现在。 */
+      const touched = state.anime.filter(a => a.statusId === id);
+      touched.forEach(a => { a.statusId = "st_want"; });
+      await Promise.all(touched.map(a => saveAnime(a)));
+      await removeStatus(id);
+      rerender();
+      break;
+    }
+    case "export": {
+      const cb = root.querySelector("#exp-bg");
+      exportJSON(!!(cb && cb.checked));
+      break;
+    }
+    case "backup-now": {
+      exportJSON(true);
+      const ft = root.querySelector("#backup-fresh-text");
+      if(ft) ft.textContent = backupFreshText();
+      break;
+    }
+    case "backup-pick": {
+      const h = await pickBackupFolder();
+      if(h){ toast("备份文件夹已设置", "ok"); rerender(); }
+      break;
+    }
+    case "backup-folder": {
+      const ok = await backupToFolder();
+      if(ok){
+        const ft = root.querySelector("#backup-fresh-text");
+        if(ft) ft.textContent = backupFreshText();
+      }
+      break;
+    }
+    case "backup-clear": {
+      backupDirHandle = null;
+      try{ await Repo.delAsset(BACKUP_DIR_KEY); }catch(e){}
+      toast("已移除备份文件夹（已导出的备份文件不受影响）", "ok");
+      rerender();
+      break;
+    }
+    case "cover-backfill": {
+      const need = state.anime.filter(a => settings.cover_localize && a.coverUrl && !a.coverData && Repo.mode === "idb");
+      if(!need.length){ toast("没有需要本地化的封面（可能已全部缓存，或已关闭该功能）", "warn"); break; }
+      const ok = await confirmDialog({
+        title:"缓存现有封面",
+        html:"将为 <b>" + need.length + "</b> 部作品逐个抓取封面并压缩存入本机。<br>取决于网络，可能需要一些时间；失败的作品会保留远程地址。",
+        okText:"开始"
+      });
+      if(!ok) break;
+      let done = 0, failed = 0;
+      for(const a of need){
+        const before = !!a.coverData;
+        await localizeCover(a);
+        if(!!a.coverData !== before && a.coverData) done++; else failed++;
+        toast("封面本地化 " + (done + failed) + " / " + need.length, "info", 1200);
+      }
+      toast("封面本地化完成：成功 " + done + " 部，未成功 " + failed + " 部（多为图床拒绝跨域）", done ? "ok" : "warn", 5000);
+      rerender();
+      break;
+    }
+    case "import": openImportDialog(); break;
+    case "restore-quotes": {
+      const n = await ensureBuiltinQuotes(true);
+      toast(n ? ("已恢复 " + n + " 条内置语录") : "内置语录已是完整状态", "ok");
+      rerender();
+      break;
+    }
+    case "usage": await updateUsageText(root); break;
+    case "wipe": {
+      const ok1 = await confirmDialog({
+        title:"清空全部数据",
+        html:"这会删除全部作品、感想、语录、自定义状态与设置，<b>操作不可恢复</b>。<br><b class=\"lock-note\">建议先点「导出数据」保存一份备份。</b>",
+        okText:"我已备份，继续", danger:true
+      });
+      if(!ok1) return;
+      const ok2 = await confirmDialog({
+        title:"再次确认",
+        html:"真的要清空吗？最后确认一次。",
+        okText:"确认清空", danger:true
+      });
+      if(!ok2) return;
+      await clearAllData();
+      toast("已清空全部数据","ok");
+      refreshAll();
+      break;
+    }
+  }
+}
+async function clearAllData(){
+  try{
+    await Repo.clear("anime"); await Repo.clear("quotes"); await Repo.clear("statuses");
+    await Repo.clear("series"); await Repo.clear("assets");
+  }catch(e){}
+  if(Repo.mode === "ls"){ try{ localStorage.removeItem(LS_DATA); Repo._mem = { anime:[], quotes:[], statuses:[], series:[], assets:{} }; }catch(e){} }
+  try{ localStorage.removeItem(LS_SETTINGS); }catch(e){}
+  state.anime = []; state.quotes = []; state.statuses = SYSTEM_STATUSES.slice(); state.series = [];
+  settings = Object.assign({}, DEFAULT_SETTINGS);
+  saveSettings();
+  await Promise.all(state.statuses.map(s => Repo.put("statuses", s)));
+  await ensureBuiltinQuotes();
+  bgImageUrl = "";
+  applyAppearance();
+  buildNav();
+}
+function afterSettingsChange(soft){
+  applyAppearance();
+  saveSettings();
+  // 必须重建导航：功能开关类设置（module_*）控制 nav-item 的 hidden，
+  // 不重建的话关掉「重看转盘」入口仍留在侧栏，点了却因为 pageModuleEnabled 被拦。
+  if(PAGES.some(p => p.settingKey)) buildNav();
+  // 当前页正好是被关掉的那个模块时，弹回首页（否则内容还在，只是入口消失）
+  if(!pageModuleEnabled(currentPage())){
+    /* 先取页名再切路由： currentPage() 在 state.route = "home" 之后
+       求值的话，toast 永远显示「首页」而不是被关掉的那个模块。 */
+    const closedPage = currentPage().name;
+    state.route = "home";
+    state.routeId = null;
+    toast("「" + closedPage + "」已在设置中关闭，已切回首页", "warn");
+  }
+  if(settingsState.tab === "data") { /* 保持 */ }
+  rerender();
+  redrawChartsIfOpen();
+  updateSidebarInfo();
+}
+
+registerPage({
+  id:"settings", name:"设置", icon:"settings", title:"设置",
+  sub:"所有可控的功能都在这里",
+  render: renderSettings
+});
+

@@ -1,0 +1,129 @@
+/* ============================================================
+   24. 导出
+   ============================================================ */
+async function buildExportPayload(includeBg){
+  /* assets（荣誉配图、背景图原件）也要进备份：
+     不带上的话换机后 custom_honors 里的 art 键全部落空。
+     IDB 模式下 all() 返回记录数组；LS 降级模式 assets 存的是键值对象，归一成数组。 */
+  let assets = [];
+  try{
+    const raw = await Repo.all("assets");
+    assets = Array.isArray(raw)
+      ? raw.filter(Boolean)
+      : Object.keys(raw || {}).map(k => ({ key:k, value:raw[k] }));
+  }catch(e){ assets = []; }
+  const payload = {
+    app: APP_KEY,
+    schemaVersion: SCHEMA_VERSION,
+    exportedAt: new Date().toISOString(),
+    generator: APP_NAME + " " + APP_VERSION,
+    anime: state.anime.slice(),
+    quotes: state.quotes.slice(),
+    statuses: state.statuses.slice(),
+    series: state.series.slice(),
+    assets: assets,
+    settings: Object.assign({}, settings)
+  };
+  if(includeBg && settings.bg_image){
+    payload.backgroundImage = { key: settings.bg_image, dataUrl: bgImageUrl };
+  }
+  return payload;
+}
+function exportJSON(includeBg){
+  buildExportPayload(includeBg).then(payload => {
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type:"application/json" });
+    const d = new Date();
+    const p = (n) => String(n).padStart(2,"0");
+    const name = "animerewind-backup-" + d.getFullYear() + p(d.getMonth()+1) + p(d.getDate()) + ".json";
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = name;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 4000);
+    markBackedUp();
+    toast("已导出 " + name, "ok");
+  }).catch(e => toast("导出失败：" + (e && e.message || e), "err"));
+}
+
+/* ---- 备份提醒与备份文件夹 ----
+   数据孤本最大的风险不是写错数据，是「清除浏览器数据」一键全没。
+   提醒要温和但可见：首页一条 note，设置页给现状与一键动作。 */
+const BACKUP_REMIND_DAYS = 30;
+function markBackedUp(){
+  settings.last_backup_at = new Date().toISOString();
+  saveSettings();
+}
+function backupAgeDays(){
+  if(!settings.last_backup_at) return null;
+  const t = new Date(settings.last_backup_at).getTime();
+  if(!Number.isFinite(t)) return null;
+  return Math.floor((Date.now() - t) / 86400000);
+}
+function backupFreshText(){
+  const days = backupAgeDays();
+  return days == null ? "从未备份过" : ("上次备份：" + days + " 天前（" + String(settings.last_backup_at).slice(0,10) + "）");
+}
+/* 首页提醒的判据：库有一点规模（≥5 部）且从未备份 / 超过阈值。
+   从不备份的库不提醒到 30 天 —— 那等于从来没用过备份功能。 */
+function backupReminder(){
+  if(state.anime.length < 5) return null;
+  const days = backupAgeDays();
+  if(days == null) return { text:"片库已有 " + state.anime.length + " 部作品，但还从未导出过备份。浏览器数据一旦清除就全部消失。" };
+  if(days >= BACKUP_REMIND_DAYS) return { text:"距上次备份已过去 " + days + " 天，建议重新导出一份。" };
+  return null;
+}
+/* 备份文件夹（File System Access API，仅 Chromium 系 + IndexedDB 模式可用）：
+   目录句柄只能存进 IndexedDB（结构化克隆对象），localStorage 存不了，
+   所以降级模式直接不提供这个功能。 */
+const BACKUP_DIR_KEY = "sys:backup_dir";
+let backupDirHandle = null;
+async function initBackupFolder(){
+  if(Repo.mode !== "idb") return;
+  try{
+    const v = await Repo.getAsset(BACKUP_DIR_KEY);
+    if(v && typeof v === "object" && v.kind === "directory") backupDirHandle = v;
+  }catch(e){}
+}
+function backupFolderAvailable(){
+  return Repo.mode === "idb" && typeof window.showDirectoryPicker === "function";
+}
+async function pickBackupFolder(){
+  try{
+    const handle = await window.showDirectoryPicker({ mode:"readwrite", id:"animerewind-backup" });
+    if(!handle) return null;
+    backupDirHandle = handle;
+    await Repo.setAsset(BACKUP_DIR_KEY, handle);
+    return handle;
+  }catch(e){
+    if(e && e.name === "AbortError") return null;   // 用户取消选择，不是错误
+    toast("无法选择文件夹：" + (e && e.message || e), "err");
+    return null;
+  }
+}
+async function backupToFolder(){
+  if(!backupDirHandle){
+    const picked = await pickBackupFolder();
+    if(!picked) return false;
+  }
+  try{
+    /* 新会话里句柄的写权限要重新授予；这个动作由点击触发，满足用户手势要求 */
+    let perm = await backupDirHandle.queryPermission({ mode:"readwrite" });
+    if(perm !== "granted") perm = await backupDirHandle.requestPermission({ mode:"readwrite" });
+    if(perm !== "granted"){ toast("没有该文件夹的写入权限，请重新选择", "warn"); return false; }
+    const payload = await buildExportPayload(true);   // 文件夹备份默认全量（含背景图）
+    const d = new Date();
+    const p = (n) => String(n).padStart(2,"0");
+    const name = "animerewind-backup-" + d.getFullYear() + p(d.getMonth()+1) + p(d.getDate()) + ".json";
+    const fh = await backupDirHandle.getFileHandle(name, { create:true });
+    const w = await fh.createWritable();
+    await w.write(new Blob([JSON.stringify(payload, null, 2)], { type:"application/json" }));
+    await w.close();
+    markBackedUp();
+    toast("已备份到文件夹：" + name, "ok");
+    return true;
+  }catch(e){
+    toast("备份失败：" + (e && e.message || e), "err");
+    return false;
+  }
+}
+

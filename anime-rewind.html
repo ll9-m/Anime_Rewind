@@ -2203,8 +2203,7 @@ const HONOR_ART = {
 };
 </script>
 
-<script>
-"use strict";
+<script>"use strict";
 /* ============================================================
    Anime Rewind・番忆
    纯前端 / 零后端 / 单机运行
@@ -2285,10 +2284,12 @@ const ACCENTS = [  {key:"cyan",name:"放映青",demo:"#22d3ee"},
   {key:"red",name:"录影红",demo:"#f2776b"}
 ];
 
+/* DOM 微助手。注意 tools/scan-dead.js 的词边界正则对 $ 失效，
+   别凭它删这两个 —— applyAppearance/设置页在用。 */
 const $ = (sel, root) => (root || document).querySelector(sel);
 const $$ = (sel, root) => Array.from((root || document).querySelectorAll(sel));
-
 function esc(s){
+
   return String(s == null ? "" : s)
     .replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;")
     .replace(/"/g,"&quot;").replace(/'/g,"&#39;");
@@ -2319,6 +2320,7 @@ function bindIMEInput(el, fn, opts){
 }
 function clampNum(n, min, max){ n = Number(n); if(!isFinite(n)) n = min; return Math.min(max, Math.max(min, n)); }
 function todayISO(){ const d = new Date(); return dateISO(d); }
+function nowIso(){ return new Date().toISOString(); }
 function dateISO(d){
   const p = n => String(n).padStart(2,"0");
   return d.getFullYear() + "-" + p(d.getMonth()+1) + "-" + p(d.getDate());
@@ -2404,6 +2406,138 @@ function ic(name, size){
   const d = ICONS[name] || "";
   const s = size || 16;
   return '<svg viewBox="0 0 24 24" width="' + s + '" height="' + s + '" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + d + "</svg>";
+}
+
+function hostOf(u){ try { return new URL(u).hostname; } catch(e){ return ""; } }
+
+function normalizeStreamURL(u){
+  const s = String(u || "").trim();
+  if(!s) return "";
+  if(/^javascript:/i.test(s)) return "";   // 绝不允许 javascript: 伪协议进 iframe
+  const withProto = /^https?:\/\//i.test(s) ? s : ("https://" + s);
+  try{
+    const u2 = new URL(withProto);
+    if(u2.protocol !== "http:" && u2.protocol !== "https:") return "";
+    return u2.href;
+  }catch(e){ return ""; }
+}
+/* ============================================================
+   4. 通用 UI：吐司 / 模态 / 确认框
+   ============================================================ */
+function toast(msg, kind, ms){
+  const kinds = { ok:"toast-ok", err:"toast-err", warn:"toast-warn", info:"toast-info" };
+  const icons = { ok:"check", err:"warning", warn:"warning", info:"info" };
+  const root = $("#toast-root");
+  const t = document.createElement("div");
+  t.className = "toast " + (kinds[kind] || "toast-info");
+  t.innerHTML = ic(icons[kind] || "info", 16) + '<span>' + esc(msg) + "</span>";
+  root.appendChild(t);
+  setTimeout(() => {
+    t.style.transition = "opacity 240ms, transform 240ms";
+    t.style.opacity = "0"; t.style.transform = "translateY(6px)";
+    setTimeout(() => t.remove(), 250);
+  }, ms || 2600);
+}
+
+/* 荣誉墙打开标志：closeModal 要在任意关闭路径上清掉它，
+   所以标志放在模态层而不是荣誉墙层（荣誉墙在更上层，只会写它） */
+let honorWallOpen = false;
+let lastFocus = null;
+function openModal(opts){
+  const root = $("#modal-root");
+  lastFocus = document.activeElement;
+  root.innerHTML =
+    '<div class="modal-mask" data-close="1"></div>' +
+    '<div class="modal ' + (opts.wide ? "modal-wide" : "") + (opts.narrow ? " modal-narrow" : "") + '" id="modal-card">' +
+      '<div class="modal-head"><h3 id="modal-title">' + esc(opts.title || "") + "</h3>" +
+        '<button class="btn btn-ghost btn-icon" type="button" id="modal-x" aria-label="关闭">' + ic("close",16) + "</button></div>" +
+      '<div class="modal-body scroll" id="modal-body"></div>' +
+      (opts.footer === false ? "" : '<div class="modal-foot" id="modal-foot"></div>') +
+    "</div>";
+  root.classList.add("open");
+
+  // 关闭行为用事件委托绑定在 root 上，而非逐个按钮绑定。
+  // 这样无论 body/footer 回调何时渲染出 [data-close]，也无论回调是否抛错，弹窗都一定关得掉。
+  root.addEventListener("click", (e) => {
+    const n = e.target && e.target.closest ? e.target.closest("[data-close]") : null;
+    if(!n || !root.contains(n) || n.dataset.close === "0") return;
+    closeModal();
+  });
+
+  const body = $("#modal-body");
+  const foot = $("#modal-foot");
+  // 渲染回调来自各页面，包裹 try/catch：单个回调出错不应让弹窗变成无法关闭的僵尸。
+  try{
+    if(typeof opts.body === "string") body.innerHTML = opts.body; else if(opts.body) opts.body(body);
+    if(foot){
+      if(typeof opts.footer === "string") foot.innerHTML = opts.footer;
+      else if(typeof opts.footer === "function") opts.footer(foot);
+      else foot.innerHTML = '<div class="grow"></div><button class="btn" type="button" data-close="1">关闭</button>';
+    }
+  }catch(err){
+    console.error("[openModal] 渲染回调出错：", err);
+    if(body) body.insertAdjacentHTML("afterbegin",
+      '<p class="err-text">界面渲染出错：' + esc(String(err && err.message || err)) + "</p>");
+  }
+
+  const card = $("#modal-card");
+  if(card) card.addEventListener("keydown", (e) => { if(e.key === "Tab") trapFocus(card, e); });
+  const x = $("#modal-x");
+  if(x) x.addEventListener("click", closeModal);
+  if(typeof opts.onMount === "function"){ try{ opts.onMount(root); }catch(err){ console.error("[openModal] onMount 出错：", err); } }
+  const focusTarget = (card && card.querySelector("[data-autofocus]")) || x;
+  setTimeout(() => { if(focusTarget && document.contains(focusTarget)) focusTarget.focus(); }, 30);
+  return root;
+}
+function closeModal(){
+  const root = $("#modal-root");
+  root.classList.remove("open");
+  root.innerHTML = "";
+  // 任何关闭途径（×/ESC/遮罩/关闭按钮）都要清掉荣誉墙的打开标志，
+  // 否则下次点「新建」保存后会把一个早已关闭的荣誉墙重新弹出来。
+  honorWallOpen = false;
+  if(lastFocus && lastFocus.focus) setTimeout(() => { try{ lastFocus.focus(); }catch(e){} }, 20);
+}
+function modalEscape(e){
+  if(e.key === "Escape" && $("#modal-root").classList.contains("open")){ closeModal(); }
+}
+document.addEventListener("keydown", modalEscape);
+
+function confirmDialog(opts){
+  return new Promise((resolve) => {
+    let answered = false;
+    const done = (v) => { if(!answered){ answered = true; closeModal(); resolve(v); } };
+    openModal({
+      title: opts.title || "请确认",
+      narrow: true,
+      body: '<p class="small" style="line-height:1.7">' + (opts.html || esc(opts.message || "")) + "</p>",
+      footer: (f) => {
+        f.innerHTML =
+          '<div class="grow"></div>' +
+          '<button class="btn" type="button" id="cd-no">' + esc(opts.cancelText || "取消") + "</button>" +
+          '<button class="btn ' + (opts.danger ? "btn-danger" : "btn-primary") + '" type="button" id="cd-yes" data-autofocus>' + esc(opts.okText || "确定") + "</button>";
+        f.querySelector("#cd-no").addEventListener("click", () => done(false));
+        f.querySelector("#cd-yes").addEventListener("click", () => done(true));
+      },
+      onMount: () => {
+        const card = $("#modal-card");
+        const handler = (e) => {
+          if(e.key === "Escape") done(false);
+          if(e.key === "Enter" && e.target.tagName !== "BUTTON") { e.preventDefault(); done(true); }
+        };
+        card.addEventListener("keydown", handler);
+        card.addEventListener("keydown", (e) => { if(e.key === "Tab") trapFocus(card, e); });
+      }
+    });
+  });
+}
+function trapFocus(container, e){
+  const f = container.querySelectorAll('button,input,select,textarea,[tabindex]:not([tabindex="-1"])');
+  const list = Array.from(f).filter(n => !n.disabled && n.offsetParent !== null);
+  if(!list.length) return;
+  const first = list[0], last = list[list.length-1];
+  if(e.shiftKey && document.activeElement === first){ e.preventDefault(); last.focus(); }
+  else if(!e.shiftKey && document.activeElement === last){ e.preventDefault(); first.focus(); }
 }
 
 /* ============================================================
@@ -2650,6 +2784,286 @@ const Repo = {
 };
 
 /* ============================================================
+   16.5 播放源体系（数据模型 + 选源算法）
+   ------------------------------------------------------------
+   参考 Izuko_TV / Animeko 的 MediaSelector 体系，直译成纯函数。
+
+   为什么要有「多线路」：原先一条作品只存一个 streamUrl，
+   用户要换线路只能覆盖，之前的线路就没了。Izuko_TV 的做法是
+   一个条目下并存多个源，播放时再挑。
+
+   为什么筛选要三态（included / excluded + 原因）：
+   直接把不合适的资源丢掉，用户只会看到「搜不到」，
+   不知道是分辨率不对还是字幕缺失。携带原因排到最后，
+   界面上能写清「为什么没选它」，用户也能手动挑回来。
+
+   为什么选源是 DFS 而不是加权求和：
+   加权求和会让「4K 无字幕」压过「1080P 有字幕」——
+   数字算出来是 4K 分高，但用户其实想要字幕。
+   DFS 是字典序：分辨率 → 字幕 → 字幕组 → 线路，
+   每一层内部穷尽后才下降，且某层匹配不到时不下降
+   （字幕组匹配不到不代表该换更差的字幕语言）。
+   ============================================================ */
+
+/* 分辨率档位：从高到低。用于 DFS 的第一层，也是唯一的排序依据。
+   不看文件大小 —— Izuko_TV 的原始注释里明确「质量优先而非大小优先」，
+   4K 体积是 1080P 的十倍，掺进评分就成了噪音。 */
+const RESOLUTION_ORDER = ["2160P","1440P","1080P","720P","480P"];
+const SUBTITLE_ORDER    = ["CHS","CHT","JPY","ENG"];
+/* 字幕形态。网页端只有「外挂字幕轨」是真正可用的，
+   内封在 <video> 上无法切换，硬字幕烧进画面更无法处理。
+   所以 UNSUPPORTED 不是缺陷陈述，是能力边界。 */
+const SUBTITLE_KINDS = ["EXTERNAL","CLOSED","EMBEDDED"];
+
+function resolutionRank(res){
+  const s = String(res || "").toUpperCase().trim();
+  const i = RESOLUTION_ORDER.indexOf(s);
+  return i < 0 ? RESOLUTION_ORDER.length : i;   // 未知分辨率排在所有已知之后
+}
+function subtitleRank(lang, wanted){
+  if(!wanted) return 0;                                   // 没偏好语言要求时不构成筛选条件
+  const i = SUBTITLE_ORDER.indexOf(String(lang || "").toUpperCase());
+  return i < 0 ? SUBTITLE_ORDER.length : i;
+}
+
+/* 线路健康度：探测结果与人工标记。
+   浏览器端只能确认「网络层有没有响应」，确认不了 HTTP 状态码，
+   所以状态只有四档且必须允许 unknown —— 把「没探测过」画成
+   「可用」和画成「失效」都是在骗用户。 */
+const HEALTH_STATES = ["unknown", "alive", "dead", "blocked"];
+const HEALTH_TEXT = {
+  unknown: "未检测",
+  alive:   "网络可达",
+  dead:    "已标记失效",
+  blocked: "被拒绝访问"
+};
+function normalizeHealth(h){
+  if(!h || typeof h !== "object") return { state:"unknown", at:"", detail:"" };
+  const st = HEALTH_STATES.indexOf(String(h.state)) >= 0 ? String(h.state) : "unknown";
+  return { state:st, at:String(h.at || ""), detail:String(h.detail || "").slice(0, 200) };
+}
+
+/* 把一条线路补全成完整结构。
+   缺字段必须给确定的默认值而不是 undefined ——
+   下游的排序比较全部是数值比较，undefined 会让比较结果变成 NaN，
+   而 NaN 参与 sort 的后果是顺序不确定且不报错，极难排查。 */
+function normalizeSource(s, idx, nowIso){
+  if(!s) return null;
+  const url = String(s.url || s.streamUrl || "").trim();
+  if(!url) return null;
+  const kind = SUBTITLE_KINDS.indexOf(String(s.subtitleKind || "").toUpperCase()) >= 0
+    ? String(s.subtitleKind).toUpperCase()
+    /* 拿不到就当外挂：这是网页端唯一真正可用的形态，
+       标成硬字幕会让所有线路都被判「平台不支持」而一个都不剩。 */
+    : "EXTERNAL";
+  return {
+    /* id 必须在多次保存之间稳定 —— 选源结果按 id 记忆「上次用的是哪条」，
+       id 每次变的话记忆永远落空，表现为「每次都选第一条」。 */
+    id: String(s.id || ("src-" + idx + "-" + hashish(url))),
+    name: String(s.name || ("线路 " + (idx + 1))),
+    url: url,
+    ep: s.ep == null || s.ep === "" ? null : Number(s.ep),
+    resolution: String(s.resolution || "").toUpperCase() || null,
+    subtitleKind: kind,
+    /* 语言可能是数组也可能是单值，统一成数组 */
+    subtitles: Array.isArray(s.subtitles)
+      ? s.subtitles.map(x => String(x || "").toUpperCase()).filter(Boolean)
+      : (s.subtitle ? [String(s.subtitle).toUpperCase()] : []),
+    tier: Number.isFinite(Number(s.tier)) ? Number(s.tier) : 2,
+    /* ---- 搜索型片源 ----
+       存的是「站点首页 + 搜索模板」而不是播放页：点一下把片名带过去让站自己搜。
+       kind 缺省必须是 play：老数据没有这个键，
+       按 truthy 判断会把用户所有已存线路一次性变成搜索型。 */
+    kind: String(s.kind || "") === "search" ? "search" : "play",
+    searchUrl: String(s.searchUrl || "").trim(),
+    savedAt: s.savedAt || nowIso || "",
+    /* ---- 台账字段（播放源管理页用）----
+       这三个字段只影响「管理与筛选」，不参与选源质量比较。
+       enabled 缺省必须为 true：老数据没有这个键，
+       若按 falsy 判断会把用户所有线路一次性判成停用。 */
+    enabled: s.enabled === false ? false : true,
+    note: String(s.note || "").slice(0, 200),
+    health: normalizeHealth(s.health),
+    lastUsedAt: s.lastUsedAt || ""
+  };
+}
+/* 轻量字符串哈希，用于生成稳定 id。不追求分布性，只求稳定。 */
+function hashish(str){
+  let h = 5381;
+  const s = String(str || "");
+  for(let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) >>> 0;
+  return h.toString(36);
+}
+
+/* ---- 迁移：旧数据 → 多线路 ----
+   旧结构是 a.streamUrl（单条）+ a.streamEp + a.streamUrlAt。
+   迁移必须幂等：已经迁过的数据再迁一次结果不变。
+   这一点很重要 —— 启动流程、导入流程、备份恢复都会调用迁移，
+   只要有一处重复调用就会产生第二条重复线路。 */
+function migrateSources(a){
+  if(!a) return a;
+  const now = new Date().toISOString();
+  const raw = Array.isArray(a.sources) ? a.sources : [];
+  const list = raw.map((s, i) => normalizeSource(s, i, now)).filter(Boolean);
+  if(list.length){ a.sources = list; return a; }
+  /* 没有 sources 但有旧字段 → 迁一条。 */
+  if(a.streamUrl){
+    const migrated = normalizeSource({
+      url: a.streamUrl, ep: a.streamEp, name: "原线路", savedAt: a.streamUrlAt
+    }, 0, now);
+    if(migrated) a.sources = [migrated];
+  }
+  if(!Array.isArray(a.sources)) a.sources = [];
+  return a;
+}
+
+/* 取出该作品的全部线路（未保存任何线路时给一条临时线路）。
+   settings.stream_url 是历史兜底：早期版本只有全局一份，
+   直接丢掉会让老用户的片源凭空消失。 */
+function sourcesOf(a){
+  const own = Array.isArray(a && a.sources) ? a.sources.filter(s => s && s.url) : [];
+  if(own.length) return own;
+  if(a && a.streamUrl) return migrateSources(a).sources;
+  const legacy = String(settings.stream_url || "").trim();
+  return legacy ? [normalizeSource({ url: legacy, name: "临时片源" }, 0, new Date().toISOString())] : [];
+}
+/* 当前应当使用的那条：优先用户上次选的，其次列表第一条。
+   记忆的那条若已被停用/标记失效，必须跳过 ——
+   否则用户在管理页标了失效，回到放映厅还是它自动起播，
+   「管理」就成了假动作。此时退回到第一条仍然可用的线路。 */
+function activeSourceOf(a){
+  const list = sourcesOf(a);
+  if(!list.length) return null;
+  const usable = list.filter(sourceUsable);
+  const pool = usable.length ? usable : list;
+  const want = a && a.activeSourceId;
+  return pool.find(s => s.id === want) || pool[0];
+}
+/* 线路是否参与播放。停用与人工标记失效都算不可用，
+   但「未检测」不算 —— 把没探测过的线路默认判死，
+   等于让所有老线路一夜之间全变成不可用。 */
+function sourceIsSearch(s){ return !!(s && s.kind === "search" && s.searchUrl); }
+
+function sourceUsable(s){
+  if(!s) return false;
+  if(sourceIsSearch(s)) return false;   // 站点首页没有可播放地址，不能当播放线路
+  if(s.enabled === false) return false;
+  if(s.health && s.health.state === "dead") return false;
+  return true;
+}
+/* 不可用的原因。必须能说清是哪一条规则判的 ——
+   只显示「不可用」的话，用户会去改别的字段（网址、集数），
+   而真正的原因是这条线路被他自己停用过。 */
+function sourceUnusableReason(s){
+  if(!s) return "无效线路";
+  if(sourceIsSearch(s)) return "搜索型片源：点它带着片名去站里搜，不会在站内播放";
+  if(s.enabled === false) return "已停用，不会被自动选中";
+  if(s.health && s.health.state === "dead") return "已标记失效，不会被自动选中";
+  return "";
+}
+
+/* 「现在看到第几集」的唯一口径：当前线路声明的集数 → 旧 streamEp → 已看集数。
+   三处（片尾自动下一集、详情页播放记录、剧集卡行）都调它 ——
+   各写一遍的话，改其中一处就会出现「下一集提示跳错集数」这种对不上的 bug。 */
+function currentEpisodeOf(a){
+  if(!a) return 0;
+  const line = activeSourceOf(a);
+  if(line && line.ep != null && Number.isFinite(Number(line.ep))) return Math.max(0, Number(line.ep));
+  if(a.streamEp != null && Number.isFinite(Number(a.streamEp))) return Math.max(0, Number(a.streamEp));
+  return Math.max(0, Number(a.watchedEpisodes) || 0);
+}
+
+/* ---- 三态筛选 ----
+   直译 MaybeExcludedMedia：被排除的资源不丢弃，携带原因排到最后。 */
+const EXCLUDE_REASONS = {
+  episode_mismatch: "集数不匹配",
+  no_subtitle:      "无字幕",
+  subtitle_kind:    "字幕形态不支持",
+  invalid_url:      "网址无效",
+  /* 台账状态参与选源：用户在管理页把线路停用或标记失效后，
+     这里必须同步排除，否则「管理」只是一个不生效的标签。 */
+  disabled:         "已停用",
+  dead:             "已标记失效",
+  /* 搜索型片源不是「坏了」，只是形态不同：它是站点首页 + 搜索模板，
+     没有可播放地址，放进播放候选里只会让选源报「没有可用线路」却指着一条活着的源。 */
+  search_only:      "搜索型片源"
+};
+function excludeSource(src, reason){
+  return { state:"excluded", src:null, original:src, reason:reason, reasonText:EXCLUDE_REASONS[reason] || reason };
+}
+function includeSource(src, meta){
+  return { state:"included", src:src, original:src, reason:null,
+           reasonText:null, similarity: meta && meta.similarity != null ? meta.similarity : 100 };
+}
+/* 筛选：返回有序的三态列表（included 在前，按 sortSource 排；excluded 附后）。
+   ctx = { wantEp, wantSubtitle, showExcluded } */
+function filterSources(list, ctx){
+  ctx = ctx || {};
+  const out = [];
+  (list || []).forEach(s => {
+    if(!s || !normalizeStreamURL(s.url)){
+      out.push(excludeSource(s, "invalid_url")); return;
+    }
+    /* 台账状态先于质量筛选判定。
+       顺序有讲究：把「已停用」排在集数/字幕之前，
+       否则同一条线路会先报「集数不匹配」，用户改了集数才发现
+       它早就被自己停用了 —— 提示指向的原因不是真正的原因。 */
+    if(s.enabled === false){ out.push(excludeSource(s, "disabled")); return; }
+    if(s.health && s.health.state === "dead"){ out.push(excludeSource(s, "dead")); return; }
+    /* 搜索型必须排除在**播放**候选之外：它是「去站里搜」的入口，
+       不是可播地址。留在这里会让它顶掉真正能播的线路，
+       表现为「明明存了 B 站那条，播放却说没有可用线路」。 */
+    if(sourceIsSearch(s)){ out.push(excludeSource(s, "search_only")); return; }
+    /* 集数匹配：source.ep 是用户声明的「这条源对应第几集」。
+       为空表示「整季通用」，此时不该被判为不匹配 ——
+       大量站点一条链接覆盖整季，误杀等于让用户白填。
+       同理 wantEp 为空时不做这项筛选：用户没声明在看哪集。 */
+    const ep = s.ep == null || s.ep === "" ? null : Number(s.ep);
+    if(ctx.wantEp != null && ep != null && ep !== Number(ctx.wantEp)){
+      out.push(excludeSource(s, "episode_mismatch")); return;
+    }
+    const subs = srcSubs(s);
+    if(ctx.wantSubtitle && String(s.subtitleKind || "").toUpperCase() === "EMBEDDED"){
+      /* 硬字幕不可关闭，要求外挂字幕时排除。 */
+      out.push(excludeSource(s, "subtitle_kind")); return;
+    }
+    if(ctx.wantSubtitle && subs.length && !subs.includes(String(ctx.wantSubtitle).toUpperCase())){
+      out.push(excludeSource(s, "no_subtitle")); return;
+    }
+    out.push(includeSource(s));
+  });
+  return out.filter(x => x.state === "included" || ctx.showExcluded)
+            .sort(compareSourceResult);
+}
+function compareSourceResult(x, y){
+  if(x.state !== y.state) return x.state === "included" ? -1 : 1;
+  /* 排除项之间不排序，交给 sort 的稳定性保持原始顺序。
+     这里必须显式早返回：excluded 项的 src 是 null，
+     继续往下走会在 compareSourceQuality 里读 null.subtitles 抛错。
+     被排除的项保持数据源给出的顺序，比给它们编一个排序规则更有用 ——
+     数据源的查询顺序本身就反映了「相关性」。 */
+  if(x.state === "excluded") return 0;
+  return compareSourceQuality(x.src, y.src);
+}
+/* 七级排序，直译 sortMediaList。稳定排序由 Array.prototype.sort 保证。
+   全部字段读取都走读取器而不是直接取属性：排序层会被喂进
+   未经 normalizeSource 的对象（导入的旧备份、手写构造的线路），
+   直接读 a.subtitles[0] 会在 undefined 上取下标直接抛错，
+   而 sort 回调抛错的表现是「整个列表排不出来」，定位成本极高。 */
+function srcSubs(s){ return Array.isArray(s && s.subtitles) ? s.subtitles : []; }
+function srcNum(v, d){ const n = Number(v); return Number.isFinite(n) ? n : d; }
+function compareSourceQuality(a, b){
+  if(!a || !b) return 0;
+  const ra = resolutionRank(a.resolution), rb = resolutionRank(b.resolution);
+  if(ra !== rb) return ra - rb;                            /* ① 分辨率 */
+  const pa = subtitleRank(srcSubs(a)[0], true), pb = subtitleRank(srcSubs(b)[0], true);
+  if(pa !== pb) return pa - pb;                            /* ② 字幕语言 */
+  const ta = srcNum(a.tier, 2), tb = srcNum(b.tier, 2);
+  if(ta !== tb) return ta - tb;                            /* ③ 线路优先级 */
+  return String(a.name || "").localeCompare(String(b.name || "")); /* ④ 名称稳定序 */
+}
+
+/* ============================================================
    3. 状态 System Status 与内存数据
    ============================================================ */
 const SYSTEM_STATUSES = [
@@ -2785,122 +3199,6 @@ function migrateRecord(rec, kind){
 }
 
 /* ============================================================
-   4. 通用 UI：吐司 / 模态 / 确认框
-   ============================================================ */
-function toast(msg, kind, ms){
-  const kinds = { ok:"toast-ok", err:"toast-err", warn:"toast-warn", info:"toast-info" };
-  const icons = { ok:"check", err:"warning", warn:"warning", info:"info" };
-  const root = $("#toast-root");
-  const t = document.createElement("div");
-  t.className = "toast " + (kinds[kind] || "toast-info");
-  t.innerHTML = ic(icons[kind] || "info", 16) + '<span>' + esc(msg) + "</span>";
-  root.appendChild(t);
-  setTimeout(() => {
-    t.style.transition = "opacity 240ms, transform 240ms";
-    t.style.opacity = "0"; t.style.transform = "translateY(6px)";
-    setTimeout(() => t.remove(), 250);
-  }, ms || 2600);
-}
-
-let lastFocus = null;
-function openModal(opts){
-  const root = $("#modal-root");
-  lastFocus = document.activeElement;
-  root.innerHTML =
-    '<div class="modal-mask" data-close="1"></div>' +
-    '<div class="modal ' + (opts.wide ? "modal-wide" : "") + (opts.narrow ? " modal-narrow" : "") + '" id="modal-card">' +
-      '<div class="modal-head"><h3 id="modal-title">' + esc(opts.title || "") + "</h3>" +
-        '<button class="btn btn-ghost btn-icon" type="button" id="modal-x" aria-label="关闭">' + ic("close",16) + "</button></div>" +
-      '<div class="modal-body scroll" id="modal-body"></div>' +
-      (opts.footer === false ? "" : '<div class="modal-foot" id="modal-foot"></div>') +
-    "</div>";
-  root.classList.add("open");
-
-  // 关闭行为用事件委托绑定在 root 上，而非逐个按钮绑定。
-  // 这样无论 body/footer 回调何时渲染出 [data-close]，也无论回调是否抛错，弹窗都一定关得掉。
-  root.addEventListener("click", (e) => {
-    const n = e.target && e.target.closest ? e.target.closest("[data-close]") : null;
-    if(!n || !root.contains(n) || n.dataset.close === "0") return;
-    closeModal();
-  });
-
-  const body = $("#modal-body");
-  const foot = $("#modal-foot");
-  // 渲染回调来自各页面，包裹 try/catch：单个回调出错不应让弹窗变成无法关闭的僵尸。
-  try{
-    if(typeof opts.body === "string") body.innerHTML = opts.body; else if(opts.body) opts.body(body);
-    if(foot){
-      if(typeof opts.footer === "string") foot.innerHTML = opts.footer;
-      else if(typeof opts.footer === "function") opts.footer(foot);
-      else foot.innerHTML = '<div class="grow"></div><button class="btn" type="button" data-close="1">关闭</button>';
-    }
-  }catch(err){
-    console.error("[openModal] 渲染回调出错：", err);
-    if(body) body.insertAdjacentHTML("afterbegin",
-      '<p class="err-text">界面渲染出错：' + esc(String(err && err.message || err)) + "</p>");
-  }
-
-  const card = $("#modal-card");
-  if(card) card.addEventListener("keydown", (e) => { if(e.key === "Tab") trapFocus(card, e); });
-  const x = $("#modal-x");
-  if(x) x.addEventListener("click", closeModal);
-  if(typeof opts.onMount === "function"){ try{ opts.onMount(root); }catch(err){ console.error("[openModal] onMount 出错：", err); } }
-  const focusTarget = (card && card.querySelector("[data-autofocus]")) || x;
-  setTimeout(() => { if(focusTarget && document.contains(focusTarget)) focusTarget.focus(); }, 30);
-  return root;
-}
-function closeModal(){
-  const root = $("#modal-root");
-  root.classList.remove("open");
-  root.innerHTML = "";
-  // 任何关闭途径（×/ESC/遮罩/关闭按钮）都要清掉荣誉墙的打开标志，
-  // 否则下次点「新建」保存后会把一个早已关闭的荣誉墙重新弹出来。
-  if(typeof honorWallOpen !== "undefined") honorWallOpen = false;
-  if(lastFocus && lastFocus.focus) setTimeout(() => { try{ lastFocus.focus(); }catch(e){} }, 20);
-}
-function modalEscape(e){
-  if(e.key === "Escape" && $("#modal-root").classList.contains("open")){ closeModal(); }
-}
-document.addEventListener("keydown", modalEscape);
-
-function confirmDialog(opts){
-  return new Promise((resolve) => {
-    let answered = false;
-    const done = (v) => { if(!answered){ answered = true; closeModal(); resolve(v); } };
-    openModal({
-      title: opts.title || "请确认",
-      narrow: true,
-      body: '<p class="small" style="line-height:1.7">' + (opts.html || esc(opts.message || "")) + "</p>",
-      footer: (f) => {
-        f.innerHTML =
-          '<div class="grow"></div>' +
-          '<button class="btn" type="button" id="cd-no">' + esc(opts.cancelText || "取消") + "</button>" +
-          '<button class="btn ' + (opts.danger ? "btn-danger" : "btn-primary") + '" type="button" id="cd-yes" data-autofocus>' + esc(opts.okText || "确定") + "</button>";
-        f.querySelector("#cd-no").addEventListener("click", () => done(false));
-        f.querySelector("#cd-yes").addEventListener("click", () => done(true));
-      },
-      onMount: () => {
-        const card = $("#modal-card");
-        const handler = (e) => {
-          if(e.key === "Escape") done(false);
-          if(e.key === "Enter" && e.target.tagName !== "BUTTON") { e.preventDefault(); done(true); }
-        };
-        card.addEventListener("keydown", handler);
-        card.addEventListener("keydown", (e) => { if(e.key === "Tab") trapFocus(card, e); });
-      }
-    });
-  });
-}
-function trapFocus(container, e){
-  const f = container.querySelectorAll('button,input,select,textarea,[tabindex]:not([tabindex="-1"])');
-  const list = Array.from(f).filter(n => !n.disabled && n.offsetParent !== null);
-  if(!list.length) return;
-  const first = list[0], last = list[list.length-1];
-  if(e.shiftKey && document.activeElement === first){ e.preventDefault(); last.focus(); }
-  else if(!e.shiftKey && document.activeElement === last){ e.preventDefault(); first.focus(); }
-}
-
-/* ============================================================
    5. 持久化辅助
    ============================================================ */
 function touch(a){ a.updatedAt = new Date().toISOString(); return a; }
@@ -2962,6 +3260,485 @@ async function removeSeries(id){
   catch(e){ toast("删除失败：" + e.message, "err"); return false; }
 }
 
+/* ============================================================
+   16.6 播放源台账（跨作品管理）
+   ------------------------------------------------------------
+   需求原话：「不好管理每部动画的播放源那些可以删，那些失效了等等」。
+   逐部作品去看线路有两个问题：
+     ① 失效是跨作品的公共事实。同一个站点挂掉时，
+        库里可能有十几条线路一起失效，逐部去发现等于漏掉一半；
+     ② 删除/停用是批量决策。「把检测不通的都清掉」
+        在逐部视角下无法表达。
+
+   所以这一层把 a.sources 摊平成全局台账：
+     每一项是 { anime, source }，动它就是动那部作品的那条线路，
+     不复制数据 —— 台账是视图，不是第二份存储。
+   ============================================================ */
+
+/* 摊平全局台账。只取自有线路（a.sources），
+   不走 sourcesOf —— 后者会在无线路时回落到 settings.stream_url
+   那条全局兜底，把一个作品算成有线路，而它其实没有可管理的线路。 */
+function sourceLedger(){
+  const rows = [];
+  state.anime.forEach(a => {
+    migrateSources(a);
+    const list = Array.isArray(a.sources) ? a.sources : [];
+    list.forEach(s => { if(s && s.url) rows.push({ anime:a, source:s }); });
+  });
+  return rows;
+}
+/* 线路的展示名：优先线路名，其次从网址推断站点，
+   最后才退回「线路 N」—— 站点名比编号有用得多，
+   台账里一屏十几条「线路 1/2/3」根本分不清谁是谁。 */
+function sourceDisplayName(s){
+  const n = String(s && s.name || "").trim();
+  if(n && !/^线路\s*\d+$/.test(n)) return n;
+  const host = hostOf(normalizeStreamURL(s && s.url) || String(s && s.url || ""));
+  if(host) return n ? (n + " · " + host) : host;
+  return n || "未命名线路";
+}
+/* 台账里一条线路的完整状态标签（徽标文案 + 语义色）。
+   返回数组，因为「停用」与「未检测」可能同时成立。 */
+function sourceFlags(row){
+  const s = row.source;
+  const out = [];
+  /* 「使用中」只在**真能播**时才给。
+     activeSourceOf 在一部作品全部线路都停用/失效时会退回第一条，
+     那是为了不让 activeSourceId 悬空、详情页不至于显示不出线路。
+     但拿它当「使用中」badge 就是骗人：那条线路实际播不了，
+     用户会以为放着不管就能看。徽标描述的是播放器的真实选择，
+     不是数据结构里的指针指向。 */
+  const act = activeSourceOf(row.anime);
+  if(act && act.id === s.id && sourceUsable(act)){
+    out.push({ id:"active", text:"使用中", tone:"ok" });
+  }
+  if(s.enabled === false) out.push({ id:"disabled", text:"已停用", tone:"muted" });
+  /* 搜索型单独一个徽标：它和「已停用/已失效」是完全不同的状态，
+     混在一起的话用户会以为这条坏了、然后去点「恢复」。 */
+  if(sourceIsSearch(s)) out.push({ id:"search", text:"搜索型", tone:"muted" });
+  const h = normalizeHealth(s.health);
+  if(h.state === "dead") out.push({ id:"dead", text:"已失效", tone:"err" });
+  else if(h.state === "blocked") out.push({ id:"blocked", text:"访问被拒", tone:"warn" });
+  else if(h.state === "alive") out.push({ id:"alive", text:"可达", tone:"ok" });
+  else out.push({ id:"unknown", text:"未检测", tone:"muted" });
+  return out;
+}
+/* 台账汇总。分成「健康度分布」而不是给一个总数：
+   用户真正要回答的问题是「有多少条还能用」，不是「我存了多少条」。 */
+function sourceLedgerStats(rows){
+  const st = { total:rows.length, alive:0, dead:0, unknown:0, blocked:0,
+               disabled:0, animeWith:0, animeWithout:0, stale:0 };
+  const seen = new Set();
+  state.anime.forEach(a => {
+    const n = Array.isArray(a.sources) ? a.sources.filter(x => x && x.url).length : 0;
+    if(n) st.animeWith++; else st.animeWithout++;
+  });
+  rows.forEach(r => {
+    seen.add(r.anime.id);
+    if(r.source.enabled === false) st.disabled++;
+    const h = normalizeHealth(r.source.health);
+    if(h.state === "dead") st.dead++;
+    else if(h.state === "blocked") st.blocked++;
+    else if(h.state === "alive") st.alive++;
+    else st.unknown++;
+  });
+  return st;
+}
+/* 单条线路探测。
+ *
+ * 能力边界必须写在结果里，不能让界面替我吹：
+ * 浏览器对第三方站点既读不到状态码也读不到正文，
+ * `fetch` 抛错只说明「请求没能完成」，可能是 DNS 失败、
+ * 也可能是对方拒绝跨域。唯一能确定的是
+ * 「响应回来了没有」。所以只有这一种结论叫 alive，
+ * 其余全部归入 blocked 并附上原因，绝不写「已失效」——
+ * 失效是用户的判断，不是探测器的判断。 */
+async function probeSource(row, opts){
+  opts = opts || {};
+  const url = normalizeStreamURL(row.source.url);
+  if(!url) return { state:"blocked", at:nowIso(), detail:"网址不是有效的 http/https 地址" };
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), opts.timeout || 9000);
+  try{
+    /* mode:"no-cors" 是这里唯一可行的模式：
+       跨域请求若用默认 cors，对面没有 CORS 头就会抛 TypeError，
+       那是「浏览器不让读」而不是「网站挂了」，
+       两种情况混在一起会让探测结果毫无价值。 */
+    const res = await fetch(url, {
+      method:"GET", mode:"no-cors", redirect:"follow",
+      referrerPolicy:"no-referrer", signal:ctrl.signal, cache:"no-store"
+    });
+    /* no-cors 下的响应是不透明的：拿不到状态码，
+       但「resolve 本身就是响应」已经是我们能拿到的最强证据。 */
+    if(res && (res.type === "opaque" || res.status === 0 || res.ok)){
+      return { state:"alive", at:nowIso(),
+        detail:"服务器有响应（跨域限制下无法确认能否播放）" };
+    }
+    return { state:"blocked", at:nowIso(), detail:"HTTP " + (res ? res.status : "?") };
+  }catch(e){
+    const name = String(e && e.name || "");
+    if(name === "AbortError") return { state:"blocked", at:nowIso(), detail:"9 秒内没有响应（网络不通或对方在限流）" };
+    return { state:"blocked", at:nowIso(),
+      detail:"请求未能完成：" + ((e && e.message) || name || "未知原因") };
+  }finally{ clearTimeout(timer); }
+}
+
+/* ---- 台账写操作 ----
+   全部统一走「改内存对象 → 落盘 → 返回成功与否」，
+   且落盘刻意用 Repo.put 而不是 saveAnime：
+   台账整理（改备注、标失效、清重复）不是用户编辑作品内容，
+   用 saveAnime 会 touch() 把 updatedAt 刷成现在，
+   于是「最近添加」排序会因为整理了一次线路而全库乱序。 */
+async function persistAnimeQuiet(a){
+  return await Repo.put("anime", a).then(() => true).catch(err => {
+    toast("保存失败：" + (err && err.message || err), "err");
+    return false;
+  });
+}
+/* 更新一条线路的字段。changes 里出现 undefined 表示「不动这个键」，
+   这样调用方不必先读一遍旧值，也不会误把未传的字段清空。 */
+async function updateSource(row, changes){
+  const s = row.source;
+  Object.keys(changes).forEach(k => {
+    if(changes[k] === undefined) return;
+    if(k === "health"){ s.health = normalizeHealth(changes[k]); return; }
+    s[k] = changes[k];
+  });
+  return await persistAnimeQuiet(row.anime);
+}
+/* 删除一条线路。删掉的可能正是当前线路，
+   此时必须把 activeSourceId 让给剩下的第一条 ——
+   留着悬空 id 的表现是详情页显示一个已不存在的线路名。 */
+async function deleteSource(row){
+  const a = row.anime, s = row.source;
+  const name = sourceDisplayName(s);
+  const before = a.sources.length;
+  a.sources = a.sources.filter(x => x.id !== s.id);
+  if(a.sources.length === before) return false;
+  if(a.activeSourceId === s.id) a.activeSourceId = (a.sources[0] || {}).id || "";
+  syncLegacyStreamFields(a);
+  const ok = await persistAnimeQuiet(a);
+  return ok ? { removed:name, left:a.sources.length } : null;
+}
+/* 旧字段 a.streamUrl/streamEp 要跟着当前线路走。
+   详情页与待机屏仍有读它们的地方，不同步的话
+   「删掉了正在用的那条」之后，页面上还挂着已删线路的集数。 */
+function syncLegacyStreamFields(a){
+  const nx = activeSourceOf(a);
+  a.streamUrl = nx ? nx.url : "";
+  a.streamEp = nx ? nx.ep : null;
+  a.streamUrlAt = nx ? (nx.savedAt || nowIso()) : "";
+}
+/* 批量删除。返回逐条结果而不是一个布尔：
+   界面要能说清「删了 3 条、2 条没删掉」，否则用户会以为全部成功。 */
+async function deleteSources(rows){
+  const okNames = [], failNames = [];
+  for(const r of rows){
+    const res = await deleteSource(r);
+    if(res) okNames.push(res.removed); else failNames.push(sourceDisplayName(r.source));
+  }
+  return { removed:okNames, failed:failNames };
+}
+/* 同一作品内按「网址 + 集数」判重。
+   addSourceFromInput 加新线路时已经拦过一次，
+   这里防的是更早版本/导入数据带进来的重复。 */
+function findDuplicateIn(a, url, ep){
+  return (a.sources || []).find(s =>
+    s.url === url && (s.ep == null || ep == null || s.ep === ep)) || null;
+}
+/* 同一部作品内按「网址 + 集数」判重。
+   注意遍历的是**作品**而不是台账行：
+   一部作品在台账里有几行，就会在外层被访问几次，
+   若按行遍历再回头扫全作品线路，同一组重复会被报告 N 次 ——
+   表现为「发现 2 条重复」，点去重却只删得掉 1 条。 */
+function ledgerDuplicates(rows){
+  const out = [];
+  const seenAnime = new Set();
+  (rows || []).forEach(r => {
+    const a = r.anime;
+    if(!a || seenAnime.has(a.id)) return;
+    seenAnime.add(a.id);
+    const seen = new Map();
+    (a.sources || []).forEach(s => {
+      if(!s || !s.url) return;
+      /* kind 进 key：搜索型存的是站点首页，和同址的普通线路不是重复 ——
+         用户明确选过「仍按普通线路保存」，去重不能把它当靶子删掉。 */
+      const k = (s.kind === "search" ? "search|" : "") + s.url + "|" + (s.ep == null ? "" : s.ep);
+      if(seen.has(k)) out.push({ anime:a, source:s, keepId:seen.get(k) });
+      else seen.set(k, s.id);
+    });
+  });
+  return out;
+}
+/* 标记失效 / 恢复。走「用户判断」通道：
+   探测只能给「可达/不可达」，「这条彻底废了」是用户的结论。 */
+async function markSourceDead(row, dead){
+  return await updateSource(row, {
+    health: dead
+      ? { state:"dead", at:nowIso(), detail:"用户手动标记失效" }
+      : { state:"unknown", at:"", detail:"" }
+  });
+}
+
+/* 手动指定当前线路。
+ *
+ * 为什么要单独立一个函数，而不是直接写 a.activeSourceId = s.id：
+ * activeSourceId 是「播放器当前会起播哪条」的指针，
+ * 一旦它指向一条不可用的线路，activeSourceOf 会在全不可用时
+ * 悄悄退回第一条 —— 用户手动指定的意图就被改掉了，还看不出来。
+ * 所以显式指定时必须：
+ *   ① 允许指向任意线路（含已停用的），因为「我就是要用这条」
+ *      是用户的判断，不是算法的判断；
+ *   ② 但立刻把旧字段同步过去，否则详情页/待机屏读的还是老地址；
+ *   ③ 落盘走 persistAnimeQuiet —— 指定线路属于「整理线路」，
+ *      不该把 updatedAt 刷成现在、把老作品顶到「最近添加」最前。
+ * 返回 false 表示这条线路当前不可用，界面该给出提示而不是假装成功。 */
+async function setActiveSource(row){
+  const a = row && row.anime, s = row && row.source;
+  if(!a || !s) return { ok:false, reason:"missing" };
+  /* 搜索型不能被设为「使用中」：它播不了，
+     设完徽标写着使用中、播放却跳过它，等于界面在骗人。 */
+  if(sourceIsSearch(s)) return { ok:false, reason:"search_only", usable:false, source:s, anime:a };
+  a.activeSourceId = s.id;
+  syncLegacyStreamFields(a);
+  const ok = await persistAnimeQuiet(a);
+  return { ok:ok, usable:sourceUsable(s), source:s, anime:a };
+}
+/* 批量指定：同一部作品只认一条，被选中多条时取「选中的第一条」。
+   静默取最后一条会让用户以为是自己选的那条在生效。 */
+async function setActiveSources(rows){
+  const done = [];
+  const byAnime = new Map();
+  (rows || []).forEach(r => {
+    if(!r || !r.source) return;
+    if(byAnime.has(r.anime.id)) return;
+    byAnime.set(r.anime.id, r);
+  });
+  for(const r of byAnime.values()){
+    const res = await setActiveSource(r);
+    if(res.ok) done.push(r);
+  }
+  return done;
+}
+/* 外部播放器区。
+ *
+ * 数据归属（这是本轮最关键的改动）：
+ *   原先存在 settings.stream_url —— 全局一份，于是「给 A 番粘的片源」
+ *   会在打开 B 番时被当成 B 番的片源。用户的原话是「不用每次都输入
+ *   这部番的链接」，全局一份在语义上根本满足不了。
+ *   现在按作品存：a.sources（多线路）+ a.activeSourceId（当前用哪条），
+ *   settings.stream_url 保留为「无作品时的临时片源」，不删以免旧数据失效。
+ *
+ * 集数记录的现实约束：B 站分 P 用 ?p=，YouTube 用 &start=（秒），
+ * 两者无法统一换算。所以只做「用户自己声明看到第几集」的轻量记录，
+ * 不假装能从播放进度反推 —— 那需要跨域读取播放器内部状态，做不到。
+ */
+/* streamURLOf 已删：无调用点也无测试引用，语义与 activeSourceOf(a).url 重复。 */
+
+/* ============================================================
+   20. 统计口径（§11）
+   ============================================================ */
+function stats(){
+  const list = state.anime;
+  const done = list.filter(isDone);
+  const drop = list.filter(a => a.statusId === "st_drop");
+  const totalEps = list.reduce((s,a) => s + (a.watchedEpisodes || 0), 0);
+  const minutes = list.reduce((s,a) => {
+    if(a.durationMinutes && (a.totalEpisodes === 1 || a.totalEpisodes == null)) return s + a.durationMinutes;
+    return s + (a.watchedEpisodes || 0) * clampNum(settings.episode_minutes,1,600);
+  }, 0);
+  const rewatches = list.reduce((s,a) => s + (a.rewatchCount || 0), 0);
+  const masterpieces = list.filter(a => a.masterpiece).length;
+  return {
+    total: list.length,
+    done: done.length,
+    totalEps,
+    hours: Math.round(minutes / 60),
+    rewatches,
+    masterpieces,
+    doneRate: list.length ? done.length / list.length : 0,
+    dropRate: list.length ? drop.length / list.length : 0,
+    drop: drop.length
+  };
+}
+function topCount(keyFn, list, n){
+  const map = new Map();
+  (list || state.anime).forEach(a => {
+    (keyFn(a) || []).forEach(k => { if(!k) return; map.set(k, (map.get(k) || 0) + 1); });
+  });
+  return Array.from(map.entries()).sort((a,b) => b[1]-a[1] || String(a[0]).localeCompare(String(b[0]))).slice(0, n || 10);
+}
+function recentAdded(n){
+  return state.anime.slice().sort((a,b) => String(b.createdAt).localeCompare(String(a.createdAt))).slice(0, n || 5);
+}
+function recentReviews(n){
+  const out = [];
+  state.anime.forEach(a => (a.reviews || []).forEach(r => out.push({ anime:a, review:r })));
+  return out.sort((x,y) => String(y.review.date).localeCompare(String(x.review.date))).slice(0, n || 3);
+}
+
+/* ---- 观看记录 ----
+   每次观看都留档（感想可空），这里集中放派生量：
+   上次观看日期、时隔重逢年数、旧数据里没留下日期的观看次数。 */
+function lastViewingOf(a){
+  let best = "";
+  (a && a.reviews || []).forEach(r => {
+    const d = String(r.date || "");
+    if(/^\d{4}-\d{2}-\d{2}$/.test(d) && d > best) best = d;
+  });
+  return best;
+}
+function lastViewingYearOf(a){
+  const d = lastViewingOf(a);
+  return d ? Number(d.slice(0,4)) : null;
+}
+/* 最近一次观看距首播多少年。没有日期记录或没有首播年 → null */
+function reunionYearsOf(a){
+  const airY = yearOf(a && a.airDate);
+  const lastY = lastViewingYearOf(a);
+  return (airY && lastY) ? Math.max(0, lastY - airY) : null;
+}
+/* 旧数据里「看过但没留下日期」的观看次数：
+   总观看数 = rewatchCount + 1，留下记录的是 reviews 条数，差值即无日期的部分。 */
+function legacyViewingGap(a){
+  if(!a) return 0;
+  return Math.max(0, (Number(a.rewatchCount) || 0) + 1 - (a.reviews || []).length);
+}
+/* 今年重新看过的作品数（「重新」= 此前已有观看记录，含没日期的旧记录） */
+function rewatchedThisYear(){
+  const y = new Date().getFullYear();
+  return state.anime.filter(a => {
+    const hasThisYear = (a.reviews || []).some(r => Number(String(r.date || "").slice(0,4)) === y);
+    if(!hasThisYear) return false;
+    const hadBefore = (Number(a.rewatchCount) || 0) >= 1 ||
+      (a.reviews || []).some(r => { const ry = Number(String(r.date || "").slice(0,4)); return ry && ry < y; });
+    return hadBefore;
+  }).length;
+}
+
+function allDecades(){
+  const set = new Set();
+  state.anime.forEach(a => { const d = decadeOf(a.airDate); if(d) set.add(d); });
+  return Array.from(set).sort();
+}
+
+function allWatchYears(){
+  const set = new Set();
+  state.anime.forEach(a => { if(a.watchYear) set.add(a.watchYear); });
+  return Array.from(set).sort((a,b) => b-a);
+}
+
+function allStudios(){
+  const map = new Map();
+  state.anime.forEach(a => (a.studios || []).forEach(s => map.set(s, (map.get(s)||0)+1)));
+  return Array.from(map.entries()).sort((a,b) => b[1]-a[1]).map(x => x[0]);
+}
+
+function allGenres(){
+  const map = new Map();
+  state.anime.forEach(a => (a.genres || []).forEach(s => map.set(s, (map.get(s)||0)+1)));
+  return Array.from(map.entries()).sort((a,b) => b[1]-a[1]).map(x => x[0]);
+}
+/* ============================================================
+   21. 荣誉称号（§10）
+   ============================================================ */
+
+const BUILTIN_HONORS = [
+  { id:"h10",    cat:"看完数量", name:"初入番门",     desc:"看完 ≥ 10 部",                metric:"done", need:10,  art:"h10" },
+  { id:"h30",    cat:"看完数量", name:"番剧常客",     desc:"看完 ≥ 30 部",                metric:"done", need:30,  art:"h30" },
+  { id:"h60",    cat:"看完数量", name:"老二次元",     desc:"看完 ≥ 60 部",                metric:"done", need:60,  art:"h60" },
+  { id:"h100d3", cat:"看完数量", name:"番剧考古学家", desc:"看完 ≥ 100 部且年代覆盖 ≥ 3",  metric:"done100_3",        art:"h100d3" },
+  { id:"h200",   cat:"看完数量", name:"童年守墓人",   desc:"看完 ≥ 200 部",               metric:"done", need:200, art:"h200" },
+  { id:"dec3",   cat:"年代",     name:"跨年代观众",   desc:"首播年代覆盖 ≥ 3 个",          metric:"decades", need:3,  art:"dec3" },
+  { id:"old90",  cat:"年代",     name:"动画考古队员", desc:"库中最早作品首播早于 1990 年", metric:"oldest1990",        art:"old90" },
+  { id:"rew10",  cat:"重看",     name:"回味者",       desc:"全库重看次数累计 ≥ 10",        metric:"rewatches", need:10, art:"rew10" },
+  { id:"rew5",   cat:"重看",     name:"五刷大佬",     desc:"单部重看 ≥ 5 次",              metric:"maxRewatch", need:5, art:"rew10" },
+  /* 十年之约 / 年度重逢没有专属 AI 配图：honorArtURL 取不到 HONOR_ART[h.art]
+     会自然落到第三级纯色玻璃背景（用户确认过三级回退的好看标准），先不硬凑图。 */
+  { id:"reunion10", cat:"重看",  name:"十年之约",     desc:"最近一次观看距首播 ≥ 10 年",   metric:"reunion10", need:10 },
+  { id:"reyear3",   cat:"重看",  name:"年度重逢",     desc:"今年重新看过的作品 ≥ 3 部",    metric:"reyear3", need:3 },
+  { id:"m10",    cat:"收藏",     name:"神作收藏家",   desc:"神作标记 ≥ 10",                metric:"masterpieces", need:10, art:"m10" },
+  { id:"keng",   cat:"趣味",     name:"坑王",         desc:"弃坑 ≥ 10 且弃坑率 > 40%",     metric:"keng",                art:"keng" },
+  { id:"mecha",  cat:"趣味",     name:"机战魂",       desc:"含机战/机甲类标签且看完 ≥ 10", metric:"mecha", need:10,   art:"mecha" }
+];
+/* 自定义荣誉存在 settings（localStorage）而不是 IndexedDB：
+   它本质是「个人配置」而非「档案数据」，跟主题、密度等同属偏好。 */
+function customHonors(){ return Array.isArray(settings.custom_honors) ? settings.custom_honors : []; }
+function saveCustomHonors(list){ settings.custom_honors = list; saveSettings(); }
+function allHonors(){
+  return BUILTIN_HONORS.map(h => Object.assign({ builtin:true }, h))
+    .concat(customHonors().map(h => Object.assign({ builtin:false }, h)));
+}
+function honorContext(){
+  const list = state.anime;
+  const doneList = list.filter(isDone);
+  const decades = new Set();
+  let oldest = null;
+  list.forEach(a => {
+    const d = decadeOf(a.airDate);
+    if(d) decades.add(d);
+    const y = yearOf(a.airDate);
+    if(y && (oldest == null || y < oldest)) oldest = y;
+  });
+  const tags = (settings.mecha_tags || []).map(normalize);
+  const mechaCount = doneList.filter(a => (a.genres || []).some(g => tags.indexOf(normalize(g)) >= 0)).length;
+  const s = stats();
+  /* 时隔重逢：全库最长的「最近观看年 − 首播年」；
+     年度重逢：今年重新看过（今年有观看记录，且此前已有观看）的作品数。 */
+  let reunionMax = null;
+  state.anime.forEach(a => {
+    const g = reunionYearsOf(a);
+    if(g != null && (reunionMax == null || g > reunionMax)) reunionMax = g;
+  });
+  return {
+    done: doneList.length,
+    decades: decades.size,
+    oldest,
+    rewatches: s.rewatches,
+    maxRewatch: list.reduce((m,a) => Math.max(m, a.rewatchCount || 0), 0),
+    masterpieces: s.masterpieces,
+    drop: s.drop,
+    dropRate: s.dropRate,
+    total: list.length,
+    mechaCount,
+    reunionMax,
+    reyearCount: rewatchedThisYear()
+  };
+}
+function honorStatus(h, ctx){
+  // 自定义荣誉是「手动授予」：没有可自动计算的指标，由用户决定是否点亮。
+  // 这样既保留自定的自由，又不会让自定义项永远灰着、看着像坏了。
+  if(!h.builtin) return { got: !!h.awarded, cur: h.awarded ? 1 : 0, need: 1, unit:"" };
+  switch(h.metric){
+    case "done":         return { got: ctx.done >= h.need, cur: ctx.done, need: h.need, unit:"部" };
+    case "done100_3":    return { got: ctx.done >= 100 && ctx.decades >= 3, cur: Math.min(ctx.done, ctx.decades * 40), need:100, unit:"部", extra: ctx.done >= 100 ? ("年代覆盖 " + ctx.decades + "/3") : null };
+    case "decades":      return { got: ctx.decades >= h.need, cur: ctx.decades, need: h.need, unit:"个年代" };
+    case "oldest1990":   return { got: ctx.oldest != null && ctx.oldest < 1990, cur: ctx.oldest == null ? 0 : 1, need:1, unit:"部", extra: ctx.oldest == null ? "还没有首播年份" : ("最早 " + ctx.oldest + " 年") };
+    case "rewatches":    return { got: ctx.rewatches >= h.need, cur: ctx.rewatches, need: h.need, unit:"次" };
+    case "maxRewatch":   return { got: ctx.maxRewatch >= h.need, cur: ctx.maxRewatch, need: h.need, unit:"次 / 单部" };
+    case "masterpieces": return { got: ctx.masterpieces >= h.need, cur: ctx.masterpieces, need: h.need, unit:"部" };
+    case "keng":         return { got: ctx.drop >= 10 && ctx.dropRate > 0.4, cur: ctx.drop, need:10, unit:"部弃坑", extra: "弃坑率 " + Math.round(ctx.dropRate*100) + "%" };
+    case "mecha":        return { got: ctx.mechaCount >= h.need, cur: ctx.mechaCount, need: h.need, unit:"部机战" };
+    case "reunion10":    return { got: ctx.reunionMax != null && ctx.reunionMax >= h.need,
+                                  cur: ctx.reunionMax == null ? 0 : ctx.reunionMax, need: h.need, unit:"年",
+                                  extra: ctx.reunionMax == null ? "还没有带日期的观看记录" : ("最长时隔 " + ctx.reunionMax + " 年") };
+    case "reyear3":      return { got: ctx.reyearCount >= h.need, cur: ctx.reyearCount, need: h.need, unit:"部今年重逢" };
+    default:             return { got:false, cur:0, need:1, unit:"" };
+  }
+}
+const QUANT_ORDER = ["h10","h30","h60","h100d3","h200"];
+function currentHonor(){
+  const ctx = honorContext();
+  let top = null;
+  QUANT_ORDER.forEach(id => {
+    const h = BUILTIN_HONORS.find(x => x.id === id);
+    if(h && honorStatus(h, ctx).got) top = h;
+  });
+  const nextQuant = QUANT_ORDER.map(id => BUILTIN_HONORS.find(x => x.id === id))
+    .find(h => h && !honorStatus(h, ctx).got) || null;
+  const nx = nextQuant ? Object.assign({ name: nextQuant.name, need: honorStatus(nextQuant, ctx).need, cur: honorStatus(nextQuant, ctx).cur }) : null;
+  return { topId: top ? top.id : null, nextQuant: nx, ctx };
+}
 /* ============================================================
    6. 外观应用
    ============================================================ */
@@ -3035,6 +3812,234 @@ async function refreshBgImage(){
   if(!settings.bg_image) return;
   const v = await Repo.getAsset(settings.bg_image);
   bgImageUrl = v && typeof v === "string" ? v : "";
+}
+
+function _srgbToLin(c){ c /= 255; return c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4); }
+function _relLum(rgb){ return 0.2126 * _srgbToLin(rgb[0]) + 0.7152 * _srgbToLin(rgb[1]) + 0.0722 * _srgbToLin(rgb[2]); }
+function _contrastRatio(a, b){
+  const l1 = _relLum(a), l2 = _relLum(b);
+  return (Math.max(l1, l2) + 0.05) / (Math.min(l1, l2) + 0.05);
+}
+function _mixRGB(fg, bg, alpha){
+  return [0, 1, 2].map(i => Math.round(fg[i] * alpha + bg[i] * (1 - alpha)));
+}
+function _hexRGB(h){
+  h = String(h || "").replace("#", "");
+  if(h.length === 3) h = h.split("").map(c => c + c).join("");
+  if(h.length < 6) return [0, 0, 0];
+  return [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16)];
+}
+/* 极端背景（纯黑 / 纯白）下所需的最小遮罩。
+   实际背景图的亮度是未知的（data URL 未解码成像素），所以按两端夹逼取最坏情况 ——
+   纯色海报恰好是最容易崩掉的输入，这样估算是保守且正确的。 */
+function bgRequiredOverlay(){
+  const theme = settings.theme;
+  const tint = theme === "light" ? [255, 255, 255] : [6, 10, 16];
+  const fallbackText = theme === "light" ? "#111820" : "#e8eef5";
+  const textRGB = _hexRGB(getComputedStyle(document.documentElement).getPropertyValue("--text").trim() || fallbackText);
+  let best = 0;
+  for(const raw of [[0, 0, 0], [255, 255, 255]]){
+    for(let o = 0; o <= 0.9601; o += 0.02){
+      if(_contrastRatio(textRGB, _mixRGB(tint, raw, o)) >= 4.6){ best = Math.max(best, o); break; }
+    }
+  }
+  return Math.min(0.92, Math.ceil(best * 50) / 50);
+}
+/* 本次渲染实际使用的遮罩：用户设定值与可读性下限取大者 */
+function bgEffectiveOverlay(){
+  return Math.max(Number(settings.bg_overlay) || 0, bgRequiredOverlay());
+}
+function bgReadabilityText(){
+  const req = bgRequiredOverlay();
+  const cur = Number(settings.bg_overlay) || 0;
+  if(cur + 0.001 >= req) return "裸露区域文字对比度已达标";
+  return "已自动加强遮罩至 " + req + "（你的设定 " + cur + "），以保证浅色/深色背景图下的正文可读";
+}
+/* ============================================================
+   22. 图表（ECharts CDN + 降级文字排行）
+   ============================================================ */
+let echartsPromise = null, echartsReady = false, echartsFailed = false;
+function loadECharts(){
+  if(echartsPromise) return echartsPromise;
+  echartsPromise = new Promise((resolve) => {
+    const tryScript = (urls, i) => {
+      if(i >= urls.length){ echartsFailed = true; resolve(null); return; }
+      const s = document.createElement("script");
+      s.src = urls[i];
+      s.async = true;
+      s.onload = () => { echartsReady = !!window.echarts; resolve(window.echarts || null); };
+      s.onerror = () => { tryScript(urls, i+1); };
+      document.head.appendChild(s);
+    };
+    tryScript(["https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js",
+               "https://cdnjs.cloudflare.com/ajax/libs/echarts/5.5.0/echarts.min.js"], 0);
+  });
+  return echartsPromise;
+}
+const chartRegistry = [];
+/* 必须逐个 dispose，不能只清数组 —— 详见 mountCharts 内的注释。 */
+function disposeCharts(){
+  if(!chartRegistry.length) return;
+  chartRegistry.forEach(c => {
+    try{ c.inst.dispose(); }catch(e){}
+    try{ c.inst.off(); }catch(e){}
+  });
+  chartRegistry.length = 0;
+}
+function cssVar(name, fallback){
+  const v = getComputedStyle(document.documentElement).getPropertyValue(name);
+  return (v && v.trim()) || fallback;
+}
+function chartTheme(){
+  return {
+    text: cssVar("--text", "#e6edf3"),
+    muted: cssVar("--muted", "#94a3b3"),
+    accent: cssVar("--accent", "#22d3ee"),
+    border: cssVar("--border", "#2a333f"),
+    panel: cssVar("--panel-2", "#1c232d")
+  };
+}
+function baseOption(){
+  const t = chartTheme();
+  return {
+    textStyle: { color: t.text, fontFamily: "Segoe UI, 'PingFang SC', 'Microsoft YaHei', sans-serif" },
+    tooltip: { backgroundColor: t.panel, borderColor: t.border, textStyle:{ color:t.text } },
+    grid: { left: 8, right: 16, top: 24, bottom: 8, containLabel: true }
+  };
+}
+function barOption(cats, values, opts){
+  const t = chartTheme();
+  const o = opts || {};
+  return Object.assign(baseOption(), {
+    xAxis: { type:"category", data:cats, axisLine:{ lineStyle:{ color:t.border } }, axisLabel:{ color:t.muted, interval:0, hideOverlap:true } },
+    yAxis: { type:"value", splitLine:{ lineStyle:{ color:t.border, opacity:.5 } }, axisLabel:{ color:t.muted }, minInterval:1 },
+    series: [{
+      type:"bar", data:values, barMaxWidth:34,
+      itemStyle:{ color:o.color || t.accent, borderRadius:[4,4,0,0] },
+      label:{ show:o.label !== false, position:"top", color:t.muted, fontSize:10 }
+    }]
+  });
+}
+function hbarOption(cats, values){
+  const t = chartTheme();
+  return Object.assign(baseOption(), {
+    grid: { left: 8, right: 40, top: 12, bottom: 8, containLabel: true },
+    xAxis: { type:"value", splitLine:{ lineStyle:{ color:t.border, opacity:.5 } }, axisLabel:{ color:t.muted }, minInterval:1 },
+    yAxis: { type:"category", data:cats, axisLine:{ lineStyle:{ color:t.border } }, axisLabel:{ color:t.muted, width:90, overflow:"truncate" } },
+    series: [{
+      type:"bar", data:values, barMaxWidth:18,
+      itemStyle:{ color:t.accent, borderRadius:[0,4,4,0] },
+      label:{ show:true, position:"right", color:t.muted, fontSize:10 }
+    }]
+  });
+}
+function pieOption(items){
+  const t = chartTheme();
+  return Object.assign(baseOption(), {
+    tooltip: { trigger:"item", backgroundColor:t.panel, borderColor:t.border, textStyle:{ color:t.text },
+      formatter: p => p.name + "：" + p.value + "（" + p.percent + "%）" },
+    legend: { bottom:0, textStyle:{ color:t.muted, fontSize:10 } },
+    series: [{
+      type:"pie", radius:["42%","66%"], center:["50%","44%"],
+      itemStyle:{ borderColor:t.panel, borderWidth:2 },
+      label:{ color:t.muted, fontSize:10 },
+      data:items
+    }]
+  });
+}
+function rankListHTML(items, unit){
+  if(!items || !items.length) return '<p class="hint">还没有数据</p>';
+  const max = Math.max.apply(null, items.map(i => i.v || 0)) || 1;
+  return '<div class="rank-list">' + items.map((it, i) =>
+    '<div class="rank-item">' +
+      '<div class="rank-no">' + (i+1) + "</div>" +
+      (it.img ? '<div class="rank-thumb"><img src="' + attr(it.img) + '" alt=""></div>' : "") +
+      '<div class="rank-name truncate">' + esc(it.k) + "</div>" +
+      '<div class="rank-val">' + fmtInt(it.v) + (unit || "") + "</div>" +
+    "</div>").join("") + "</div>";
+}
+function mountCharts(root){
+  // 关键：ECharts 实例持有 canvas、WebGL 上下文、事件总线与 ResizeObserver。
+  // 只把数组清空（chartRegistry.length = 0）而不 dispose，往返切页十几次就会
+  // 攒下十几个僵尸实例 —— 这是本项目最大的内存泄漏点，且不报错、只表现为"越用越卡"。
+  disposeCharts();
+  if(!settings.module_charts) return Promise.resolve();
+  const nodes = Array.from(root.querySelectorAll("[data-chart]"));
+  if(!nodes.length) return Promise.resolve();
+  return loadECharts().then(ec => {
+    // 加载期间用户可能已经切走页面：此时 DOM 里的 canvas 早已不在文档中，
+    // 继续 init 会产生永不显示却常驻内存的实例。
+    if(!nodes[0].isConnected) return;
+    nodes.forEach(node => {
+      const kind = node.dataset.chart;
+      const fallbackEl = node.parentNode.querySelector("[data-fallback-for='" + kind + "']");
+      if(!ec || echartsFailed){
+        node.hidden = true;
+        if(fallbackEl) fallbackEl.hidden = false;
+        return;
+      }
+      node.hidden = false;
+      if(fallbackEl) fallbackEl.hidden = true;
+      let inst;
+      try{ inst = ec.init(node, null, { renderer:"canvas" }); }
+      catch(e){ node.hidden = true; if(fallbackEl) fallbackEl.hidden = false; return; }
+      const build = chartBuilders[kind];
+      if(!build) return;
+      inst.setOption(build());
+      chartRegistry.push({ inst, kind });
+    });
+  }).catch(() => {
+    nodes.forEach(node => {
+      node.hidden = true;
+      const fb = node.parentNode.querySelector("[data-fallback-for='" + node.dataset.chart + "']");
+      if(fb) fb.hidden = false;
+    });
+  });
+}
+function redrawChartsIfOpen(){
+  if(!chartRegistry.length) return;
+  chartRegistry.forEach(c => {
+    try{
+      c.inst.setOption(chartBuilders[c.kind] ? chartBuilders[c.kind]() : {}, true);
+    }catch(e){}
+  });
+}
+const chartBuilders = {
+  decade(){
+    const cats = allDecades();
+    const vals = cats.map(d => state.anime.filter(a => decadeOf(a.airDate) === d).length);
+    return barOption(cats.map(d => d + "s"), vals);
+  },
+  studio(){
+    // topCount 的 keyFn 必须返回数组（作品可有多家制作公司），
+    // 传入字符串会让 forEach 逐字符统计 —— 这是旧实现的一个隐性错误。
+    const items = topCount(a => a.studios || [], state.anime, 8);
+    return hbarOption(items.map(i => i[0]), items.map(i => i[1]));
+  },
+  genre(){
+    const items = topCount(a => a.genres || [], state.anime, 8);
+    return hbarOption(items.map(i => i[0]), items.map(i => i[1]));
+  },
+  status(){
+    const counts = {};
+    state.statuses.forEach(s => { counts[s.id] = 0; });
+    state.anime.forEach(a => { if(counts[a.statusId] != null) counts[a.statusId]++; });
+    const items = state.statuses.map(s => ({ name: s.name, value: counts[s.id] || 0 }))
+      .filter(i => i.value > 0);
+    return pieOption(items);
+  },
+  /* 观看年份分布：横轴与计数都用 watchYear（你哪一年看的）。
+     旧实现曾把观看年份的横轴配了 airDate 的计数，是颗哑雷；这次接上面板时一并修正。 */
+  year(){
+    const cats = allWatchYears();
+    const vals = cats.map(y => state.anime.filter(a => Number(a.watchYear) === Number(y)).length);
+    return barOption(cats.map(String), vals, { label:false });
+  }
+};
+function chartPanelHTML(kind, title, icon, fallbackHTML, height){
+  return '<div class="panel"><div class="panel-head">' + ic(icon,16) + "<h3>" + esc(title) + "</h3></div>" +
+    '<div class="chart-box"><div class="chart-el' + (height === "tall" ? " tall" : "") + '" data-chart="' + kind + '"></div>' +
+    '<div data-fallback-for="' + kind + '" hidden>' + fallbackHTML + "</div></div></div>";
 }
 
 /* ============================================================
@@ -3119,14 +4124,15 @@ function renderRoute(){
   syncSkinLabels($("#page-actions"));
   redrawChartsIfOpen();
 }
-function refreshIfVisible(pageId){
-  if(state.route === pageId) renderRoute(); else updateSidebarInfo();
-}
 function rerender(){
   renderRoute();
   /* TV 套系的列数依赖渲染后的实测宽度，必须每次重渲染后重算。
      放这里而不是 applyAppearance：那里 DOM 还是旧的。 */
   if(settings.ui_skin === "tv") updateTvColumns();
+}
+function refreshAll(){
+  updateSidebarInfo();
+  renderRoute();
 }
 /* 科技感按钮的故障层用 content:attr(data-label) 复制按钮文字。
    CSS 拿不到元素的文本内容，所以每次渲染后统一把可见文本写进 data-label。
@@ -3721,7 +4727,6 @@ function commitAnime(an, prev){
     an.createdAt = prev.createdAt;
   }
   applyAutoStatus(an);
-  if(an.watchedEpisodes > 0 && !an.watchYear && !prev) { /* 允许无年份，编年史归入未归档 */ }
   return an;
 }
 
@@ -3952,9 +4957,6 @@ async function localizeCover(a){
     console.info("封面本地化失败（保留远程地址）：", a.titleCn, e && e.message || e);
   }
 }
-function coverNeedsLocalize(a){
-  return !!(a && a.coverUrl && !a.coverData && /^https?:\/\//i.test(a.coverUrl));
-}
 
 /* L1/L2/L3 处理 */
 async function handleDuplicate(an, dup, opts){
@@ -4014,14 +5016,14 @@ function mergeRecords(base, incoming, opts){
   });
   ["statusId","watchedEpisodes","myScore","watchYear","watchGrade","watchChannel"].forEach(f => {
     const bt = new Date(base.updatedAt || 0).getTime(), it = new Date(incoming.updatedAt || 0).getTime();
-    let pick = it >= bt ? incoming : base;
+    let winner = it >= bt ? incoming : base;
     let other = it >= bt ? base : incoming;
     /* 刚填的表单草稿 updatedAt 恒为 now、恒胜出，但它的「想看 / 0 集」只是
        表单默认值，不代表用户想清空已有进度 —— 重录同一部作品选「合并」，
        不该把「看完 / 已看 12 集」重置回零。此时改为让 base 胜出。 */
-    if(pick === incoming && f === "watchedEpisodes" && !Number(pick.watchedEpisodes) && Number(other.watchedEpisodes)){ pick = base; other = incoming; }
-    if(pick === incoming && f === "statusId" && pick.statusId === "st_want" && other.statusId && other.statusId !== "st_want"){ pick = base; other = incoming; }
-    let v = pick[f];
+    if(winner === incoming && f === "watchedEpisodes" && !Number(winner.watchedEpisodes) && Number(other.watchedEpisodes)){ winner = base; other = incoming; }
+    if(winner === incoming && f === "statusId" && winner.statusId === "st_want" && other.statusId && other.statusId !== "st_want"){ winner = base; other = incoming; }
+    let v = winner[f];
     if(v == null || v === "") v = other[f];
     out[f] = v;
   });
@@ -4170,26 +5172,6 @@ const SORTS = [
   { key:"series_asc",     name:"系列（归拢同一部）" }
 ];
 
-function allDecades(){
-  const set = new Set();
-  state.anime.forEach(a => { const d = decadeOf(a.airDate); if(d) set.add(d); });
-  return Array.from(set).sort();
-}
-function allStudios(){
-  const map = new Map();
-  state.anime.forEach(a => (a.studios || []).forEach(s => map.set(s, (map.get(s)||0)+1)));
-  return Array.from(map.entries()).sort((a,b) => b[1]-a[1]).map(x => x[0]);
-}
-function allGenres(){
-  const map = new Map();
-  state.anime.forEach(a => (a.genres || []).forEach(s => map.set(s, (map.get(s)||0)+1)));
-  return Array.from(map.entries()).sort((a,b) => b[1]-a[1]).map(x => x[0]);
-}
-function allWatchYears(){
-  const set = new Set();
-  state.anime.forEach(a => { if(a.watchYear) set.add(a.watchYear); });
-  return Array.from(set).sort((a,b) => b-a);
-}
 function matchQ(a, q){
   if(!q) return true;
   const k = normalize(q);
@@ -5212,7 +6194,6 @@ const EMBED_RULES = [
     }},
   { id:"generic", name:"通用网页", test:() => true, build:u => u }
 ];
-function hostOf(u){ try { return new URL(u).hostname; } catch(e){ return ""; } }
 function pick(u, re){ const m = u.match(re); return m ? m[1] : null; }
 
 /* ---- B 站番剧（/anime/play/*）----
@@ -5361,7 +6342,6 @@ function searchKeywordFor(a){
   if(!a) return "";
   return String(a.titleCn || a.titleOriginal || "").trim();
 }
-function sourceIsSearch(s){ return !!(s && s.kind === "search" && s.searchUrl); }
 /* 搜索源的默认名字：认得出的站用站点名，认不出用域名 ——
    「线路 1」这种名字在台账里等于没有名字。 */
 function siteLabelOf(u){
@@ -5371,17 +6351,6 @@ function siteLabelOf(u){
 }
 
 /* 宽松校验：只要求有协议头。URL 构造函数会拒绝 javascript: 等伪协议。 */
-function normalizeStreamURL(u){
-  const s = String(u || "").trim();
-  if(!s) return "";
-  if(/^javascript:/i.test(s)) return "";   // 绝不允许 javascript: 伪协议进 iframe
-  const withProto = /^https?:\/\//i.test(s) ? s : ("https://" + s);
-  try{
-    const u2 = new URL(withProto);
-    if(u2.protocol !== "http:" && u2.protocol !== "https:") return "";
-    return u2.href;
-  }catch(e){ return ""; }
-}
 /* 把任意网址解析为可嵌入地址；同时告知用户「发生了什么转换」，
    否则他会以为自己粘的链接被系统偷偷改了。
    番剧链接需要一次网络换算，所以额外提供异步版 resolveEmbedAsync。 */
@@ -5519,649 +6488,6 @@ async function mountStreamPlayer(mountEl, raw, statusEl){
   mountEl.appendChild(frame);
   return () => { clear(); try{ frame.src = "about:blank"; }catch(e){} };
 }
-
-/* ============================================================
-   16.5 播放源体系（数据模型 + 选源算法）
-   ------------------------------------------------------------
-   参考 Izuko_TV / Animeko 的 MediaSelector 体系，直译成纯函数。
-
-   为什么要有「多线路」：原先一条作品只存一个 streamUrl，
-   用户要换线路只能覆盖，之前的线路就没了。Izuko_TV 的做法是
-   一个条目下并存多个源，播放时再挑。
-
-   为什么筛选要三态（included / excluded + 原因）：
-   直接把不合适的资源丢掉，用户只会看到「搜不到」，
-   不知道是分辨率不对还是字幕缺失。携带原因排到最后，
-   界面上能写清「为什么没选它」，用户也能手动挑回来。
-
-   为什么选源是 DFS 而不是加权求和：
-   加权求和会让「4K 无字幕」压过「1080P 有字幕」——
-   数字算出来是 4K 分高，但用户其实想要字幕。
-   DFS 是字典序：分辨率 → 字幕 → 字幕组 → 线路，
-   每一层内部穷尽后才下降，且某层匹配不到时不下降
-   （字幕组匹配不到不代表该换更差的字幕语言）。
-   ============================================================ */
-
-/* 分辨率档位：从高到低。用于 DFS 的第一层，也是唯一的排序依据。
-   不看文件大小 —— Izuko_TV 的原始注释里明确「质量优先而非大小优先」，
-   4K 体积是 1080P 的十倍，掺进评分就成了噪音。 */
-const RESOLUTION_ORDER = ["2160P","1440P","1080P","720P","480P"];
-const SUBTITLE_ORDER    = ["CHS","CHT","JPY","ENG"];
-/* 字幕形态。网页端只有「外挂字幕轨」是真正可用的，
-   内封在 <video> 上无法切换，硬字幕烧进画面更无法处理。
-   所以 UNSUPPORTED 不是缺陷陈述，是能力边界。 */
-const SUBTITLE_KINDS = ["EXTERNAL","CLOSED","EMBEDDED"];
-
-function resolutionRank(res){
-  const s = String(res || "").toUpperCase().trim();
-  const i = RESOLUTION_ORDER.indexOf(s);
-  return i < 0 ? RESOLUTION_ORDER.length : i;   // 未知分辨率排在所有已知之后
-}
-function subtitleRank(lang, wanted){
-  if(!wanted) return 0;                                   // 没偏好语言要求时不构成筛选条件
-  const i = SUBTITLE_ORDER.indexOf(String(lang || "").toUpperCase());
-  return i < 0 ? SUBTITLE_ORDER.length : i;
-}
-
-/* 线路健康度：探测结果与人工标记。
-   浏览器端只能确认「网络层有没有响应」，确认不了 HTTP 状态码，
-   所以状态只有四档且必须允许 unknown —— 把「没探测过」画成
-   「可用」和画成「失效」都是在骗用户。 */
-const HEALTH_STATES = ["unknown", "alive", "dead", "blocked"];
-const HEALTH_TEXT = {
-  unknown: "未检测",
-  alive:   "网络可达",
-  dead:    "已标记失效",
-  blocked: "被拒绝访问"
-};
-function normalizeHealth(h){
-  if(!h || typeof h !== "object") return { state:"unknown", at:"", detail:"" };
-  const st = HEALTH_STATES.indexOf(String(h.state)) >= 0 ? String(h.state) : "unknown";
-  return { state:st, at:String(h.at || ""), detail:String(h.detail || "").slice(0, 200) };
-}
-
-/* 把一条线路补全成完整结构。
-   缺字段必须给确定的默认值而不是 undefined ——
-   下游的排序比较全部是数值比较，undefined 会让比较结果变成 NaN，
-   而 NaN 参与 sort 的后果是顺序不确定且不报错，极难排查。 */
-function normalizeSource(s, idx, nowIso){
-  if(!s) return null;
-  const url = String(s.url || s.streamUrl || "").trim();
-  if(!url) return null;
-  const kind = SUBTITLE_KINDS.indexOf(String(s.subtitleKind || "").toUpperCase()) >= 0
-    ? String(s.subtitleKind).toUpperCase()
-    /* 拿不到就当外挂：这是网页端唯一真正可用的形态，
-       标成硬字幕会让所有线路都被判「平台不支持」而一个都不剩。 */
-    : "EXTERNAL";
-  return {
-    /* id 必须在多次保存之间稳定 —— 选源结果按 id 记忆「上次用的是哪条」，
-       id 每次变的话记忆永远落空，表现为「每次都选第一条」。 */
-    id: String(s.id || ("src-" + idx + "-" + hashish(url))),
-    name: String(s.name || ("线路 " + (idx + 1))),
-    url: url,
-    ep: s.ep == null || s.ep === "" ? null : Number(s.ep),
-    resolution: String(s.resolution || "").toUpperCase() || null,
-    subtitleKind: kind,
-    /* 语言可能是数组也可能是单值，统一成数组 */
-    subtitles: Array.isArray(s.subtitles)
-      ? s.subtitles.map(x => String(x || "").toUpperCase()).filter(Boolean)
-      : (s.subtitle ? [String(s.subtitle).toUpperCase()] : []),
-    tier: Number.isFinite(Number(s.tier)) ? Number(s.tier) : 2,
-    /* ---- 搜索型片源 ----
-       存的是「站点首页 + 搜索模板」而不是播放页：点一下把片名带过去让站自己搜。
-       kind 缺省必须是 play：老数据没有这个键，
-       按 truthy 判断会把用户所有已存线路一次性变成搜索型。 */
-    kind: String(s.kind || "") === "search" ? "search" : "play",
-    searchUrl: String(s.searchUrl || "").trim(),
-    savedAt: s.savedAt || nowIso || "",
-    /* ---- 台账字段（播放源管理页用）----
-       这三个字段只影响「管理与筛选」，不参与选源质量比较。
-       enabled 缺省必须为 true：老数据没有这个键，
-       若按 falsy 判断会把用户所有线路一次性判成停用。 */
-    enabled: s.enabled === false ? false : true,
-    note: String(s.note || "").slice(0, 200),
-    health: normalizeHealth(s.health),
-    lastUsedAt: s.lastUsedAt || ""
-  };
-}
-/* 轻量字符串哈希，用于生成稳定 id。不追求分布性，只求稳定。 */
-function hashish(str){
-  let h = 5381;
-  const s = String(str || "");
-  for(let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) >>> 0;
-  return h.toString(36);
-}
-
-/* ---- 迁移：旧数据 → 多线路 ----
-   旧结构是 a.streamUrl（单条）+ a.streamEp + a.streamUrlAt。
-   迁移必须幂等：已经迁过的数据再迁一次结果不变。
-   这一点很重要 —— 启动流程、导入流程、备份恢复都会调用迁移，
-   只要有一处重复调用就会产生第二条重复线路。 */
-function migrateSources(a){
-  if(!a) return a;
-  const now = new Date().toISOString();
-  const raw = Array.isArray(a.sources) ? a.sources : [];
-  const list = raw.map((s, i) => normalizeSource(s, i, now)).filter(Boolean);
-  if(list.length){ a.sources = list; return a; }
-  /* 没有 sources 但有旧字段 → 迁一条。 */
-  if(a.streamUrl){
-    const migrated = normalizeSource({
-      url: a.streamUrl, ep: a.streamEp, name: "原线路", savedAt: a.streamUrlAt
-    }, 0, now);
-    if(migrated) a.sources = [migrated];
-  }
-  if(!Array.isArray(a.sources)) a.sources = [];
-  return a;
-}
-
-/* 取出该作品的全部线路（未保存任何线路时给一条临时线路）。
-   settings.stream_url 是历史兜底：早期版本只有全局一份，
-   直接丢掉会让老用户的片源凭空消失。 */
-function sourcesOf(a){
-  const own = Array.isArray(a && a.sources) ? a.sources.filter(s => s && s.url) : [];
-  if(own.length) return own;
-  if(a && a.streamUrl) return migrateSources(a).sources;
-  const legacy = String(settings.stream_url || "").trim();
-  return legacy ? [normalizeSource({ url: legacy, name: "临时片源" }, 0, new Date().toISOString())] : [];
-}
-/* 当前应当使用的那条：优先用户上次选的，其次列表第一条。
-   记忆的那条若已被停用/标记失效，必须跳过 ——
-   否则用户在管理页标了失效，回到放映厅还是它自动起播，
-   「管理」就成了假动作。此时退回到第一条仍然可用的线路。 */
-function activeSourceOf(a){
-  const list = sourcesOf(a);
-  if(!list.length) return null;
-  const usable = list.filter(sourceUsable);
-  const pool = usable.length ? usable : list;
-  const want = a && a.activeSourceId;
-  return pool.find(s => s.id === want) || pool[0];
-}
-/* 线路是否参与播放。停用与人工标记失效都算不可用，
-   但「未检测」不算 —— 把没探测过的线路默认判死，
-   等于让所有老线路一夜之间全变成不可用。 */
-function sourceUsable(s){
-  if(!s) return false;
-  if(sourceIsSearch(s)) return false;   // 站点首页没有可播放地址，不能当播放线路
-  if(s.enabled === false) return false;
-  if(s.health && s.health.state === "dead") return false;
-  return true;
-}
-/* 不可用的原因。必须能说清是哪一条规则判的 ——
-   只显示「不可用」的话，用户会去改别的字段（网址、集数），
-   而真正的原因是这条线路被他自己停用过。 */
-function sourceUnusableReason(s){
-  if(!s) return "无效线路";
-  if(sourceIsSearch(s)) return "搜索型片源：点它带着片名去站里搜，不会在站内播放";
-  if(s.enabled === false) return "已停用，不会被自动选中";
-  if(s.health && s.health.state === "dead") return "已标记失效，不会被自动选中";
-  return "";
-}
-
-/* 「现在看到第几集」的唯一口径：当前线路声明的集数 → 旧 streamEp → 已看集数。
-   三处（片尾自动下一集、详情页播放记录、剧集卡行）都调它 ——
-   各写一遍的话，改其中一处就会出现「下一集提示跳错集数」这种对不上的 bug。 */
-function currentEpisodeOf(a){
-  if(!a) return 0;
-  const line = activeSourceOf(a);
-  if(line && line.ep != null && Number.isFinite(Number(line.ep))) return Math.max(0, Number(line.ep));
-  if(a.streamEp != null && Number.isFinite(Number(a.streamEp))) return Math.max(0, Number(a.streamEp));
-  return Math.max(0, Number(a.watchedEpisodes) || 0);
-}
-
-/* ---- 三态筛选 ----
-   直译 MaybeExcludedMedia：被排除的资源不丢弃，携带原因排到最后。 */
-const EXCLUDE_REASONS = {
-  episode_mismatch: "集数不匹配",
-  no_subtitle:      "无字幕",
-  subtitle_kind:    "字幕形态不支持",
-  invalid_url:      "网址无效",
-  /* 台账状态参与选源：用户在管理页把线路停用或标记失效后，
-     这里必须同步排除，否则「管理」只是一个不生效的标签。 */
-  disabled:         "已停用",
-  dead:             "已标记失效",
-  /* 搜索型片源不是「坏了」，只是形态不同：它是站点首页 + 搜索模板，
-     没有可播放地址，放进播放候选里只会让选源报「没有可用线路」却指着一条活着的源。 */
-  search_only:      "搜索型片源"
-};
-function excludeSource(src, reason){
-  return { state:"excluded", src:null, original:src, reason:reason, reasonText:EXCLUDE_REASONS[reason] || reason };
-}
-function includeSource(src, meta){
-  return { state:"included", src:src, original:src, reason:null,
-           reasonText:null, similarity: meta && meta.similarity != null ? meta.similarity : 100 };
-}
-/* 筛选：返回有序的三态列表（included 在前，按 sortSource 排；excluded 附后）。
-   ctx = { wantEp, wantSubtitle, showExcluded } */
-function filterSources(list, ctx){
-  ctx = ctx || {};
-  const out = [];
-  (list || []).forEach(s => {
-    if(!s || !normalizeStreamURL(s.url)){
-      out.push(excludeSource(s, "invalid_url")); return;
-    }
-    /* 台账状态先于质量筛选判定。
-       顺序有讲究：把「已停用」排在集数/字幕之前，
-       否则同一条线路会先报「集数不匹配」，用户改了集数才发现
-       它早就被自己停用了 —— 提示指向的原因不是真正的原因。 */
-    if(s.enabled === false){ out.push(excludeSource(s, "disabled")); return; }
-    if(s.health && s.health.state === "dead"){ out.push(excludeSource(s, "dead")); return; }
-    /* 搜索型必须排除在**播放**候选之外：它是「去站里搜」的入口，
-       不是可播地址。留在这里会让它顶掉真正能播的线路，
-       表现为「明明存了 B 站那条，播放却说没有可用线路」。 */
-    if(sourceIsSearch(s)){ out.push(excludeSource(s, "search_only")); return; }
-    /* 集数匹配：source.ep 是用户声明的「这条源对应第几集」。
-       为空表示「整季通用」，此时不该被判为不匹配 ——
-       大量站点一条链接覆盖整季，误杀等于让用户白填。
-       同理 wantEp 为空时不做这项筛选：用户没声明在看哪集。 */
-    const ep = s.ep == null || s.ep === "" ? null : Number(s.ep);
-    if(ctx.wantEp != null && ep != null && ep !== Number(ctx.wantEp)){
-      out.push(excludeSource(s, "episode_mismatch")); return;
-    }
-    const subs = srcSubs(s);
-    if(ctx.wantSubtitle && String(s.subtitleKind || "").toUpperCase() === "EMBEDDED"){
-      /* 硬字幕不可关闭，要求外挂字幕时排除。 */
-      out.push(excludeSource(s, "subtitle_kind")); return;
-    }
-    if(ctx.wantSubtitle && subs.length && !subs.includes(String(ctx.wantSubtitle).toUpperCase())){
-      out.push(excludeSource(s, "no_subtitle")); return;
-    }
-    out.push(includeSource(s));
-  });
-  return out.filter(x => x.state === "included" || ctx.showExcluded)
-            .sort(compareSourceResult);
-}
-function compareSourceResult(x, y){
-  if(x.state !== y.state) return x.state === "included" ? -1 : 1;
-  /* 排除项之间不排序，交给 sort 的稳定性保持原始顺序。
-     这里必须显式早返回：excluded 项的 src 是 null，
-     继续往下走会在 compareSourceQuality 里读 null.subtitles 抛错。
-     被排除的项保持数据源给出的顺序，比给它们编一个排序规则更有用 ——
-     数据源的查询顺序本身就反映了「相关性」。 */
-  if(x.state === "excluded") return 0;
-  return compareSourceQuality(x.src, y.src);
-}
-/* 七级排序，直译 sortMediaList。稳定排序由 Array.prototype.sort 保证。
-   全部字段读取都走读取器而不是直接取属性：排序层会被喂进
-   未经 normalizeSource 的对象（导入的旧备份、手写构造的线路），
-   直接读 a.subtitles[0] 会在 undefined 上取下标直接抛错，
-   而 sort 回调抛错的表现是「整个列表排不出来」，定位成本极高。 */
-function srcSubs(s){ return Array.isArray(s && s.subtitles) ? s.subtitles : []; }
-function srcNum(v, d){ const n = Number(v); return Number.isFinite(n) ? n : d; }
-function compareSourceQuality(a, b){
-  if(!a || !b) return 0;
-  const ra = resolutionRank(a.resolution), rb = resolutionRank(b.resolution);
-  if(ra !== rb) return ra - rb;                            /* ① 分辨率 */
-  const pa = subtitleRank(srcSubs(a)[0], true), pb = subtitleRank(srcSubs(b)[0], true);
-  if(pa !== pb) return pa - pb;                            /* ② 字幕语言 */
-  const ta = srcNum(a.tier, 2), tb = srcNum(b.tier, 2);
-  if(ta !== tb) return ta - tb;                            /* ③ 线路优先级 */
-  return String(a.name || "").localeCompare(String(b.name || "")); /* ④ 名称稳定序 */
-}
-
-/* ---- 偏好 DFS ----
-   直译 MediaSelectionDecider.findByPreference。
-   四层字典序：分辨率 → 字幕语言 → 字幕组 → 线路。
-   关键：某层匹配不到时在**当前层**继续穷尽，而不是下降到下一层。
-   字幕组匹配不到就换更差的字幕语言，是这个算法最容易写错的地方。
-   （应用内当前选源只走 activeSourceOf + filterSources；本节保留是因为
-   tools/test-source.js 对它有整组行为测试，作为已验证的备用选源器。）
-   ---- 由 tools/test-source.js 覆盖，勿删 ---- */
-function pickByPreference(included, pref){
-  pref = pref || {};
-  const cand = included.filter(x => x.state === "included").map(x => x.src);
-  if(!cand.length) return null;
-  const resSeq = pref.resolution
-    ? [pref.resolution].concat(pref.fallbackResolutions || [])
-    : (pref.fallbackResolutions || RESOLUTION_ORDER.slice());
-  const langSeq = pref.subtitleLanguage
-    ? [pref.subtitleLanguage].concat(pref.fallbackSubtitleLanguages || [])
-    : [null];   /* 没偏好语言 → 只有一层，占位任意 */
-  const allianceSeq = pref.alliance ? [pref.alliance] : [null];
-  const srcSeq = pref.sourceId ? [pref.sourceId] : [null];
-
-  for(let i = 0; i < resSeq.length; i++){
-    for(let j = 0; j < langSeq.length; j++){
-      /* 字幕组层：匹配不到时不下降语言层，
-         而是在同一语言下把线路层再跑一遍（srcSeq 的外层）。 */
-      const afterAlliance = (function tryAlliance(){
-        for(let k = 0; k < allianceSeq.length; k++){
-          for(let l = 0; l < srcSeq.length; l++){
-            const hit = cand.find(s =>
-              resolutionOf(s, resSeq[i]) &&
-              langOf(s, langSeq[j]) &&
-              allianceOf(s, allianceSeq[k]) &&
-              sourceOfId(s, srcSeq[l]));
-            if(hit) return hit;
-          }
-        }
-        return null;
-      })();
-      if(afterAlliance) return afterAlliance;
-    }
-  }
-  /* 偏好全部落空 → 退回排序最优，不让用户面对空列表。 */
-  return cand.slice().sort(compareSourceQuality)[0] || null;
-}
-/* 通配判定：序列里该项为 null 表示「任意」，一律通过。 */
-function resolutionOf(s, want){ return !want || (s.resolution || "").toUpperCase() === String(want).toUpperCase(); }
-function langOf(s, want){
-  if(!want) return true;
-  return s.subtitles.some(x => x === String(want).toUpperCase());
-}
-function allianceOf(s, want){ return !want || s.name === want; }
-function sourceOfId(s, want){ return !want || s.id === want; }
-
-/* ---- 分阶段自动选源 ----
-   直译 MediaAutoSelector 的四阶段。网页端是本地数据，没有网络请求，
-   所以「时间预算」退化为「时间预算」仍然有意义：
-   用户可能在等，用户也可能在改主意。真正的价值是**记忆优先**——
-   上次能用的线路先用，不合适再换，避免每次都重新试。 */
-const AUTO_SELECT_STAGES = [
-  { id:"preferred", label:"上次用的线路" },
-  { id:"instant",   label:"优先线路" },
-  { id:"exact",     label:"精确匹配" },
-  { id:"fuzzy",     label:"全部候选" }
-];
-function autoSelect(entries, ctx){
-  ctx = ctx || {};
-  const included = entries.filter(x => x.state === "included");
-  if(!included.length) return { source:null, stage:"none", reason:"没有可用线路" };
-  const prefId = ctx.preferredSourceId;
-  if(prefId){
-    const hit = included.find(x => x.src.id === prefId);
-    if(hit) return { source:hit.src, stage:"preferred", reason:"上次用的线路仍可用" };
-  }
-  if(ctx.fastSelect){
-    const instant = included.find(x => x.src.tier <= 0);
-    if(instant) return { source:instant.src, stage:"instant", reason:"优先线路已就绪" };
-  }
-  const exact = included.filter(x => resolutionOf(x.src, ctx.wantResolution));
-  if(exact.length){
-    /* 必须取 .src：exact 里装的是 { state, src } 条目，
-       直接把它当线路返回的话，调用方拿到 entry.name / entry.url 全是 undefined，
-       和下面 fuzzy 分支的返回形态也对不上。 */
-    const best = exact.slice().sort(compareSourceQuality)[0];
-    return { source:best.src, stage:"exact", reason:"按分辨率与线路优先级选定" };
-  }
-  const fuzzy = included.slice().sort(compareSourceQuality)[0];
-  return { source:fuzzy.src, stage:"fuzzy", reason:"没有精确匹配，取质量最优" };
-}
-
-/* ============================================================
-   16.6 播放源台账（跨作品管理）
-   ------------------------------------------------------------
-   需求原话：「不好管理每部动画的播放源那些可以删，那些失效了等等」。
-   逐部作品去看线路有两个问题：
-     ① 失效是跨作品的公共事实。同一个站点挂掉时，
-        库里可能有十几条线路一起失效，逐部去发现等于漏掉一半；
-     ② 删除/停用是批量决策。「把检测不通的都清掉」
-        在逐部视角下无法表达。
-
-   所以这一层把 a.sources 摊平成全局台账：
-     每一项是 { anime, source }，动它就是动那部作品的那条线路，
-     不复制数据 —— 台账是视图，不是第二份存储。
-   ============================================================ */
-
-/* 摊平全局台账。只取自有线路（a.sources），
-   不走 sourcesOf —— 后者会在无线路时回落到 settings.stream_url
-   那条全局兜底，把一个作品算成有线路，而它其实没有可管理的线路。 */
-function sourceLedger(){
-  const rows = [];
-  state.anime.forEach(a => {
-    migrateSources(a);
-    const list = Array.isArray(a.sources) ? a.sources : [];
-    list.forEach(s => { if(s && s.url) rows.push({ anime:a, source:s }); });
-  });
-  return rows;
-}
-/* 线路的展示名：优先线路名，其次从网址推断站点，
-   最后才退回「线路 N」—— 站点名比编号有用得多，
-   台账里一屏十几条「线路 1/2/3」根本分不清谁是谁。 */
-function sourceDisplayName(s){
-  const n = String(s && s.name || "").trim();
-  if(n && !/^线路\s*\d+$/.test(n)) return n;
-  const host = hostOf(normalizeStreamURL(s && s.url) || String(s && s.url || ""));
-  if(host) return n ? (n + " · " + host) : host;
-  return n || "未命名线路";
-}
-/* 台账里一条线路的完整状态标签（徽标文案 + 语义色）。
-   返回数组，因为「停用」与「未检测」可能同时成立。 */
-function sourceFlags(row){
-  const s = row.source;
-  const out = [];
-  /* 「使用中」只在**真能播**时才给。
-     activeSourceOf 在一部作品全部线路都停用/失效时会退回第一条，
-     那是为了不让 activeSourceId 悬空、详情页不至于显示不出线路。
-     但拿它当「使用中」badge 就是骗人：那条线路实际播不了，
-     用户会以为放着不管就能看。徽标描述的是播放器的真实选择，
-     不是数据结构里的指针指向。 */
-  const act = activeSourceOf(row.anime);
-  if(act && act.id === s.id && sourceUsable(act)){
-    out.push({ id:"active", text:"使用中", tone:"ok" });
-  }
-  if(s.enabled === false) out.push({ id:"disabled", text:"已停用", tone:"muted" });
-  /* 搜索型单独一个徽标：它和「已停用/已失效」是完全不同的状态，
-     混在一起的话用户会以为这条坏了、然后去点「恢复」。 */
-  if(sourceIsSearch(s)) out.push({ id:"search", text:"搜索型", tone:"muted" });
-  const h = normalizeHealth(s.health);
-  if(h.state === "dead") out.push({ id:"dead", text:"已失效", tone:"err" });
-  else if(h.state === "blocked") out.push({ id:"blocked", text:"访问被拒", tone:"warn" });
-  else if(h.state === "alive") out.push({ id:"alive", text:"可达", tone:"ok" });
-  else out.push({ id:"unknown", text:"未检测", tone:"muted" });
-  return out;
-}
-/* 台账汇总。分成「健康度分布」而不是给一个总数：
-   用户真正要回答的问题是「有多少条还能用」，不是「我存了多少条」。 */
-function sourceLedgerStats(rows){
-  const st = { total:rows.length, alive:0, dead:0, unknown:0, blocked:0,
-               disabled:0, animeWith:0, animeWithout:0, stale:0 };
-  const seen = new Set();
-  state.anime.forEach(a => {
-    const n = Array.isArray(a.sources) ? a.sources.filter(x => x && x.url).length : 0;
-    if(n) st.animeWith++; else st.animeWithout++;
-  });
-  rows.forEach(r => {
-    seen.add(r.anime.id);
-    if(r.source.enabled === false) st.disabled++;
-    const h = normalizeHealth(r.source.health);
-    if(h.state === "dead") st.dead++;
-    else if(h.state === "blocked") st.blocked++;
-    else if(h.state === "alive") st.alive++;
-    else st.unknown++;
-  });
-  return st;
-}
-/* 单条线路探测。
- *
- * 能力边界必须写在结果里，不能让界面替我吹：
- * 浏览器对第三方站点既读不到状态码也读不到正文，
- * `fetch` 抛错只说明「请求没能完成」，可能是 DNS 失败、
- * 也可能是对方拒绝跨域。唯一能确定的是
- * 「响应回来了没有」。所以只有这一种结论叫 alive，
- * 其余全部归入 blocked 并附上原因，绝不写「已失效」——
- * 失效是用户的判断，不是探测器的判断。 */
-async function probeSource(row, opts){
-  opts = opts || {};
-  const url = normalizeStreamURL(row.source.url);
-  if(!url) return { state:"blocked", at:nowIso(), detail:"网址不是有效的 http/https 地址" };
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), opts.timeout || 9000);
-  try{
-    /* mode:"no-cors" 是这里唯一可行的模式：
-       跨域请求若用默认 cors，对面没有 CORS 头就会抛 TypeError，
-       那是「浏览器不让读」而不是「网站挂了」，
-       两种情况混在一起会让探测结果毫无价值。 */
-    const res = await fetch(url, {
-      method:"GET", mode:"no-cors", redirect:"follow",
-      referrerPolicy:"no-referrer", signal:ctrl.signal, cache:"no-store"
-    });
-    /* no-cors 下的响应是不透明的：拿不到状态码，
-       但「resolve 本身就是响应」已经是我们能拿到的最强证据。 */
-    if(res && (res.type === "opaque" || res.status === 0 || res.ok)){
-      return { state:"alive", at:nowIso(),
-        detail:"服务器有响应（跨域限制下无法确认能否播放）" };
-    }
-    return { state:"blocked", at:nowIso(), detail:"HTTP " + (res ? res.status : "?") };
-  }catch(e){
-    const name = String(e && e.name || "");
-    if(name === "AbortError") return { state:"blocked", at:nowIso(), detail:"9 秒内没有响应（网络不通或对方在限流）" };
-    return { state:"blocked", at:nowIso(),
-      detail:"请求未能完成：" + ((e && e.message) || name || "未知原因") };
-  }finally{ clearTimeout(timer); }
-}
-function nowIso(){ return new Date().toISOString(); }
-
-/* ---- 台账写操作 ----
-   全部统一走「改内存对象 → 落盘 → 返回成功与否」，
-   且落盘刻意用 Repo.put 而不是 saveAnime：
-   台账整理（改备注、标失效、清重复）不是用户编辑作品内容，
-   用 saveAnime 会 touch() 把 updatedAt 刷成现在，
-   于是「最近添加」排序会因为整理了一次线路而全库乱序。 */
-async function persistAnimeQuiet(a){
-  return await Repo.put("anime", a).then(() => true).catch(err => {
-    toast("保存失败：" + (err && err.message || err), "err");
-    return false;
-  });
-}
-/* 更新一条线路的字段。changes 里出现 undefined 表示「不动这个键」，
-   这样调用方不必先读一遍旧值，也不会误把未传的字段清空。 */
-async function updateSource(row, changes){
-  const s = row.source;
-  Object.keys(changes).forEach(k => {
-    if(changes[k] === undefined) return;
-    if(k === "health"){ s.health = normalizeHealth(changes[k]); return; }
-    s[k] = changes[k];
-  });
-  return await persistAnimeQuiet(row.anime);
-}
-/* 删除一条线路。删掉的可能正是当前线路，
-   此时必须把 activeSourceId 让给剩下的第一条 ——
-   留着悬空 id 的表现是详情页显示一个已不存在的线路名。 */
-async function deleteSource(row){
-  const a = row.anime, s = row.source;
-  const name = sourceDisplayName(s);
-  const before = a.sources.length;
-  a.sources = a.sources.filter(x => x.id !== s.id);
-  if(a.sources.length === before) return false;
-  if(a.activeSourceId === s.id) a.activeSourceId = (a.sources[0] || {}).id || "";
-  syncLegacyStreamFields(a);
-  const ok = await persistAnimeQuiet(a);
-  return ok ? { removed:name, left:a.sources.length } : null;
-}
-/* 旧字段 a.streamUrl/streamEp 要跟着当前线路走。
-   详情页与待机屏仍有读它们的地方，不同步的话
-   「删掉了正在用的那条」之后，页面上还挂着已删线路的集数。 */
-function syncLegacyStreamFields(a){
-  const nx = activeSourceOf(a);
-  a.streamUrl = nx ? nx.url : "";
-  a.streamEp = nx ? nx.ep : null;
-  a.streamUrlAt = nx ? (nx.savedAt || nowIso()) : "";
-}
-/* 批量删除。返回逐条结果而不是一个布尔：
-   界面要能说清「删了 3 条、2 条没删掉」，否则用户会以为全部成功。 */
-async function deleteSources(rows){
-  const okNames = [], failNames = [];
-  for(const r of rows){
-    const res = await deleteSource(r);
-    if(res) okNames.push(res.removed); else failNames.push(sourceDisplayName(r.source));
-  }
-  return { removed:okNames, failed:failNames };
-}
-/* 同一作品内按「网址 + 集数」判重。
-   addSourceFromInput 加新线路时已经拦过一次，
-   这里防的是更早版本/导入数据带进来的重复。 */
-function findDuplicateIn(a, url, ep){
-  return (a.sources || []).find(s =>
-    s.url === url && (s.ep == null || ep == null || s.ep === ep)) || null;
-}
-/* 同一部作品内按「网址 + 集数」判重。
-   注意遍历的是**作品**而不是台账行：
-   一部作品在台账里有几行，就会在外层被访问几次，
-   若按行遍历再回头扫全作品线路，同一组重复会被报告 N 次 ——
-   表现为「发现 2 条重复」，点去重却只删得掉 1 条。 */
-function ledgerDuplicates(rows){
-  const out = [];
-  const seenAnime = new Set();
-  (rows || []).forEach(r => {
-    const a = r.anime;
-    if(!a || seenAnime.has(a.id)) return;
-    seenAnime.add(a.id);
-    const seen = new Map();
-    (a.sources || []).forEach(s => {
-      if(!s || !s.url) return;
-      /* kind 进 key：搜索型存的是站点首页，和同址的普通线路不是重复 ——
-         用户明确选过「仍按普通线路保存」，去重不能把它当靶子删掉。 */
-      const k = (s.kind === "search" ? "search|" : "") + s.url + "|" + (s.ep == null ? "" : s.ep);
-      if(seen.has(k)) out.push({ anime:a, source:s, keepId:seen.get(k) });
-      else seen.set(k, s.id);
-    });
-  });
-  return out;
-}
-/* 标记失效 / 恢复。走「用户判断」通道：
-   探测只能给「可达/不可达」，「这条彻底废了」是用户的结论。 */
-async function markSourceDead(row, dead){
-  return await updateSource(row, {
-    health: dead
-      ? { state:"dead", at:nowIso(), detail:"用户手动标记失效" }
-      : { state:"unknown", at:"", detail:"" }
-  });
-}
-
-/* 手动指定当前线路。
- *
- * 为什么要单独立一个函数，而不是直接写 a.activeSourceId = s.id：
- * activeSourceId 是「播放器当前会起播哪条」的指针，
- * 一旦它指向一条不可用的线路，activeSourceOf 会在全不可用时
- * 悄悄退回第一条 —— 用户手动指定的意图就被改掉了，还看不出来。
- * 所以显式指定时必须：
- *   ① 允许指向任意线路（含已停用的），因为「我就是要用这条」
- *      是用户的判断，不是算法的判断；
- *   ② 但立刻把旧字段同步过去，否则详情页/待机屏读的还是老地址；
- *   ③ 落盘走 persistAnimeQuiet —— 指定线路属于「整理线路」，
- *      不该把 updatedAt 刷成现在、把老作品顶到「最近添加」最前。
- * 返回 false 表示这条线路当前不可用，界面该给出提示而不是假装成功。 */
-async function setActiveSource(row){
-  const a = row && row.anime, s = row && row.source;
-  if(!a || !s) return { ok:false, reason:"missing" };
-  /* 搜索型不能被设为「使用中」：它播不了，
-     设完徽标写着使用中、播放却跳过它，等于界面在骗人。 */
-  if(sourceIsSearch(s)) return { ok:false, reason:"search_only", usable:false, source:s, anime:a };
-  a.activeSourceId = s.id;
-  syncLegacyStreamFields(a);
-  const ok = await persistAnimeQuiet(a);
-  return { ok:ok, usable:sourceUsable(s), source:s, anime:a };
-}
-/* 批量指定：同一部作品只认一条，被选中多条时取「选中的第一条」。
-   静默取最后一条会让用户以为是自己选的那条在生效。 */
-async function setActiveSources(rows){
-  const done = [];
-  const byAnime = new Map();
-  (rows || []).forEach(r => {
-    if(!r || !r.source) return;
-    if(byAnime.has(r.anime.id)) return;
-    byAnime.set(r.anime.id, r);
-  });
-  for(const r of byAnime.values()){
-    const res = await setActiveSource(r);
-    if(res.ok) done.push(r);
-  }
-  return done;
-}
-/* 外部播放器区。
- *
- * 数据归属（这是本轮最关键的改动）：
- *   原先存在 settings.stream_url —— 全局一份，于是「给 A 番粘的片源」
- *   会在打开 B 番时被当成 B 番的片源。用户的原话是「不用每次都输入
- *   这部番的链接」，全局一份在语义上根本满足不了。
- *   现在按作品存：a.sources（多线路）+ a.activeSourceId（当前用哪条），
- *   settings.stream_url 保留为「无作品时的临时片源」，不删以免旧数据失效。
- *
- * 集数记录的现实约束：B 站分 P 用 ?p=，YouTube 用 &start=（秒），
- * 两者无法统一换算。所以只做「用户自己声明看到第几集」的轻量记录，
- * 不假装能从播放进度反推 —— 那需要跨域读取播放器内部状态，做不到。
- */
-/* streamURLOf 已删：无调用点也无测试引用，语义与 activeSourceOf(a).url 重复。 */
 
 /* ============================================================
    17.5 原生视频播放器
@@ -8266,6 +8592,7 @@ async function probeAll(){
        用户手动标的失效是判断，不是观测，不能被一次网络波动抹掉。 */
     const cur = normalizeHealth(row.source.health);
     if(cur.state !== "dead") await updateSource(row, { health:res });
+    else dead++;   /* 手动失效被保护跳过，计入汇报 */
     if(res.state === "alive") ok++; else blocked++;
     ledgerState.progress.done++;
     paintProgress();
@@ -8417,6 +8744,278 @@ registerPage({
   render: renderLedger
 });
 
+/* ============================================================
+   21.5 荣誉墙
+   ------------------------------------------------------------
+   两类荣誉：
+   · 内置（BUILTIN_HONORS）—— 条件自动判定，配图是 AI 生成的怀旧场景（见 HONOR_ART）
+   · 自定义（settings.custom_honors）—— 用户自己建，可传图；没图就用纯色玻璃背景
+   两类共用同一套 ticket card 渲染，所以外观完全一致。
+   ============================================================ */
+/* 卡片背景三级回退（用户明确要求第 3 级存在且好看）：
+   1) 自定义荣誉传了图 → 该图
+   2) 内置荣誉 → AI 生成的 HONOR_ART
+   3) 都没有 → 纯色玻璃（.tk-glass 的全息 conic 渐变），不是灰底 */
+const honorArtCache = {};
+function honorArtURL(h){
+  if(h.builtin) return (typeof HONOR_ART !== "undefined" && HONOR_ART[h.art]) || "";
+  if(!h.art) return "";
+  return honorArtCache[h.id] || "";
+}
+/* 自定义荣誉的图存在 assets 里（key = h.art），需要异步读。
+   读完后写入缓存并直接改 DOM 的 background-image，不整页重渲染 ——
+   重渲染会让用户刚点开的弹窗抖动。 */
+async function hydrateHonorArt(root){
+  const list = customHonors().filter(h => h.art && !honorArtCache[h.id]);
+  if(!list.length) return;
+  let changed = false;
+  for(const h of list){
+    const v = await Repo.getAsset(h.art);
+    if(v && typeof v === "string"){ honorArtCache[h.id] = v; changed = true; }
+    else honorArtCache[h.id] = "";   // 资产丢失：记空，不再反复重试
+  }
+  if(!changed || !root) return;
+  const wall = root.querySelector("#honor-wall");
+  if(!wall) return;
+  for(const h of list){
+    const url = honorArtCache[h.id];
+    if(!url) continue;
+    const card = wall.querySelector('.tk[data-ch="' + (window.CSS && CSS.escape ? CSS.escape(h.id) : h.id) + '"]');
+    if(!card) continue;
+    const bg = card.querySelector(".tk-bg");
+    if(!bg) continue;
+    const glass = bg.querySelector(".tk-glass");
+    if(glass) glass.remove();
+    bg.classList.add("has-art");
+    bg.style.backgroundImage = 'url("' + url + '")';
+  }
+}
+/* 每个自定义荣誉一个稳定色相：按 id 散列到色环，
+   纯色玻璃背景每次打开颜色一致，不会闪。 */
+function honorTint(h){
+  if(h.tint) return h.tint;
+  let s = 0;
+  const id = String(h.id || "");
+  for(let i = 0; i < id.length; i++) s = (s * 31 + id.charCodeAt(i)) >>> 0;
+  return "hsl(" + (s % 360) + " 62% 46%)";
+}
+function honorTicketHTML(h, has, ctx){
+  const st = honorStatus(h, ctx);
+  const pct = st.need ? Math.min(100, Math.round(st.cur / st.need * 100)) : (st.got ? 100 : 0);
+  const art = honorArtURL(h);
+  const tint = honorTint(h);
+  const progress = has ? "" : '<div class="tk-progress"><i style="width:' + pct + '%"></i></div>';
+  const foot = has
+    ? '<div class="tk-foot"><span class="tk-seal">已获得</span><div class="tk-barcode" aria-hidden="true"></div></div>'
+    : '<div class="tk-foot"><span class="tk-prog">' + st.cur + " / " + st.need + " " + esc(st.unit) + "</span></div>";
+  return '<article class="tk' + (has ? " is-got" : "") + '"' + (h.builtin ? "" : ' data-ch="' + attr(h.id) + '"') + ">" +
+    '<div class="tk-bg' + (art ? " has-art" : "") + '">' +
+      (art
+        ? '<img class="tk-art" src="' + attr(art) + '" alt="" loading="lazy" decoding="async">'
+        : '<div class="tk-glass" style="--tk-tint:' + tint + '"></div>') +
+    "</div>" +
+    '<div class="tk-perf" aria-hidden="true"></div>' +
+    '<div class="tk-head">' + ic(has ? "medal" : "lock", 18) + "<span>" + esc(h.name) + "</span></div>" +
+    '<div class="tk-cat">' + esc(h.cat || "自定义") + "</div>" +
+    '<div class="tk-desc">' + esc(h.desc || (has ? "自定义荣誉" : "尚未获得")) + "</div>" +
+    progress + foot +
+    (h.builtin ? "" :
+      '<div class="tk-ops">' +
+        '<button class="btn btn-sm" type="button" data-hact="toggle" data-hid="' + attr(h.id) + '">' + ic(has ? "check" : "plus", 13) + (has ? "取消授予" : "授予") + "</button>" +
+        '<button class="btn btn-sm" type="button" data-hact="edit" data-hid="' + attr(h.id) + '" aria-label="编辑">' + ic("edit", 13) + "</button>" +
+        '<button class="btn btn-sm btn-danger" type="button" data-hact="del" data-hid="' + attr(h.id) + '" aria-label="删除">' + ic("trash", 13) + "</button>" +
+      "</div>") +
+  "</article>";
+}
+function honorWallHTML(){
+  if(!settings.module_honor) return "";
+  const ctx = honorContext();
+  const list = allHonors();
+  const got = [], todo = [];
+  list.forEach(h => { honorStatus(h, ctx).got ? got.push(h) : todo.push(h); });
+  return '<div class="panel"><div class="panel-head">' + ic("medal",16) + "<h3>荣誉墙</h3>" +
+    '<span class="hint">已获 ' + got.length + " / " + list.length + "</span>" +
+    '<button class="btn btn-sm" type="button" data-hact="add" style="margin-left:var(--sp-3)">' + ic("plus",14) + "自定义荣誉</button></div>" +
+    '<div class="tk-grid" id="honor-wall">' + got.map(h => honorTicketHTML(h, true, ctx)).join("") +
+      todo.map(h => honorTicketHTML(h, false, ctx)).join("") + "</div>" +
+    '<p class="hint mt-3">内置称号依据片库数据实时计算；自定义荣誉由你自己授予。没获得的荣誉显示为暗色卡面。</p>' +
+  "</div>";
+}
+/* ---- 自定义荣誉的增删改 ---- */
+function openHonorForm(existing){
+  const base = existing || { name:"", cat:"自定义", desc:"" };
+  // 重要：开表单前先把“当时堆荣墙是否开着”快照下来。
+  // 不能在 closeModal() 之后再查（closeModal 会把标志位清掉），
+  // 也不能查 DOM（表单已把开的内容替换掉）。
+  const fromWall = honorWallOpen;
+  const root = openModal({
+    title: existing ? "编辑自定义荣誉" : "新建自定义荣誉",
+    body:
+      '<div class="field mb-3"><label for="hf-name">荣誉名称 *（1–12 字）</label>' +
+        '<input class="input" id="hf-name" maxlength="12" value="' + attr(base.name) + '" data-autofocus></div>' +
+      '<div class="field mb-3"><label for="hf-cat">分类（1–8 字）</label>' +
+        '<input class="input" id="hf-cat" maxlength="8" value="' + attr(base.cat || "") + '" placeholder="例如：童年、毅力、收藏"></div>' +
+      '<div class="field mb-3"><label for="hf-desc">说明（1–40 字）</label>' +
+        '<input class="input" id="hf-desc" maxlength="40" value="' + attr(base.desc || "") + '"></div>' +
+      '<div class="field"><label>背景图片（选填）</label>' +
+        '<p class="hint mb-2">不传图片时使用纯色玻璃背景，按荣誉自动配色。</p>' +
+        '<div class="row gap-2" style="flex-wrap:wrap">' +
+          '<button class="btn btn-sm" type="button" id="hf-pick">' + ic("image",14) + "选择图片</button>" +
+          '<button class="btn btn-sm" type="button" id="hf-clear"' + (base.art ? "" : " disabled") + '>' + ic("trash",14) + "移除图片</button>" +
+          '<span class="hint" id="hf-artinfo">' + (base.art ? "已有背景图" : "当前为纯色玻璃") + "</span>" +
+        "</div>" +
+        '<div id="hf-thumb" class="hf-thumb mt-2">' + (base.art ? '<img alt="" src="">' : ic("image",22)) + "</div>" +
+      "</div>",
+    footer:(f) => {
+      f.innerHTML = '<span class="hint" id="hf-msg"></span><div class="grow"></div>' +
+        '<button class="btn" type="button" data-close="1">取消</button>' +
+        '<button class="btn btn-primary" type="button" id="hf-save">保存</button>';
+    }
+  });
+  const nameEl = root.querySelector("#hf-name");
+  const catEl = root.querySelector("#hf-cat");
+  const descEl = root.querySelector("#hf-desc");
+  const thumb = root.querySelector("#hf-thumb");
+  const artInfo = root.querySelector("#hf-artinfo");
+  let newArtKey = null, removeArt = false;
+
+  function refreshThumb(){
+    const key = newArtKey || (removeArt ? null : (base.art || null));
+    if(key && (honorArtCache[key] || newArtKey)){
+      const url = honorArtCache[key];
+      if(url){ thumb.innerHTML = '<img src="' + attr(url) + '" alt="">'; artInfo.textContent = "已选择背景图"; return; }
+    }
+    thumb.innerHTML = ic("image",22);
+    artInfo.textContent = key ? "图片处理中…" : "当前为纯色玻璃";
+  }
+  // 已有图：从 assets 读出来显示缩略图
+  if(base.art && !removeArt){
+    const cached = honorArtCache[base.id];
+    if(cached) refreshThumb();
+    else{
+      artInfo.textContent = "正在载入已有图片…";
+      Repo.getAsset(base.art).then(v => {
+        if(v && typeof v === "string"){ honorArtCache[base.id] = v; refreshThumb(); }
+        else artInfo.textContent = "原图片已丢失，保存后将使用纯色玻璃";
+      });
+    }
+  }
+  root.querySelector("#hf-pick").addEventListener("click", () => {
+    const inp = document.createElement("input");
+    inp.type = "file"; inp.accept = "image/*";
+    inp.addEventListener("change", async () => {
+      const file = inp.files && inp.files[0];
+      if(!file) return;
+      const raw = await readFileAsDataURL(file);
+      // 卡片背景不需要原图画质，压缩到长边 720 —— 否则 localStorage 降级模式下必然写不进
+      const dataUrl = await compressBgImage(raw, 720, 0.8);
+      const key = "honor_" + Date.now().toString(36);
+      try{
+        await Repo.setAsset(key, dataUrl);
+        newArtKey = key;
+        removeArt = false;
+        honorArtCache["tmp_" + key] = dataUrl;
+        // 缩略图直接用新图，不等缓存
+        thumb.innerHTML = '<img src="' + attr(dataUrl) + '" alt="">';
+        artInfo.textContent = "已选择背景图";
+        root.querySelector("#hf-clear").disabled = false;
+      }catch(e){
+        toast(e && e.message === "QUOTA" ? "存储空间不足，请换一张小一点的图" : "图片处理失败：" + (e && e.message), "err", 5000);
+      }
+    });
+    inp.click();
+  });
+  root.querySelector("#hf-clear").addEventListener("click", () => {
+    newArtKey = null; removeArt = true;
+    root.querySelector("#hf-clear").disabled = true;
+    refreshThumb();
+  });
+  root.querySelector("#hf-save").addEventListener("click", () => {
+    const name = nameEl.value.trim();
+    if(!name){ root.querySelector("#hf-msg").innerHTML = '<span class="err-text">荣誉名称不能为空</span>'; return; }
+    const list = customHonors().slice();
+    const rec = existing
+      ? Object.assign({}, existing, { name, cat: catEl.value.trim() || "自定义", desc: descEl.value.trim() })
+      : { id: uid("h"), name, cat: catEl.value.trim() || "自定义", desc: descEl.value.trim(), awarded:false };
+    if(newArtKey){
+      rec.art = newArtKey;
+      if(existing && existing.art && existing.art !== newArtKey){
+        Repo.delAsset(existing.art).catch(() => {});   // 换图后清掉旧图，别让 assets 无限膨胀
+      }
+    }else if(removeArt){
+      rec.art = "";
+      if(existing && existing.art) Repo.delAsset(existing.art).catch(() => {});
+    }
+    if(existing){
+      const i = list.findIndex(x => x.id === existing.id);
+      if(i >= 0) list[i] = rec;
+    }else{
+      list.push(rec);
+    }
+    saveCustomHonors(list);
+    closeModal();
+    toast(existing ? "已更新" : "已创建自定义荣誉", "ok");
+    // 关键：不能只 refreshAll()。荣誉墙可能正开在弹窗里，
+    // 而 openModal 会用表单替换掉弹窗内容、refreshAll 又不会重绘弹窗，
+    // 结果是「新建完弹窗直接消失」，用户什么都看不到还得自己再点一次。
+    // honorWallOpen 标志在 openHonorWall 时置位、由弹窗关闭时清掉，
+    // 不能靠查 DOM —— 此刻荣誉墙的 DOM 已经被表单替换掉了。
+    if(fromWall) openHonorWall();
+    refreshAll();
+  });
+}
+async function honorAction(act, id){
+  const list = customHonors();
+  const i = list.findIndex(x => x.id === id);
+  if(act === "add"){ openHonorForm(null); return; }
+  if(i < 0) return;
+  if(act === "toggle"){
+    list[i].awarded = !list[i].awarded;
+    saveCustomHonors(list);
+    rerender();
+    toast(list[i].awarded ? ("已授予「" + list[i].name + "」") : ("已取消「" + list[i].name + "」"), "ok", 2000);
+    return;
+  }
+  if(act === "edit"){ openHonorForm(list[i]); return; }
+  if(act === "del"){
+    const ok = await confirmDialog({
+      title:"删除自定义荣誉", danger:true, okText:"删除",
+      html:"确定删除「" + esc(list[i].name) + "」吗？<br><span class=\"small muted\">它的背景图片也会一并删除，无法恢复。</span>"
+    });
+    if(!ok) return;
+    if(list[i].art) Repo.delAsset(list[i].art).catch(() => {});
+    list.splice(i, 1);
+    saveCustomHonors(list);
+    toast("已删除","ok");
+    refreshAll();
+  }
+}
+function bindHonorWall(root){
+  root.querySelectorAll("[data-hact]").forEach(b => b.addEventListener("click", () => {
+    honorAction(b.dataset.hact, b.dataset.hid);
+  }));
+  hydrateHonorArt(root);
+}
+/* 荣誉墙弹窗是否处于打开状态。
+   用标志位而不是查 DOM：openModal 打开表单时会整体替换弹窗内容，
+   那时荣誉墙的 DOM 已经不存在，但逻辑上"荣誉墙还开着"
+   （用户是从荣誉墙点进来的，保存后应该回到荣誉墙而不是被踢回主页面）。 */
+function openHonorWall(){
+  honorWallOpen = true;
+  const root = openModal({
+    title:"荣誉墙", wide:true,
+    body: honorWallHTML(),
+    footer:(f) => {
+      f.innerHTML = '<span class="hint">称号实时计算，无需领取。</span><div class="grow"></div>' +
+        '<button class="btn" type="button" data-close="1">关闭</button>';
+      f.querySelector("[data-close]").addEventListener("click", () => { honorWallOpen = false; });
+    }
+  });
+  const closer = root.querySelector("[data-close]");
+  if(closer) closer.addEventListener("click", () => { honorWallOpen = false; });
+  bindHonorWall(root);
+  return root;
+}
 /* ============================================================
    17. 童年编年史
    ============================================================ */
@@ -9147,800 +9746,6 @@ registerPage({
 });
 
 /* ============================================================
-   20. 统计口径（§11）
-   ============================================================ */
-function stats(){
-  const list = state.anime;
-  const done = list.filter(isDone);
-  const drop = list.filter(a => a.statusId === "st_drop");
-  const totalEps = list.reduce((s,a) => s + (a.watchedEpisodes || 0), 0);
-  const minutes = list.reduce((s,a) => {
-    if(a.durationMinutes && (a.totalEpisodes === 1 || a.totalEpisodes == null)) return s + a.durationMinutes;
-    return s + (a.watchedEpisodes || 0) * clampNum(settings.episode_minutes,1,600);
-  }, 0);
-  const rewatches = list.reduce((s,a) => s + (a.rewatchCount || 0), 0);
-  const masterpieces = list.filter(a => a.masterpiece).length;
-  return {
-    total: list.length,
-    done: done.length,
-    totalEps,
-    hours: Math.round(minutes / 60),
-    rewatches,
-    masterpieces,
-    doneRate: list.length ? done.length / list.length : 0,
-    dropRate: list.length ? drop.length / list.length : 0,
-    drop: drop.length
-  };
-}
-function topCount(keyFn, list, n){
-  const map = new Map();
-  (list || state.anime).forEach(a => {
-    (keyFn(a) || []).forEach(k => { if(!k) return; map.set(k, (map.get(k) || 0) + 1); });
-  });
-  return Array.from(map.entries()).sort((a,b) => b[1]-a[1] || String(a[0]).localeCompare(String(b[0]))).slice(0, n || 10);
-}
-function recentAdded(n){
-  return state.anime.slice().sort((a,b) => String(b.createdAt).localeCompare(String(a.createdAt))).slice(0, n || 5);
-}
-function recentReviews(n){
-  const out = [];
-  state.anime.forEach(a => (a.reviews || []).forEach(r => out.push({ anime:a, review:r })));
-  return out.sort((x,y) => String(y.review.date).localeCompare(String(x.review.date))).slice(0, n || 3);
-}
-
-/* ---- 观看记录 ----
-   每次观看都留档（感想可空），这里集中放派生量：
-   上次观看日期、时隔重逢年数、旧数据里没留下日期的观看次数。 */
-function lastViewingOf(a){
-  let best = "";
-  (a && a.reviews || []).forEach(r => {
-    const d = String(r.date || "");
-    if(/^\d{4}-\d{2}-\d{2}$/.test(d) && d > best) best = d;
-  });
-  return best;
-}
-function lastViewingYearOf(a){
-  const d = lastViewingOf(a);
-  return d ? Number(d.slice(0,4)) : null;
-}
-/* 最近一次观看距首播多少年。没有日期记录或没有首播年 → null */
-function reunionYearsOf(a){
-  const airY = yearOf(a && a.airDate);
-  const lastY = lastViewingYearOf(a);
-  return (airY && lastY) ? Math.max(0, lastY - airY) : null;
-}
-/* 旧数据里「看过但没留下日期」的观看次数：
-   总观看数 = rewatchCount + 1，留下记录的是 reviews 条数，差值即无日期的部分。 */
-function legacyViewingGap(a){
-  if(!a) return 0;
-  return Math.max(0, (Number(a.rewatchCount) || 0) + 1 - (a.reviews || []).length);
-}
-/* 今年重新看过的作品数（「重新」= 此前已有观看记录，含没日期的旧记录） */
-function rewatchedThisYear(){
-  const y = new Date().getFullYear();
-  return state.anime.filter(a => {
-    const hasThisYear = (a.reviews || []).some(r => Number(String(r.date || "").slice(0,4)) === y);
-    if(!hasThisYear) return false;
-    const hadBefore = (Number(a.rewatchCount) || 0) >= 1 ||
-      (a.reviews || []).some(r => { const ry = Number(String(r.date || "").slice(0,4)); return ry && ry < y; });
-    return hadBefore;
-  }).length;
-}
-
-/* ============================================================
-   21. 荣誉称号（§10）
-   ============================================================ */
-/* ============================================================
-   21.5 荣誉墙
-   ------------------------------------------------------------
-   两类荣誉：
-   · 内置（BUILTIN_HONORS）—— 条件自动判定，配图是 AI 生成的怀旧场景（见 HONOR_ART）
-   · 自定义（settings.custom_honors）—— 用户自己建，可传图；没图就用纯色玻璃背景
-   两类共用同一套 ticket card 渲染，所以外观完全一致。
-   ============================================================ */
-const BUILTIN_HONORS = [
-  { id:"h10",    cat:"看完数量", name:"初入番门",     desc:"看完 ≥ 10 部",                metric:"done", need:10,  art:"h10" },
-  { id:"h30",    cat:"看完数量", name:"番剧常客",     desc:"看完 ≥ 30 部",                metric:"done", need:30,  art:"h30" },
-  { id:"h60",    cat:"看完数量", name:"老二次元",     desc:"看完 ≥ 60 部",                metric:"done", need:60,  art:"h60" },
-  { id:"h100d3", cat:"看完数量", name:"番剧考古学家", desc:"看完 ≥ 100 部且年代覆盖 ≥ 3",  metric:"done100_3",        art:"h100d3" },
-  { id:"h200",   cat:"看完数量", name:"童年守墓人",   desc:"看完 ≥ 200 部",               metric:"done", need:200, art:"h200" },
-  { id:"dec3",   cat:"年代",     name:"跨年代观众",   desc:"首播年代覆盖 ≥ 3 个",          metric:"decades", need:3,  art:"dec3" },
-  { id:"old90",  cat:"年代",     name:"动画考古队员", desc:"库中最早作品首播早于 1990 年", metric:"oldest1990",        art:"old90" },
-  { id:"rew10",  cat:"重看",     name:"回味者",       desc:"全库重看次数累计 ≥ 10",        metric:"rewatches", need:10, art:"rew10" },
-  { id:"rew5",   cat:"重看",     name:"五刷大佬",     desc:"单部重看 ≥ 5 次",              metric:"maxRewatch", need:5, art:"rew10" },
-  /* 十年之约 / 年度重逢没有专属 AI 配图：honorArtURL 取不到 HONOR_ART[h.art]
-     会自然落到第三级纯色玻璃背景（用户确认过三级回退的好看标准），先不硬凑图。 */
-  { id:"reunion10", cat:"重看",  name:"十年之约",     desc:"最近一次观看距首播 ≥ 10 年",   metric:"reunion10", need:10 },
-  { id:"reyear3",   cat:"重看",  name:"年度重逢",     desc:"今年重新看过的作品 ≥ 3 部",    metric:"reyear3", need:3 },
-  { id:"m10",    cat:"收藏",     name:"神作收藏家",   desc:"神作标记 ≥ 10",                metric:"masterpieces", need:10, art:"m10" },
-  { id:"keng",   cat:"趣味",     name:"坑王",         desc:"弃坑 ≥ 10 且弃坑率 > 40%",     metric:"keng",                art:"keng" },
-  { id:"mecha",  cat:"趣味",     name:"机战魂",       desc:"含机战/机甲类标签且看完 ≥ 10", metric:"mecha", need:10,   art:"mecha" }
-];
-/* 自定义荣誉存在 settings（localStorage）而不是 IndexedDB：
-   它本质是「个人配置」而非「档案数据」，跟主题、密度等同属偏好。 */
-function customHonors(){ return Array.isArray(settings.custom_honors) ? settings.custom_honors : []; }
-function saveCustomHonors(list){ settings.custom_honors = list; saveSettings(); }
-function allHonors(){
-  return BUILTIN_HONORS.map(h => Object.assign({ builtin:true }, h))
-    .concat(customHonors().map(h => Object.assign({ builtin:false }, h)));
-}
-function honorContext(){
-  const list = state.anime;
-  const doneList = list.filter(isDone);
-  const decades = new Set();
-  let oldest = null;
-  list.forEach(a => {
-    const d = decadeOf(a.airDate);
-    if(d) decades.add(d);
-    const y = yearOf(a.airDate);
-    if(y && (oldest == null || y < oldest)) oldest = y;
-  });
-  const tags = (settings.mecha_tags || []).map(normalize);
-  const mechaCount = doneList.filter(a => (a.genres || []).some(g => tags.indexOf(normalize(g)) >= 0)).length;
-  const s = stats();
-  /* 时隔重逢：全库最长的「最近观看年 − 首播年」；
-     年度重逢：今年重新看过（今年有观看记录，且此前已有观看）的作品数。 */
-  let reunionMax = null;
-  state.anime.forEach(a => {
-    const g = reunionYearsOf(a);
-    if(g != null && (reunionMax == null || g > reunionMax)) reunionMax = g;
-  });
-  return {
-    done: doneList.length,
-    decades: decades.size,
-    oldest,
-    rewatches: s.rewatches,
-    maxRewatch: list.reduce((m,a) => Math.max(m, a.rewatchCount || 0), 0),
-    masterpieces: s.masterpieces,
-    drop: s.drop,
-    dropRate: s.dropRate,
-    total: list.length,
-    mechaCount,
-    reunionMax,
-    reyearCount: rewatchedThisYear()
-  };
-}
-function honorStatus(h, ctx){
-  // 自定义荣誉是「手动授予」：没有可自动计算的指标，由用户决定是否点亮。
-  // 这样既保留自定的自由，又不会让自定义项永远灰着、看着像坏了。
-  if(!h.builtin) return { got: !!h.awarded, cur: h.awarded ? 1 : 0, need: 1, unit:"" };
-  switch(h.metric){
-    case "done":         return { got: ctx.done >= h.need, cur: ctx.done, need: h.need, unit:"部" };
-    case "done100_3":    return { got: ctx.done >= 100 && ctx.decades >= 3, cur: Math.min(ctx.done, ctx.decades * 40), need:100, unit:"部", extra: ctx.done >= 100 ? ("年代覆盖 " + ctx.decades + "/3") : null };
-    case "decades":      return { got: ctx.decades >= h.need, cur: ctx.decades, need: h.need, unit:"个年代" };
-    case "oldest1990":   return { got: ctx.oldest != null && ctx.oldest < 1990, cur: ctx.oldest == null ? 0 : 1, need:1, unit:"部", extra: ctx.oldest == null ? "还没有首播年份" : ("最早 " + ctx.oldest + " 年") };
-    case "rewatches":    return { got: ctx.rewatches >= h.need, cur: ctx.rewatches, need: h.need, unit:"次" };
-    case "maxRewatch":   return { got: ctx.maxRewatch >= h.need, cur: ctx.maxRewatch, need: h.need, unit:"次 / 单部" };
-    case "masterpieces": return { got: ctx.masterpieces >= h.need, cur: ctx.masterpieces, need: h.need, unit:"部" };
-    case "keng":         return { got: ctx.drop >= 10 && ctx.dropRate > 0.4, cur: ctx.drop, need:10, unit:"部弃坑", extra: "弃坑率 " + Math.round(ctx.dropRate*100) + "%" };
-    case "mecha":        return { got: ctx.mechaCount >= h.need, cur: ctx.mechaCount, need: h.need, unit:"部机战" };
-    case "reunion10":    return { got: ctx.reunionMax != null && ctx.reunionMax >= h.need,
-                                  cur: ctx.reunionMax == null ? 0 : ctx.reunionMax, need: h.need, unit:"年",
-                                  extra: ctx.reunionMax == null ? "还没有带日期的观看记录" : ("最长时隔 " + ctx.reunionMax + " 年") };
-    case "reyear3":      return { got: ctx.reyearCount >= h.need, cur: ctx.reyearCount, need: h.need, unit:"部今年重逢" };
-    default:             return { got:false, cur:0, need:1, unit:"" };
-  }
-}
-const QUANT_ORDER = ["h10","h30","h60","h100d3","h200"];
-function currentHonor(){
-  const ctx = honorContext();
-  let top = null;
-  QUANT_ORDER.forEach(id => {
-    const h = BUILTIN_HONORS.find(x => x.id === id);
-    if(h && honorStatus(h, ctx).got) top = h;
-  });
-  const nextQuant = QUANT_ORDER.map(id => BUILTIN_HONORS.find(x => x.id === id))
-    .find(h => h && !honorStatus(h, ctx).got) || null;
-  const nx = nextQuant ? Object.assign({ name: nextQuant.name, need: honorStatus(nextQuant, ctx).need, cur: honorStatus(nextQuant, ctx).cur }) : null;
-  return { topId: top ? top.id : null, nextQuant: nx, ctx };
-}
-/* 卡片背景三级回退（用户明确要求第 3 级存在且好看）：
-   1) 自定义荣誉传了图 → 该图
-   2) 内置荣誉 → AI 生成的 HONOR_ART
-   3) 都没有 → 纯色玻璃（.tk-glass 的全息 conic 渐变），不是灰底 */
-const honorArtCache = {};
-function honorArtURL(h){
-  if(h.builtin) return (typeof HONOR_ART !== "undefined" && HONOR_ART[h.art]) || "";
-  if(!h.art) return "";
-  return honorArtCache[h.id] || "";
-}
-/* 自定义荣誉的图存在 assets 里（key = h.art），需要异步读。
-   读完后写入缓存并直接改 DOM 的 background-image，不整页重渲染 ——
-   重渲染会让用户刚点开的弹窗抖动。 */
-async function hydrateHonorArt(root){
-  const list = customHonors().filter(h => h.art && !honorArtCache[h.id]);
-  if(!list.length) return;
-  let changed = false;
-  for(const h of list){
-    const v = await Repo.getAsset(h.art);
-    if(v && typeof v === "string"){ honorArtCache[h.id] = v; changed = true; }
-    else honorArtCache[h.id] = "";   // 资产丢失：记空，不再反复重试
-  }
-  if(!changed || !root) return;
-  const wall = root.querySelector("#honor-wall");
-  if(!wall) return;
-  for(const h of list){
-    const url = honorArtCache[h.id];
-    if(!url) continue;
-    const card = wall.querySelector('.tk[data-ch="' + (window.CSS && CSS.escape ? CSS.escape(h.id) : h.id) + '"]');
-    if(!card) continue;
-    const bg = card.querySelector(".tk-bg");
-    if(!bg) continue;
-    const glass = bg.querySelector(".tk-glass");
-    if(glass) glass.remove();
-    bg.classList.add("has-art");
-    bg.style.backgroundImage = 'url("' + url + '")';
-  }
-}
-/* 每个自定义荣誉一个稳定色相：按 id 散列到色环，
-   纯色玻璃背景每次打开颜色一致，不会闪。 */
-function honorTint(h){
-  if(h.tint) return h.tint;
-  let s = 0;
-  const id = String(h.id || "");
-  for(let i = 0; i < id.length; i++) s = (s * 31 + id.charCodeAt(i)) >>> 0;
-  return "hsl(" + (s % 360) + " 62% 46%)";
-}
-function honorTicketHTML(h, has, ctx){
-  const st = honorStatus(h, ctx);
-  const pct = st.need ? Math.min(100, Math.round(st.cur / st.need * 100)) : (st.got ? 100 : 0);
-  const art = honorArtURL(h);
-  const tint = honorTint(h);
-  const progress = has ? "" : '<div class="tk-progress"><i style="width:' + pct + '%"></i></div>';
-  const foot = has
-    ? '<div class="tk-foot"><span class="tk-seal">已获得</span><div class="tk-barcode" aria-hidden="true"></div></div>'
-    : '<div class="tk-foot"><span class="tk-prog">' + st.cur + " / " + st.need + " " + esc(st.unit) + "</span></div>";
-  return '<article class="tk' + (has ? " is-got" : "") + '"' + (h.builtin ? "" : ' data-ch="' + attr(h.id) + '"') + ">" +
-    '<div class="tk-bg' + (art ? " has-art" : "") + '">' +
-      (art
-        ? '<img class="tk-art" src="' + attr(art) + '" alt="" loading="lazy" decoding="async">'
-        : '<div class="tk-glass" style="--tk-tint:' + tint + '"></div>') +
-    "</div>" +
-    '<div class="tk-perf" aria-hidden="true"></div>' +
-    '<div class="tk-head">' + ic(has ? "medal" : "lock", 18) + "<span>" + esc(h.name) + "</span></div>" +
-    '<div class="tk-cat">' + esc(h.cat || "自定义") + "</div>" +
-    '<div class="tk-desc">' + esc(h.desc || (has ? "自定义荣誉" : "尚未获得")) + "</div>" +
-    progress + foot +
-    (h.builtin ? "" :
-      '<div class="tk-ops">' +
-        '<button class="btn btn-sm" type="button" data-hact="toggle" data-hid="' + attr(h.id) + '">' + ic(has ? "check" : "plus", 13) + (has ? "取消授予" : "授予") + "</button>" +
-        '<button class="btn btn-sm" type="button" data-hact="edit" data-hid="' + attr(h.id) + '" aria-label="编辑">' + ic("edit", 13) + "</button>" +
-        '<button class="btn btn-sm btn-danger" type="button" data-hact="del" data-hid="' + attr(h.id) + '" aria-label="删除">' + ic("trash", 13) + "</button>" +
-      "</div>") +
-  "</article>";
-}
-function honorWallHTML(){
-  if(!settings.module_honor) return "";
-  const ctx = honorContext();
-  const list = allHonors();
-  const got = [], todo = [];
-  list.forEach(h => { honorStatus(h, ctx).got ? got.push(h) : todo.push(h); });
-  return '<div class="panel"><div class="panel-head">' + ic("medal",16) + "<h3>荣誉墙</h3>" +
-    '<span class="hint">已获 ' + got.length + " / " + list.length + "</span>" +
-    '<button class="btn btn-sm" type="button" data-hact="add" style="margin-left:var(--sp-3)">' + ic("plus",14) + "自定义荣誉</button></div>" +
-    '<div class="tk-grid" id="honor-wall">' + got.map(h => honorTicketHTML(h, true, ctx)).join("") +
-      todo.map(h => honorTicketHTML(h, false, ctx)).join("") + "</div>" +
-    '<p class="hint mt-3">内置称号依据片库数据实时计算；自定义荣誉由你自己授予。没获得的荣誉显示为暗色卡面。</p>' +
-  "</div>";
-}
-/* ---- 自定义荣誉的增删改 ---- */
-function openHonorForm(existing){
-  const base = existing || { name:"", cat:"自定义", desc:"" };
-  // 重要：开表单前先把“当时堆荣墙是否开着”快照下来。
-  // 不能在 closeModal() 之后再查（closeModal 会把标志位清掉），
-  // 也不能查 DOM（表单已把开的内容替换掉）。
-  const fromWall = honorWallOpen;
-  const root = openModal({
-    title: existing ? "编辑自定义荣誉" : "新建自定义荣誉",
-    body:
-      '<div class="field mb-3"><label for="hf-name">荣誉名称 *（1–12 字）</label>' +
-        '<input class="input" id="hf-name" maxlength="12" value="' + attr(base.name) + '" data-autofocus></div>' +
-      '<div class="field mb-3"><label for="hf-cat">分类（1–8 字）</label>' +
-        '<input class="input" id="hf-cat" maxlength="8" value="' + attr(base.cat || "") + '" placeholder="例如：童年、毅力、收藏"></div>' +
-      '<div class="field mb-3"><label for="hf-desc">说明（1–40 字）</label>' +
-        '<input class="input" id="hf-desc" maxlength="40" value="' + attr(base.desc || "") + '"></div>' +
-      '<div class="field"><label>背景图片（选填）</label>' +
-        '<p class="hint mb-2">不传图片时使用纯色玻璃背景，按荣誉自动配色。</p>' +
-        '<div class="row gap-2" style="flex-wrap:wrap">' +
-          '<button class="btn btn-sm" type="button" id="hf-pick">' + ic("image",14) + "选择图片</button>" +
-          '<button class="btn btn-sm" type="button" id="hf-clear"' + (base.art ? "" : " disabled") + '>' + ic("trash",14) + "移除图片</button>" +
-          '<span class="hint" id="hf-artinfo">' + (base.art ? "已有背景图" : "当前为纯色玻璃") + "</span>" +
-        "</div>" +
-        '<div id="hf-thumb" class="hf-thumb mt-2">' + (base.art ? '<img alt="" src="">' : ic("image",22)) + "</div>" +
-      "</div>",
-    footer:(f) => {
-      f.innerHTML = '<span class="hint" id="hf-msg"></span><div class="grow"></div>' +
-        '<button class="btn" type="button" data-close="1">取消</button>' +
-        '<button class="btn btn-primary" type="button" id="hf-save">保存</button>';
-    }
-  });
-  const nameEl = root.querySelector("#hf-name");
-  const catEl = root.querySelector("#hf-cat");
-  const descEl = root.querySelector("#hf-desc");
-  const thumb = root.querySelector("#hf-thumb");
-  const artInfo = root.querySelector("#hf-artinfo");
-  let newArtKey = null, removeArt = false;
-
-  function refreshThumb(){
-    const key = newArtKey || (removeArt ? null : (base.art || null));
-    if(key && (honorArtCache[key] || newArtKey)){
-      const url = honorArtCache[key];
-      if(url){ thumb.innerHTML = '<img src="' + attr(url) + '" alt="">'; artInfo.textContent = "已选择背景图"; return; }
-    }
-    thumb.innerHTML = ic("image",22);
-    artInfo.textContent = key ? "图片处理中…" : "当前为纯色玻璃";
-  }
-  // 已有图：从 assets 读出来显示缩略图
-  if(base.art && !removeArt){
-    const cached = honorArtCache[base.id];
-    if(cached) refreshThumb();
-    else{
-      artInfo.textContent = "正在载入已有图片…";
-      Repo.getAsset(base.art).then(v => {
-        if(v && typeof v === "string"){ honorArtCache[base.id] = v; refreshThumb(); }
-        else artInfo.textContent = "原图片已丢失，保存后将使用纯色玻璃";
-      });
-    }
-  }
-  root.querySelector("#hf-pick").addEventListener("click", () => {
-    const inp = document.createElement("input");
-    inp.type = "file"; inp.accept = "image/*";
-    inp.addEventListener("change", async () => {
-      const file = inp.files && inp.files[0];
-      if(!file) return;
-      const raw = await readFileAsDataURL(file);
-      // 卡片背景不需要原图画质，压缩到长边 720 —— 否则 localStorage 降级模式下必然写不进
-      const dataUrl = await compressBgImage(raw, 720, 0.8);
-      const key = "honor_" + Date.now().toString(36);
-      try{
-        await Repo.setAsset(key, dataUrl);
-        newArtKey = key;
-        removeArt = false;
-        honorArtCache["tmp_" + key] = dataUrl;
-        // 缩略图直接用新图，不等缓存
-        thumb.innerHTML = '<img src="' + attr(dataUrl) + '" alt="">';
-        artInfo.textContent = "已选择背景图";
-        root.querySelector("#hf-clear").disabled = false;
-      }catch(e){
-        toast(e && e.message === "QUOTA" ? "存储空间不足，请换一张小一点的图" : "图片处理失败：" + (e && e.message), "err", 5000);
-      }
-    });
-    inp.click();
-  });
-  root.querySelector("#hf-clear").addEventListener("click", () => {
-    newArtKey = null; removeArt = true;
-    root.querySelector("#hf-clear").disabled = true;
-    refreshThumb();
-  });
-  root.querySelector("#hf-save").addEventListener("click", () => {
-    const name = nameEl.value.trim();
-    if(!name){ root.querySelector("#hf-msg").innerHTML = '<span class="err-text">荣誉名称不能为空</span>'; return; }
-    const list = customHonors().slice();
-    const rec = existing
-      ? Object.assign({}, existing, { name, cat: catEl.value.trim() || "自定义", desc: descEl.value.trim() })
-      : { id: uid("h"), name, cat: catEl.value.trim() || "自定义", desc: descEl.value.trim(), awarded:false };
-    if(newArtKey){
-      rec.art = newArtKey;
-      if(existing && existing.art && existing.art !== newArtKey){
-        Repo.delAsset(existing.art).catch(() => {});   // 换图后清掉旧图，别让 assets 无限膨胀
-      }
-    }else if(removeArt){
-      rec.art = "";
-      if(existing && existing.art) Repo.delAsset(existing.art).catch(() => {});
-    }
-    if(existing){
-      const i = list.findIndex(x => x.id === existing.id);
-      if(i >= 0) list[i] = rec;
-    }else{
-      list.push(rec);
-    }
-    saveCustomHonors(list);
-    closeModal();
-    toast(existing ? "已更新" : "已创建自定义荣誉", "ok");
-    // 关键：不能只 refreshAll()。荣誉墙可能正开在弹窗里，
-    // 而 openModal 会用表单替换掉弹窗内容、refreshAll 又不会重绘弹窗，
-    // 结果是「新建完弹窗直接消失」，用户什么都看不到还得自己再点一次。
-    // honorWallOpen 标志在 openHonorWall 时置位、由弹窗关闭时清掉，
-    // 不能靠查 DOM —— 此刻荣誉墙的 DOM 已经被表单替换掉了。
-    if(fromWall) openHonorWall();
-    refreshAll();
-  });
-}
-async function honorAction(act, id){
-  const list = customHonors();
-  const i = list.findIndex(x => x.id === id);
-  if(act === "add"){ openHonorForm(null); return; }
-  if(i < 0) return;
-  if(act === "toggle"){
-    list[i].awarded = !list[i].awarded;
-    saveCustomHonors(list);
-    rerender();
-    toast(list[i].awarded ? ("已授予「" + list[i].name + "」") : ("已取消「" + list[i].name + "」"), "ok", 2000);
-    return;
-  }
-  if(act === "edit"){ openHonorForm(list[i]); return; }
-  if(act === "del"){
-    const ok = await confirmDialog({
-      title:"删除自定义荣誉", danger:true, okText:"删除",
-      html:"确定删除「" + esc(list[i].name) + "」吗？<br><span class=\"small muted\">它的背景图片也会一并删除，无法恢复。</span>"
-    });
-    if(!ok) return;
-    if(list[i].art) Repo.delAsset(list[i].art).catch(() => {});
-    list.splice(i, 1);
-    saveCustomHonors(list);
-    toast("已删除","ok");
-    refreshAll();
-  }
-}
-function bindHonorWall(root){
-  root.querySelectorAll("[data-hact]").forEach(b => b.addEventListener("click", () => {
-    honorAction(b.dataset.hact, b.dataset.hid);
-  }));
-  hydrateHonorArt(root);
-}
-/* 荣誉墙弹窗是否处于打开状态。
-   用标志位而不是查 DOM：openModal 打开表单时会整体替换弹窗内容，
-   那时荣誉墙的 DOM 已经不存在，但逻辑上"荣誉墙还开着"
-   （用户是从荣誉墙点进来的，保存后应该回到荣誉墙而不是被踢回主页面）。 */
-let honorWallOpen = false;
-function openHonorWall(){
-  honorWallOpen = true;
-  const root = openModal({
-    title:"荣誉墙", wide:true,
-    body: honorWallHTML(),
-    footer:(f) => {
-      f.innerHTML = '<span class="hint">称号实时计算，无需领取。</span><div class="grow"></div>' +
-        '<button class="btn" type="button" data-close="1">关闭</button>';
-      f.querySelector("[data-close]").addEventListener("click", () => { honorWallOpen = false; });
-    }
-  });
-  const closer = root.querySelector("[data-close]");
-  if(closer) closer.addEventListener("click", () => { honorWallOpen = false; });
-  bindHonorWall(root);
-  return root;
-}
-/* ============================================================
-   22. 图表（ECharts CDN + 降级文字排行）
-   ============================================================ */
-let echartsPromise = null, echartsReady = false, echartsFailed = false;
-function loadECharts(){
-  if(echartsPromise) return echartsPromise;
-  echartsPromise = new Promise((resolve) => {
-    const tryScript = (urls, i) => {
-      if(i >= urls.length){ echartsFailed = true; resolve(null); return; }
-      const s = document.createElement("script");
-      s.src = urls[i];
-      s.async = true;
-      s.onload = () => { echartsReady = !!window.echarts; resolve(window.echarts || null); };
-      s.onerror = () => { tryScript(urls, i+1); };
-      document.head.appendChild(s);
-    };
-    tryScript(["https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js",
-               "https://cdnjs.cloudflare.com/ajax/libs/echarts/5.5.0/echarts.min.js"], 0);
-  });
-  return echartsPromise;
-}
-const chartRegistry = [];
-/* 必须逐个 dispose，不能只清数组 —— 详见 mountCharts 内的注释。 */
-function disposeCharts(){
-  if(!chartRegistry.length) return;
-  chartRegistry.forEach(c => {
-    try{ c.inst.dispose(); }catch(e){}
-    try{ c.inst.off(); }catch(e){}
-  });
-  chartRegistry.length = 0;
-}
-function cssVar(name, fallback){
-  const v = getComputedStyle(document.documentElement).getPropertyValue(name);
-  return (v && v.trim()) || fallback;
-}
-function chartTheme(){
-  return {
-    text: cssVar("--text", "#e6edf3"),
-    muted: cssVar("--muted", "#94a3b3"),
-    accent: cssVar("--accent", "#22d3ee"),
-    border: cssVar("--border", "#2a333f"),
-    panel: cssVar("--panel-2", "#1c232d")
-  };
-}
-function baseOption(){
-  const t = chartTheme();
-  return {
-    textStyle: { color: t.text, fontFamily: "Segoe UI, 'PingFang SC', 'Microsoft YaHei', sans-serif" },
-    tooltip: { backgroundColor: t.panel, borderColor: t.border, textStyle:{ color:t.text } },
-    grid: { left: 8, right: 16, top: 24, bottom: 8, containLabel: true }
-  };
-}
-function barOption(cats, values, opts){
-  const t = chartTheme();
-  const o = opts || {};
-  return Object.assign(baseOption(), {
-    xAxis: { type:"category", data:cats, axisLine:{ lineStyle:{ color:t.border } }, axisLabel:{ color:t.muted, interval:0, hideOverlap:true } },
-    yAxis: { type:"value", splitLine:{ lineStyle:{ color:t.border, opacity:.5 } }, axisLabel:{ color:t.muted }, minInterval:1 },
-    series: [{
-      type:"bar", data:values, barMaxWidth:34,
-      itemStyle:{ color:o.color || t.accent, borderRadius:[4,4,0,0] },
-      label:{ show:o.label !== false, position:"top", color:t.muted, fontSize:10 }
-    }]
-  });
-}
-function hbarOption(cats, values){
-  const t = chartTheme();
-  return Object.assign(baseOption(), {
-    grid: { left: 8, right: 40, top: 12, bottom: 8, containLabel: true },
-    xAxis: { type:"value", splitLine:{ lineStyle:{ color:t.border, opacity:.5 } }, axisLabel:{ color:t.muted }, minInterval:1 },
-    yAxis: { type:"category", data:cats, axisLine:{ lineStyle:{ color:t.border } }, axisLabel:{ color:t.muted, width:90, overflow:"truncate" } },
-    series: [{
-      type:"bar", data:values, barMaxWidth:18,
-      itemStyle:{ color:t.accent, borderRadius:[0,4,4,0] },
-      label:{ show:true, position:"right", color:t.muted, fontSize:10 }
-    }]
-  });
-}
-function pieOption(items){
-  const t = chartTheme();
-  return Object.assign(baseOption(), {
-    tooltip: { trigger:"item", backgroundColor:t.panel, borderColor:t.border, textStyle:{ color:t.text },
-      formatter: p => p.name + "：" + p.value + "（" + p.percent + "%）" },
-    legend: { bottom:0, textStyle:{ color:t.muted, fontSize:10 } },
-    series: [{
-      type:"pie", radius:["42%","66%"], center:["50%","44%"],
-      itemStyle:{ borderColor:t.panel, borderWidth:2 },
-      label:{ color:t.muted, fontSize:10 },
-      data:items
-    }]
-  });
-}
-function rankListHTML(items, unit){
-  if(!items || !items.length) return '<p class="hint">还没有数据</p>';
-  const max = Math.max.apply(null, items.map(i => i.v || 0)) || 1;
-  return '<div class="rank-list">' + items.map((it, i) =>
-    '<div class="rank-item">' +
-      '<div class="rank-no">' + (i+1) + "</div>" +
-      (it.img ? '<div class="rank-thumb"><img src="' + attr(it.img) + '" alt=""></div>' : "") +
-      '<div class="rank-name truncate">' + esc(it.k) + "</div>" +
-      '<div class="rank-val">' + fmtInt(it.v) + (unit || "") + "</div>" +
-    "</div>").join("") + "</div>";
-}
-function mountCharts(root){
-  // 关键：ECharts 实例持有 canvas、WebGL 上下文、事件总线与 ResizeObserver。
-  // 只把数组清空（chartRegistry.length = 0）而不 dispose，往返切页十几次就会
-  // 攒下十几个僵尸实例 —— 这是本项目最大的内存泄漏点，且不报错、只表现为"越用越卡"。
-  disposeCharts();
-  if(!settings.module_charts) return Promise.resolve();
-  const nodes = Array.from(root.querySelectorAll("[data-chart]"));
-  if(!nodes.length) return Promise.resolve();
-  return loadECharts().then(ec => {
-    // 加载期间用户可能已经切走页面：此时 DOM 里的 canvas 早已不在文档中，
-    // 继续 init 会产生永不显示却常驻内存的实例。
-    if(!nodes[0].isConnected) return;
-    nodes.forEach(node => {
-      const kind = node.dataset.chart;
-      const fallbackEl = node.parentNode.querySelector("[data-fallback-for='" + kind + "']");
-      if(!ec || echartsFailed){
-        node.hidden = true;
-        if(fallbackEl) fallbackEl.hidden = false;
-        return;
-      }
-      node.hidden = false;
-      if(fallbackEl) fallbackEl.hidden = true;
-      let inst;
-      try{ inst = ec.init(node, null, { renderer:"canvas" }); }
-      catch(e){ node.hidden = true; if(fallbackEl) fallbackEl.hidden = false; return; }
-      const build = chartBuilders[kind];
-      if(!build) return;
-      inst.setOption(build());
-      chartRegistry.push({ inst, kind });
-    });
-  }).catch(() => {
-    nodes.forEach(node => {
-      node.hidden = true;
-      const fb = node.parentNode.querySelector("[data-fallback-for='" + node.dataset.chart + "']");
-      if(fb) fb.hidden = false;
-    });
-  });
-}
-function redrawChartsIfOpen(){
-  if(!chartRegistry.length) return;
-  chartRegistry.forEach(c => {
-    try{
-      c.inst.setOption(chartBuilders[c.kind] ? chartBuilders[c.kind]() : {}, true);
-    }catch(e){}
-  });
-}
-const chartBuilders = {
-  decade(){
-    const cats = allDecades();
-    const vals = cats.map(d => state.anime.filter(a => decadeOf(a.airDate) === d).length);
-    return barOption(cats.map(d => d + "s"), vals);
-  },
-  studio(){
-    // topCount 的 keyFn 必须返回数组（作品可有多家制作公司），
-    // 传入字符串会让 forEach 逐字符统计 —— 这是旧实现的一个隐性错误。
-    const items = topCount(a => a.studios || [], state.anime, 8);
-    return hbarOption(items.map(i => i[0]), items.map(i => i[1]));
-  },
-  genre(){
-    const items = topCount(a => a.genres || [], state.anime, 8);
-    return hbarOption(items.map(i => i[0]), items.map(i => i[1]));
-  },
-  status(){
-    const counts = {};
-    state.statuses.forEach(s => { counts[s.id] = 0; });
-    state.anime.forEach(a => { if(counts[a.statusId] != null) counts[a.statusId]++; });
-    const items = state.statuses.map(s => ({ name: s.name, value: counts[s.id] || 0 }))
-      .filter(i => i.value > 0);
-    return pieOption(items);
-  },
-  /* 观看年份分布：横轴与计数都用 watchYear（你哪一年看的）。
-     旧实现曾把观看年份的横轴配了 airDate 的计数，是颗哑雷；这次接上面板时一并修正。 */
-  year(){
-    const cats = allWatchYears();
-    const vals = cats.map(y => state.anime.filter(a => Number(a.watchYear) === Number(y)).length);
-    return barOption(cats.map(String), vals, { label:false });
-  }
-};
-function chartPanelHTML(kind, title, icon, fallbackHTML, height){
-  return '<div class="panel"><div class="panel-head">' + ic(icon,16) + "<h3>" + esc(title) + "</h3></div>" +
-    '<div class="chart-box"><div class="chart-el' + (height === "tall" ? " tall" : "") + '" data-chart="' + kind + '"></div>' +
-    '<div data-fallback-for="' + kind + '" hidden>' + fallbackHTML + "</div></div></div>";
-}
-
-/* ============================================================
-   23. 首页 · 档案馆看板
-   ------------------------------------------------------------
-   恢复说明：本模块曾因一次范围计算错误的批量替换被误删，
-   此处按原设计重建（class 名与 CSS 完全对齐，未改动样式表）。
-   ============================================================ */
-let bannerQuote = null;
-function renderHome(root){
-  const s = stats();
-  const list = state.anime;
-  if(!list.length){
-    root.innerHTML = '<div class="state-box">' + ic("home",40) +
-      "<h2>欢迎回到放映厅</h2><p>搜索第一部童年动画，开始建档。</p>" +
-      '<div class="row" style="justify-content:center"><button class="btn btn-primary" type="button" data-act="go-library">' + ic("plus",16) + "建立第一份档案</button></div></div>";
-    const b = root.querySelector('[data-act="go-library"]');
-    if(b) b.addEventListener("click", () => go("library"));
-    return;
-  }
-  // 语录横幅：每次进首页换一条，避免用户第一眼就腻
-  bannerQuote = pickRandomQuote(bannerQuote);
-  const hon = currentHonor();
-  const gotHonor = hon.topId ? BUILTIN_HONORS.find(h => h.id === hon.topId) : null;
-
-  const stat = (val, label, icon) =>
-    '<div class="stat-card">' + (icon ? ic(icon,14) : "") + "<b>" + val + "</b><span>" + esc(label) + "</span></div>";
-
-  let html =
-    '<div class="stats-strip">' +
-      stat(fmtInt(s.total), "片库总数", "library") +
-      stat(fmtInt(s.done), "已看完", "check") +
-      stat(fmtInt(s.totalEps), "累计集数", "film") +
-      stat(fmtInt(s.hours), "累计小时", "clock") +
-      stat(fmtInt(s.rewatches), "重看次数", "refresh") +
-      stat(fmtInt(s.masterpieces), "神作标记", "medal") +
-    "</div>";
-
-  // 备份提醒：放在数字带正下方 —— 数据孤本的唯一保险丝，值得这个位置
-  const bk = backupReminder();
-  if(bk){
-    html += '<div class="note-box is-warn mt-4" id="backup-remind">' + ic("warning",16) +
-      "<span>" + esc(bk.text) + "</span>" +
-      '<button class="btn btn-sm" type="button" data-act="backup-now" style="margin-left:auto">' + ic("download",14) + "立即备份</button>" +
-      '<button class="btn btn-sm" type="button" data-act="go-data-settings">' + ic("settings",14) + "去设置</button>" +
-    "</div>";
-  }
-
-  // 荣誉摘要
-  html += '<div class="honor-card mt-4">' +
-    ic("medal", 52, "honor-medal") +
-    "<div><div class=\"hint\">当前称号</div>" +
-      '<div class="honor-title">' + esc(gotHonor ? gotHonor.name : "尚未解锁") + "</div>" +
-      '<div class="small muted">' + (gotHonor ? esc(gotHonor.desc) : "看完 10 部作品即可获得第一个称号") + "</div>" +
-    "</div>" +
-    (hon.nextQuant
-      ? '<div class="honor-prog"><div class="row small"><span class="muted">距 ' + esc(hon.nextQuant.name) + "</span>" +
-        '<span class="muted" style="margin-left:auto">' + hon.nextQuant.cur + " / " + hon.nextQuant.need + " 部</span></div>" +
-        '<div class="progress"><i style="width:' + Math.min(100, Math.round(hon.nextQuant.cur / hon.nextQuant.need * 100)) + '%"></i></div></div>'
-      : '<div class="grow"></div>') +
-    '<button class="btn btn-sm" type="button" data-act="open-honor" style="margin-left:var(--sp-3)">' + ic("medal",14) + "荣誉墙</button>" +
-  "</div>";
-
-  // 语录横幅
-  if(bannerQuote){
-    html += '<div class="quote-banner mt-4">' +
-      '<div class="quote-body"><div class="quote-text">「' + esc(bannerQuote.text) + "」</div>" +
-      '<div class="quote-src">' + esc(quoteMetaLine(bannerQuote)) + "</div></div>" +
-      '<div class="quote-actions">' +
-        '<button class="btn btn-sm" type="button" data-act="quote-refresh" title="换一条">' + ic("refresh",14) + "</button>" +
-        '<button class="btn btn-sm btn-icon' + (bannerQuote.favorite ? " is-on" : "") + '" type="button" data-act="quote-fav" title="收藏" aria-pressed="' + (bannerQuote.favorite ? "true" : "false") + '">' + ic(bannerQuote.favorite ? "starfill" : "star",14) + "</button>" +
-      "</div></div>";
-  }
-
-  // 最近添加 + 最近感想
-  const recent = recentAdded(4);
-  const reviews = recentReviews(2);
-  html += '<div class="grid-2 mt-4">';
-  html += '<div class="panel"><div class="panel-head">' + ic("plus",16) + "<h3>最近建档</h3></div>" +
-    (recent.length
-      ? recent.map(a => '<div class="recent-item" data-open="' + attr(a.id) + '" role="button" tabindex="0">' +
-          '<div class="recent-thumb">' + coverThumb(a) + "</div>" +
-          '<div style="min-width:0"><div class="truncate" style="font-weight:600">' + esc(a.titleCn || a.titleOriginal || "未命名") + "</div>" +
-          '<div class="hint">' + esc(statusName(a)) + " · " + esc(String(a.airDate || "—").slice(0,4)) + "</div></div></div>").join("")
-      : '<p class="hint">还没有建档任何作品</p>') +
-  "</div>";
-  html += '<div class="panel"><div class="panel-head">' + ic("quote",16) + "<h3>最近感想</h3></div>" +
-    (reviews.length
-      ? reviews.map(r => '<div class="recent-review" style="margin-bottom:var(--sp-3)">' +
-          '<div class="txt clamp-2">' + esc(r.review.content || "（只记录了重看，没有写文字）") + "</div>" +
-          '<div class="hint">' + esc(r.anime.titleCn || r.anime.titleOriginal || "—") + " · " + esc(String(r.review.date || "").slice(0,10)) + "</div></div>").join("")
-      : '<p class="hint">还没有写过感想。在作品详情里记录重看时可以写几句。</p>') +
-  "</div>";
-  html += "</div>";
-
-  // 图表区
-  if(settings.module_charts){
-    html += '<div class="grid-2 mt-4">';
-    html += chartPanelHTML("decade", "年代分布", "chart", rankListHTML(topCount(a => { const d = decadeOf(a.airDate); return d ? [d + "s"] : []; }, state.anime, 8).map(x => ({ k: x[0], v: x[1] })), " 部"));
-    html += chartPanelHTML("year", "观看年份分布", "chart", rankListHTML(allWatchYears().map(y => ({ k: String(y), v: state.anime.filter(a => Number(a.watchYear) === Number(y)).length })), " 部"));
-    html += chartPanelHTML("studio", "制作公司", "chart", rankListHTML(topCount(a => a.studios || [], state.anime, 8).map(x => ({ k: x[0], v: x[1] })), " 部"));
-    html += chartPanelHTML("genre", "类型分布", "chart", rankListHTML(topCount(a => a.genres || [], state.anime, 8).map(x => ({ k: x[0], v: x[1] })), " 部"));
-    html += chartPanelHTML("status", "状态构成", "pie", rankListHTML(state.statuses.map(st => ({ k: st.name, v: state.anime.filter(a => a.statusId === st.id).length })).filter(x => x.v > 0), " 部"));
-    html += "</div>";
-  }
-
-  // 荣誉墙
-  html += '<div class="mt-4">' + honorWallHTML() + "</div>";
-
-  root.innerHTML = html;
-
-  // 事件
-  const hb = root.querySelector('[data-act="open-honor"]');
-  if(hb) hb.addEventListener("click", () => openHonorWall());
-  const bb = root.querySelector('[data-act="backup-now"]');
-  if(bb) bb.addEventListener("click", () => {
-    exportJSON(true);   // 提醒触发的备份一律全量（含背景图），别让用户在危险时刻做选择题
-    const box = root.querySelector("#backup-remind");
-    if(box) box.remove();
-  });
-  const gb2 = root.querySelector('[data-act="go-data-settings"]');
-  if(gb2) gb2.addEventListener("click", () => { settingsState.tab = "data"; go("settings"); });
-  const nb = root.querySelector('[data-act="quote-refresh"]');
-  if(nb) nb.addEventListener("click", () => { bannerQuote = pickRandomQuote(bannerQuote); rerender(); });
-  const fb = root.querySelector('[data-act="quote-fav"]');
-  if(fb) fb.addEventListener("click", async () => {
-    if(!bannerQuote) return;
-    bannerQuote.favorite = !bannerQuote.favorite;
-    await saveQuote(bannerQuote);
-    updateSidebarInfo();
-    rerender();
-  });
-  root.querySelectorAll("[data-open]").forEach(n => {
-    n.addEventListener("click", () => go("theater", n.dataset.open));
-    n.addEventListener("keydown", (e) => { if(e.key === "Enter" || e.key === " "){ e.preventDefault(); go("theater", n.dataset.open); } });
-  });
-  const gb = root.querySelector('[data-act="go-library"]');
-  if(gb) gb.addEventListener("click", () => go("library"));
-  bindHonorWall(root);
-  mountCharts(root);
-}
-
-function refreshAll(){
-  updateSidebarInfo();
-  renderRoute();
-}
-window.addEventListener("resize", debounce(() => {
-  chartRegistry.forEach(c => { try{ c.inst.resize(); }catch(e){} });
-}, 200));
-
-registerPage({
-  id:"home", name:"首页 · 档案馆看板", icon:"home", title:"档案馆看板",
-  sub:"你自己的童年动画数据概览",
-  render: renderHome
-});
-
-/* ============================================================
    24. 导出
    ============================================================ */
 async function buildExportPayload(includeBg){
@@ -10493,6 +10298,156 @@ function openImportDialog(){
 }
 
 /* ============================================================
+   23. 首页 · 档案馆看板
+   ------------------------------------------------------------
+   恢复说明：本模块曾因一次范围计算错误的批量替换被误删，
+   此处按原设计重建（class 名与 CSS 完全对齐，未改动样式表）。
+   ============================================================ */
+let bannerQuote = null;
+function renderHome(root){
+  const s = stats();
+  const list = state.anime;
+  if(!list.length){
+    root.innerHTML = '<div class="state-box">' + ic("home",40) +
+      "<h2>欢迎回到放映厅</h2><p>搜索第一部童年动画，开始建档。</p>" +
+      '<div class="row" style="justify-content:center"><button class="btn btn-primary" type="button" data-act="go-library">' + ic("plus",16) + "建立第一份档案</button></div></div>";
+    const b = root.querySelector('[data-act="go-library"]');
+    if(b) b.addEventListener("click", () => go("library"));
+    return;
+  }
+  // 语录横幅：每次进首页换一条，避免用户第一眼就腻
+  bannerQuote = pickRandomQuote(bannerQuote);
+  const hon = currentHonor();
+  const gotHonor = hon.topId ? BUILTIN_HONORS.find(h => h.id === hon.topId) : null;
+
+  const stat = (val, label, icon) =>
+    '<div class="stat-card">' + (icon ? ic(icon,14) : "") + "<b>" + val + "</b><span>" + esc(label) + "</span></div>";
+
+  let html =
+    '<div class="stats-strip">' +
+      stat(fmtInt(s.total), "片库总数", "library") +
+      stat(fmtInt(s.done), "已看完", "check") +
+      stat(fmtInt(s.totalEps), "累计集数", "film") +
+      stat(fmtInt(s.hours), "累计小时", "clock") +
+      stat(fmtInt(s.rewatches), "重看次数", "refresh") +
+      stat(fmtInt(s.masterpieces), "神作标记", "medal") +
+    "</div>";
+
+  // 备份提醒：放在数字带正下方 —— 数据孤本的唯一保险丝，值得这个位置
+  const bk = backupReminder();
+  if(bk){
+    html += '<div class="note-box is-warn mt-4" id="backup-remind">' + ic("warning",16) +
+      "<span>" + esc(bk.text) + "</span>" +
+      '<button class="btn btn-sm" type="button" data-act="backup-now" style="margin-left:auto">' + ic("download",14) + "立即备份</button>" +
+      '<button class="btn btn-sm" type="button" data-act="go-data-settings">' + ic("settings",14) + "去设置</button>" +
+    "</div>";
+  }
+
+  // 荣誉摘要
+  html += '<div class="honor-card mt-4">' +
+    ic("medal", 52, "honor-medal") +
+    "<div><div class=\"hint\">当前称号</div>" +
+      '<div class="honor-title">' + esc(gotHonor ? gotHonor.name : "尚未解锁") + "</div>" +
+      '<div class="small muted">' + (gotHonor ? esc(gotHonor.desc) : "看完 10 部作品即可获得第一个称号") + "</div>" +
+    "</div>" +
+    (hon.nextQuant
+      ? '<div class="honor-prog"><div class="row small"><span class="muted">距 ' + esc(hon.nextQuant.name) + "</span>" +
+        '<span class="muted" style="margin-left:auto">' + hon.nextQuant.cur + " / " + hon.nextQuant.need + " 部</span></div>" +
+        '<div class="progress"><i style="width:' + Math.min(100, Math.round(hon.nextQuant.cur / hon.nextQuant.need * 100)) + '%"></i></div></div>'
+      : '<div class="grow"></div>') +
+    '<button class="btn btn-sm" type="button" data-act="open-honor" style="margin-left:var(--sp-3)">' + ic("medal",14) + "荣誉墙</button>" +
+  "</div>";
+
+  // 语录横幅
+  if(bannerQuote){
+    html += '<div class="quote-banner mt-4">' +
+      '<div class="quote-body"><div class="quote-text">「' + esc(bannerQuote.text) + "」</div>" +
+      '<div class="quote-src">' + esc(quoteMetaLine(bannerQuote)) + "</div></div>" +
+      '<div class="quote-actions">' +
+        '<button class="btn btn-sm" type="button" data-act="quote-refresh" title="换一条">' + ic("refresh",14) + "</button>" +
+        '<button class="btn btn-sm btn-icon' + (bannerQuote.favorite ? " is-on" : "") + '" type="button" data-act="quote-fav" title="收藏" aria-pressed="' + (bannerQuote.favorite ? "true" : "false") + '">' + ic(bannerQuote.favorite ? "starfill" : "star",14) + "</button>" +
+      "</div></div>";
+  }
+
+  // 最近添加 + 最近感想
+  const recent = recentAdded(4);
+  const reviews = recentReviews(2);
+  html += '<div class="grid-2 mt-4">';
+  html += '<div class="panel"><div class="panel-head">' + ic("plus",16) + "<h3>最近建档</h3></div>" +
+    (recent.length
+      ? recent.map(a => '<div class="recent-item" data-open="' + attr(a.id) + '" role="button" tabindex="0">' +
+          '<div class="recent-thumb">' + coverThumb(a) + "</div>" +
+          '<div style="min-width:0"><div class="truncate" style="font-weight:600">' + esc(a.titleCn || a.titleOriginal || "未命名") + "</div>" +
+          '<div class="hint">' + esc(statusName(a)) + " · " + esc(String(a.airDate || "—").slice(0,4)) + "</div></div></div>").join("")
+      : '<p class="hint">还没有建档任何作品</p>') +
+  "</div>";
+  html += '<div class="panel"><div class="panel-head">' + ic("quote",16) + "<h3>最近感想</h3></div>" +
+    (reviews.length
+      ? reviews.map(r => '<div class="recent-review" style="margin-bottom:var(--sp-3)">' +
+          '<div class="txt clamp-2">' + esc(r.review.content || "（只记录了重看，没有写文字）") + "</div>" +
+          '<div class="hint">' + esc(r.anime.titleCn || r.anime.titleOriginal || "—") + " · " + esc(String(r.review.date || "").slice(0,10)) + "</div></div>").join("")
+      : '<p class="hint">还没有写过感想。在作品详情里记录重看时可以写几句。</p>') +
+  "</div>";
+  html += "</div>";
+
+  // 图表区
+  if(settings.module_charts){
+    html += '<div class="grid-2 mt-4">';
+    html += chartPanelHTML("decade", "年代分布", "chart", rankListHTML(topCount(a => { const d = decadeOf(a.airDate); return d ? [d + "s"] : []; }, state.anime, 8).map(x => ({ k: x[0], v: x[1] })), " 部"));
+    html += chartPanelHTML("year", "观看年份分布", "chart", rankListHTML(allWatchYears().map(y => ({ k: String(y), v: state.anime.filter(a => Number(a.watchYear) === Number(y)).length })), " 部"));
+    html += chartPanelHTML("studio", "制作公司", "chart", rankListHTML(topCount(a => a.studios || [], state.anime, 8).map(x => ({ k: x[0], v: x[1] })), " 部"));
+    html += chartPanelHTML("genre", "类型分布", "chart", rankListHTML(topCount(a => a.genres || [], state.anime, 8).map(x => ({ k: x[0], v: x[1] })), " 部"));
+    html += chartPanelHTML("status", "状态构成", "pie", rankListHTML(state.statuses.map(st => ({ k: st.name, v: state.anime.filter(a => a.statusId === st.id).length })).filter(x => x.v > 0), " 部"));
+    html += "</div>";
+  }
+
+  // 荣誉墙
+  html += '<div class="mt-4">' + honorWallHTML() + "</div>";
+
+  root.innerHTML = html;
+
+  // 事件
+  const hb = root.querySelector('[data-act="open-honor"]');
+  if(hb) hb.addEventListener("click", () => openHonorWall());
+  const bb = root.querySelector('[data-act="backup-now"]');
+  if(bb) bb.addEventListener("click", () => {
+    exportJSON(true);   // 提醒触发的备份一律全量（含背景图），别让用户在危险时刻做选择题
+    const box = root.querySelector("#backup-remind");
+    if(box) box.remove();
+  });
+  const gb2 = root.querySelector('[data-act="go-data-settings"]');
+  if(gb2) gb2.addEventListener("click", () => { settingsState.tab = "data"; go("settings"); });
+  const nb = root.querySelector('[data-act="quote-refresh"]');
+  if(nb) nb.addEventListener("click", () => { bannerQuote = pickRandomQuote(bannerQuote); rerender(); });
+  const fb = root.querySelector('[data-act="quote-fav"]');
+  if(fb) fb.addEventListener("click", async () => {
+    if(!bannerQuote) return;
+    bannerQuote.favorite = !bannerQuote.favorite;
+    await saveQuote(bannerQuote);
+    updateSidebarInfo();
+    rerender();
+  });
+  root.querySelectorAll("[data-open]").forEach(n => {
+    n.addEventListener("click", () => go("theater", n.dataset.open));
+    n.addEventListener("keydown", (e) => { if(e.key === "Enter" || e.key === " "){ e.preventDefault(); go("theater", n.dataset.open); } });
+  });
+  const gb = root.querySelector('[data-act="go-library"]');
+  if(gb) gb.addEventListener("click", () => go("library"));
+  bindHonorWall(root);
+  mountCharts(root);
+}
+
+window.addEventListener("resize", debounce(() => {
+  chartRegistry.forEach(c => { try{ c.inst.resize(); }catch(e){} });
+}, 200));
+
+registerPage({
+  id:"home", name:"首页 · 档案馆看板", icon:"home", title:"档案馆看板",
+  sub:"你自己的童年动画数据概览",
+  render: renderHome
+});
+
+/* ============================================================
    26. 设置页
    ============================================================ */
 const SETTINGS_SECTIONS = [
@@ -10544,47 +10499,6 @@ function bgThumbHTML(){
    把它作为本次渲染的实际遮罩（不低于用户设定值）。
    代价是极端背景图会被压得比较暗，但这比看不清正文好得多；
    而对绝大多数中间调背景图，实际遮罩仍等于用户设定值，不影响观感。*/
-function _srgbToLin(c){ c /= 255; return c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4); }
-function _relLum(rgb){ return 0.2126 * _srgbToLin(rgb[0]) + 0.7152 * _srgbToLin(rgb[1]) + 0.0722 * _srgbToLin(rgb[2]); }
-function _contrastRatio(a, b){
-  const l1 = _relLum(a), l2 = _relLum(b);
-  return (Math.max(l1, l2) + 0.05) / (Math.min(l1, l2) + 0.05);
-}
-function _mixRGB(fg, bg, alpha){
-  return [0, 1, 2].map(i => Math.round(fg[i] * alpha + bg[i] * (1 - alpha)));
-}
-function _hexRGB(h){
-  h = String(h || "").replace("#", "");
-  if(h.length === 3) h = h.split("").map(c => c + c).join("");
-  if(h.length < 6) return [0, 0, 0];
-  return [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16)];
-}
-/* 极端背景（纯黑 / 纯白）下所需的最小遮罩。
-   实际背景图的亮度是未知的（data URL 未解码成像素），所以按两端夹逼取最坏情况 ——
-   纯色海报恰好是最容易崩掉的输入，这样估算是保守且正确的。 */
-function bgRequiredOverlay(){
-  const theme = settings.theme;
-  const tint = theme === "light" ? [255, 255, 255] : [6, 10, 16];
-  const fallbackText = theme === "light" ? "#111820" : "#e8eef5";
-  const textRGB = _hexRGB(getComputedStyle(document.documentElement).getPropertyValue("--text").trim() || fallbackText);
-  let best = 0;
-  for(const raw of [[0, 0, 0], [255, 255, 255]]){
-    for(let o = 0; o <= 0.9601; o += 0.02){
-      if(_contrastRatio(textRGB, _mixRGB(tint, raw, o)) >= 4.6){ best = Math.max(best, o); break; }
-    }
-  }
-  return Math.min(0.92, Math.ceil(best * 50) / 50);
-}
-/* 本次渲染实际使用的遮罩：用户设定值与可读性下限取大者 */
-function bgEffectiveOverlay(){
-  return Math.max(Number(settings.bg_overlay) || 0, bgRequiredOverlay());
-}
-function bgReadabilityText(){
-  const req = bgRequiredOverlay();
-  const cur = Number(settings.bg_overlay) || 0;
-  if(cur + 0.001 >= req) return "裸露区域文字对比度已达标";
-  return "已自动加强遮罩至 " + req + "（你的设定 " + cur + "），以保证浅色/深色背景图下的正文可读";
-}
 function renderSettings(root){
   let side = '<div class="settings-nav">' + SETTINGS_SECTIONS.map(s =>
     '<button type="button" data-sec="' + s.key + '" aria-current="' + (settingsState.tab === s.key) + '">' + esc(s.name) + "</button>").join("") + "</div>";

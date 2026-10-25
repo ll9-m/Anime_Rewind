@@ -1,0 +1,185 @@
+/* ============================================================
+   2. 存储层：IndexedDB（主）+ localStorage（降级）
+   ============================================================ */
+const Repo = {
+  mode: "idb",
+  db: null,
+  ready: false,
+  _mem: null,
+  open(){
+    return new Promise((resolve) => {
+      let finished = false;
+      const done = (mode) => { if(!finished){ finished = true; Repo.mode = mode; Repo.ready = true; resolve(mode); } };
+      const useLS = () => {
+        let data = null;
+        try { data = JSON.parse(localStorage.getItem(LS_DATA) || "null"); } catch(e){ data = null; }
+        Repo._mem = data && typeof data === "object"
+          ? Object.assign({ anime:[], quotes:[], statuses:[], series:[], assets:{} }, data)
+          : { anime:[], quotes:[], statuses:[], series:[], assets:{} };
+        done("ls");
+      };
+      if(!("indexedDB" in window)) return useLS();
+      let req;
+      try { req = indexedDB.open(IDB_NAME, IDB_VERSION); } catch(e){ return useLS(); }
+      req.onupgradeneeded = () => {
+        const db = req.result;
+        ["anime","quotes","statuses","series"].forEach(name => {
+          if(!db.objectStoreNames.contains(name)) db.createObjectStore(name, { keyPath:"id" });
+        });
+        if(!db.objectStoreNames.contains("assets")) db.createObjectStore("assets", { keyPath:"key" });
+      };
+      req.onsuccess = () => { Repo.db = req.result; done("idb"); };
+      req.onerror = () => useLS();
+      /* onblocked 不能静默降级：阻塞解除后 open 仍会成功，而应用已经
+         跑在 LS 副本上 —— 本次会话的写入全部进 LS，下次启动被 IDB
+         数据遮蔽，表现为「录的东西丢了」。改为提示用户排除占用，
+         继续等待 open 的真实结果。 */
+      req.onblocked = () => toast("数据库正被其他标签页占用，请关闭本应用的其他标签页后稍候…", "warn", 10000);
+      /* 打开慢 ≠ 打不开。3 秒只是提示，30 秒仍无结果才降级，
+         且降级必须可见 —— 否则用户在降级副本上录数据，重启后「消失」。 */
+      setTimeout(() => {
+        if(finished) return;
+        toast("数据库打开较慢，仍在等待……", "warn", 6000);
+      }, 3000);
+      setTimeout(() => {
+        if(finished) return;
+        useLS();
+        toast("IndexedDB 长时间无响应，本次会话运行在降级存储上，更改可能无法保留。建议刷新页面重试。", "err", 15000);
+      }, 30000);
+    });
+  },
+  tx(store, mode, fn){
+    return new Promise((resolve, reject) => {
+      try{
+        const t = Repo.db.transaction(store, mode);
+        const os = t.objectStore(store);
+        const req = fn(os);
+        t.oncomplete = () => resolve(req ? req.result : undefined);
+        t.onerror = () => reject(t.error);
+        t.onabort = () => reject(t.error || new Error("事务被中止"));
+      }catch(e){ reject(e); }
+    });
+  },
+  async all(store){
+    if(Repo.mode === "idb"){
+      try{
+        const r = await Repo.tx(store, "readonly", os => os.getAll());
+        return Array.isArray(r) ? r : [];
+      }catch(e){ return Repo._mem ? Repo._mem[store] || [] : []; }
+    }
+    return (Repo._mem && Repo._mem[store]) || [];
+  },
+  async put(store, obj){
+    if(Repo.mode === "idb"){
+      try{ await Repo.tx(store, "readwrite", os => os.put(obj)); return true; }
+      catch(e){
+        if(e && (e.name === "QuotaExceededError" || /quota/i.test(String(e.name)))){
+          throw new Error("QUOTA");
+        }
+        throw e;
+      }
+    }
+    const arr = Repo._mem[store] || (Repo._mem[store] = []);
+    const i = arr.findIndex(x => x.id === obj.id);
+    if(i >= 0) arr[i] = obj; else arr.push(obj);
+    Repo.persistLS();
+    return true;
+  },
+  async del(store, id){
+    if(Repo.mode === "idb"){ await Repo.tx(store, "readwrite", os => os["delete"](id)); return true; }
+    const arr = Repo._mem[store] || [];
+    const i = arr.findIndex(x => x.id === id);
+    if(i >= 0) arr.splice(i,1);
+    Repo.persistLS();
+    return true;
+  },
+  async clear(store){
+    if(Repo.mode === "idb"){ await Repo.tx(store, "readwrite", os => os.clear()); return; }
+    Repo._mem[store] = [];
+    Repo.persistLS();
+  },
+  async getAsset(key){
+    if(Repo.mode === "idb"){
+      try{ const r = await Repo.tx("assets","readonly", os => os.get(key)); return r ? r.value : null; }
+      catch(e){ return null; }
+    }
+    return (Repo._mem.assets || {})[key] || null;
+  },
+  async setAsset(key, value){
+    if(Repo.mode === "idb"){
+      try{ await Repo.tx("assets","readwrite", os => os.put({ key, value })); return true; }
+      catch(e){ if(/quota/i.test(String(e && e.name))) throw new Error("QUOTA"); throw e; }
+    }
+    // 降级模式下无法靠抛错发现超限（写入已被节流到微任务），
+    // 必须在写前预估：localStorage 单域配额典型 5MB，按 UTF-16 计约 5M 字符。
+    // 留 512KB 余量给设置项等其他键。
+    const LS_BUDGET = 4.5 * 1024 * 1024;
+    Repo._mem.assets = Repo._mem.assets || {};
+    const prev = Repo._mem.assets[key];
+    Repo._mem.assets[key] = value;
+    let approx = 0;
+    try{
+      for(const k in Repo._mem){
+        if(k === "assets"){
+          for(const ak in Repo._mem.assets) approx += String(ak).length * 2 + String(Repo._mem.assets[ak]).length * 2;
+        }else{
+          approx += String(k).length * 2 + JSON.stringify(Repo._mem[k]).length * 2;
+        }
+      }
+    }catch(e){ approx = LS_BUDGET + 1; }
+    if(approx > LS_BUDGET){
+      if(prev === undefined) delete Repo._mem.assets[key];
+      else Repo._mem.assets[key] = prev;
+      throw new Error("QUOTA");
+    }
+    Repo.persistLS();
+    return true;
+  },
+  async delAsset(key){
+    if(Repo.mode === "idb"){ await Repo.tx("assets","readwrite", os => os["delete"](key)); return true; }
+    if(Repo._mem.assets) delete Repo._mem.assets[key];
+    Repo.persistLS();
+    return true;
+  },
+  /* localStorage 降级模式的写入节流。
+   * 旧实现每次 put/del/setAsset 都同步 JSON.stringify 整个 _mem 并写盘 ——
+   * 导入 200 条记录时就是 200 次全量序列化 + 200 次同步磁盘写，
+   * 主线程被彻底堵死（这是「导入很卡」的真正原因，不是数据量本身）。
+   * 现在合并到一个微任务里只写一次，语义不变（页面关闭前一定落盘）。 */
+  _lsTimer: null,
+  _lsQuotaWarned: false,
+  persistLS(){
+    if(Repo._lsTimer) return;
+    Repo._lsTimer = setTimeout(() => {
+      Repo._lsTimer = null;
+      try{ localStorage.setItem(LS_DATA, JSON.stringify(Repo._mem)); }
+      catch(e){
+        /* 降级模式下这里是唯一的落盘点：失败若只 throw，
+           异常发生在定时器回调里没有任何调用方能感知，
+           put 照样返回 true、界面照样弹「已保存」。必须显式上报。 */
+        if(!Repo._lsQuotaWarned){
+          Repo._lsQuotaWarned = true;
+          try{ toast("⚠ 本地存储写入失败（配额不足或被禁用），本次更改可能不会被保存。请先导出备份。", "err", 10000); }catch(e2){}
+        }
+        console.warn("localStorage 写入失败", e);
+      }
+    }, 0);
+  },
+  /* 页面隐藏时立刻落盘：微任务节流在「导入完立刻关标签页」的场景下会丢数据。 */
+  flushLS(){
+    if(!Repo._lsTimer) return;
+    clearTimeout(Repo._lsTimer);
+    Repo._lsTimer = null;
+    try{ localStorage.setItem(LS_DATA, JSON.stringify(Repo._mem)); }catch(e){}
+  },
+  async usage(){
+    try{
+      if(navigator.storage && navigator.storage.estimate){
+        const est = await navigator.storage.estimate();
+        return { usage: est.usage || 0, quota: est.quota || 0 };
+      }
+    }catch(e){}
+    return { usage: 0, quota: 0 };
+  }
+};
+

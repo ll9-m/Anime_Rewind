@@ -1,0 +1,63 @@
+/* ============================================================
+   15. 语录数据（§9.3 内置语录包）
+   ============================================================ */
+const BUILTIN_QUOTES = [
+  ["真相永远只有一个！","名侦探柯南","江户川柯南"],
+  ["我是要成为海贼王的男人！","ONE PIECE","蒙奇·D·路飞"],
+  ["谢谢你，这样爱着我！","ONE PIECE","波特卡斯·D·艾斯"],
+  ["说到做到，笔直向前，这就是我的忍道！","火影忍者","漩涡鸣人"],
+  ["教练，我想打篮球。","灌篮高手","三井寿"],
+  ["你不会死的，我会保护你。","新世纪福音战士","绫波丽"],
+  ["有资格开枪的，只有有被射杀觉悟的人。","反叛的鲁路修","鲁路修"],
+  ["我的钻头，可是要突破天际的钻头啊！","天元突破红莲螺岩","卡米那 / 西蒙"],
+  ["我不做人了，JOJO！","JOJO的奇妙冒险","DIO"],
+  ["我是新世界的神。","死亡笔记","夜神月"],
+  ["欢迎来到，命运石之门的选择。","命运石之门","冈部伦太郎"],
+  ["我下棋，是为了连接遥远的过去与未来。","棋魂","藤原佐为"],
+  ["我想成为温柔的人，因为曾被温柔以待过。","夏目友人帐","夏目贵志"],
+  ["找到你了，面码。","未闻花名","本间芽衣子与众人"],
+  ["曾经发生过的事不会忘记，只是暂时想不起来而已。","千与千寻","钱婆婆"],
+  ["既然你诚心诚意地发问了！","精灵宝可梦","火箭队"],
+  ["目标是宝可梦大师！","精灵宝可梦","小智 / 主题曲"],
+  ["无限大的梦想之后，在这空无一物的世界里。","数码宝贝大冒险","主题曲《Butter-Fly》/ 和田光司"],
+  ["冲啊，旋风冲锋龙卷风！","四驱兄弟","星马豪"],
+  ["我的回合，抽卡！","游戏王","武藤游戏"],
+  ["妖精，快还我爷爷！","葫芦兄弟","葫芦娃"],
+  ["眼睛瞪得像铜铃。","黑猫警长","主题曲"],
+  ["白龙马，蹄儿朝西。","西游记（1999动画）","主题曲《一个师傅仨徒弟》"],
+  ["是他，是他，是他，就是他！","哪吒传奇","主题曲《少年英雄小哪吒》"],
+  ["战斗力只有5吗，垃圾。","龙珠Z","拉蒂兹"],
+  ["那一年，我也变成了光。","迪迦奥特曼","结局名场面流传语"]
+];
+async function ensureBuiltinQuotes(restore){
+  let added = 0;
+  for(let i = 0; i < BUILTIN_QUOTES.length; i++){
+    const [text, src, who] = BUILTIN_QUOTES[i];
+    const norm = normalize(text);
+    const exists = state.quotes.find(q => normalize(q.text) === norm);
+    if(exists){
+      if(restore && !exists.isBuiltin){ exists.isBuiltin = true; await saveQuote(exists); }
+      continue;
+    }
+    await saveQuote({ id:"bq_" + i, text, sourceAnimeTitle:src, character:who, isBuiltin:true, favorite:false, schemaVersion:SCHEMA_VERSION, createdAt:new Date().toISOString() });
+    added++;
+  }
+  return added;
+}
+function quotePool(){ return state.quotes.filter(q => q.text && q.text.trim()); }
+function pickRandom(arr){
+  if(!arr.length) return null;
+  return arr[Math.floor(Math.random() * arr.length)];
+}
+function pickRandomQuote(exclude){
+  const pool = quotePool();
+  if(!pool.length) return null;
+  if(pool.length === 1) return pool[0];
+  let q = pickRandom(pool), guard = 0;
+  while(exclude && q && q.id === exclude.id && guard++ < 12) q = pickRandom(pool);
+  return q;
+}
+function quoteMetaLine(q){
+  return "—— " + (q.character ? q.character + " · " : "") + q.sourceAnimeTitle;
+}
+

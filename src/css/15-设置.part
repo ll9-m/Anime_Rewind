@@ -1,0 +1,48 @@
+/* ============================================================
+   设置
+   ============================================================ */
+.settings-layout{ display:grid; grid-template-columns:200px minmax(0,1fr); gap:var(--sp-5); align-items:start; }
+.settings-nav{ position:sticky; top:0; display:flex; flex-direction:column; gap:2px; }
+.settings-nav button{
+  text-align:left; padding:8px var(--sp-3); border:0; background:transparent; cursor:pointer;
+  border-radius:var(--r-md); color:var(--text-2); font-size:var(--fs-sm); border-left:2px solid transparent;
+}
+.settings-nav button:hover{ background:var(--panel-2); color:var(--text); }
+.settings-nav button[aria-current="true"]{ color:var(--text); background:var(--panel-2); border-left-color:var(--accent); font-weight:600; }
+.setting-row{ display:grid; grid-template-columns:minmax(0,1fr) 260px; gap:var(--sp-4); align-items:center; padding:var(--sp-3) 0; border-bottom:1px solid var(--border); }
+.setting-row:last-child{ border-bottom:0; }
+.setting-row .desc{ font-size:var(--fs-xs); color:var(--muted); margin-top:2px; }
+.setting-row .ctrl{ display:flex; align-items:center; gap:var(--sp-2); justify-content:flex-end; }
+@media (max-width:1200px){ .setting-row{ grid-template-columns:minmax(0,1fr); } .setting-row .ctrl{ justify-content:flex-start; } }
+/* 背景图选择器：缩略图 + 操作按钮。
+   缩略图不是装饰 —— 用户判断「图有没有生效」靠的是这张小图和页面实际观感，
+   单靠一句 toast 无法区分成功与静默失败。 */
+.bg-picker{ display:flex; align-items:center; gap:var(--sp-3); justify-content:flex-end; }
+.bg-picker-act{ display:flex; align-items:center; gap:var(--sp-2); }
+.bg-thumb{
+  width:88px; height:52px; flex:0 0 88px;
+  border-radius:var(--r-sm); overflow:hidden;
+  border:1px solid var(--border-2); background:var(--panel-3);
+  display:grid; place-items:center; position:relative;
+}
+.bg-thumb img{ width:100%; height:100%; object-fit:cover; display:block; }
+.bg-thumb-x{ color:var(--muted); display:grid; place-items:center; width:100%; height:100%; }
+.bg-status{
+  display:flex; align-items:flex-start; gap:var(--sp-2);
+  margin-top:var(--sp-3); padding:var(--sp-3);
+  border:1px solid var(--border); border-left:2px solid var(--warn);
+  border-radius:var(--r-md); background:var(--panel-2);
+  font-size:var(--fs-xs); color:var(--text-2); line-height:1.6;
+}
+.bg-status svg{ flex:0 0 14px; margin-top:2px; color:var(--warn); }
+.bg-status.is-ok{ border-left-color:var(--ok); }
+.bg-status.is-ok svg{ color:var(--ok); }
+.bg-readability{ display:block; margin-top:4px; font-weight:500; color:var(--text); }
+.swatch{ width:28px; height:28px; border-radius:50%; border:2px solid transparent; cursor:pointer; box-shadow:inset 0 0 0 2px rgba(0,0,0,.25); }
+.swatch[aria-pressed="true"]{ border-color:var(--text); }
+.status-editor{ display:flex; align-items:center; gap:var(--sp-2); padding:var(--sp-2); border:1px solid var(--border); border-radius:var(--r-md); background:var(--panel-2); }
+.status-editor input[type="color"]{ width:32px; height:32px; padding:0; border:1px solid var(--border-2); border-radius:var(--r-sm); background:none; cursor:pointer; }
+.import-report{ display:grid; gap:var(--sp-2); }
+.report-list{ max-height:260px; overflow-y:auto; border:1px solid var(--border); border-radius:var(--r-md); }
+.report-list li{ padding:8px var(--sp-3); border-bottom:1px solid var(--border); font-size:var(--fs-xs); display:flex; gap:var(--sp-2); align-items:center; }
+.report-list li:last-child{ border-bottom:0; }

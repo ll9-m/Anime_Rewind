@@ -1,0 +1,495 @@
+/* ============================================================
+   13.5 TV 影院：横滑卡行 + 剧集卡行
+   ------------------------------------------------------------
+   Izuko_TV 的片库不是纵向网格，是「组标题 + 横滑行」：
+   每一行有自己的标题与横向滚动的卡组，行尾挂一张「更多」玻璃卡。
+   为什么非得这样：电视是十米外观看，纵向网格一屏塞满几十张小卡，
+   每张都认不出来；横滑行一屏 6 张、看得清，且方向键左右走是电视的肌肉记忆。
+
+   这一段只在 ui_skin === "tv" 下生效，其余套系的片库维持原网格 ——
+   桌面浏览器里纵向网格才是对的，横滑卡行在鼠标下是反模式。 */
+
+/* 「继续观看」的口径照 TvHomeChannels.WATCH_NEXT 的三条：
+     ① 在看（statusId = st_watching）
+     ② 有进度且没看完
+     ③ 按最近记录时间倒序（用 updatedAt，不用 streamUrlAt ——
+        后者只在加了播放源时才有值，混合两个时间戳排序会得到
+        「看了一半但没存线路」的作品永远沉底）
+   上限取 WATCH_NEXT_LIMIT = 10。
+
+   注意②不能用 progressOf 判：它在 totalEpisodes 为 null 时返回 null，
+   于是「总集数未知但已经看了 4 集」的作品会被整条漏掉 ——
+   恰恰是这类最该出现在「继续观看」里（用户都记不清它有多少集了）。
+
+   limit 只给「置顶显示」用：上游的 10 是系统 launcher 的一行容量，
+   而网页里的行能横滑，用户想看完所有在看的。所以卡行视图调用时传 0
+   表示不截断 —— 否则「更多」卡永远算不出 rest，
+   变成一段永远不执行的分支（10 < tvRowHTML 的 moreLimit 20）。 */
+function continueWatchingList(list, limit){
+  const rows = list.filter(a => {
+    if(a.statusId === "st_watching") return true;
+    const p = progressOf(a);
+    if(p !== null) return p > 0 && p < 100;
+    return (Number(a.watchedEpisodes) || 0) > 0;
+  });
+  rows.sort((x, y) => String(y.updatedAt || "").localeCompare(String(x.updatedAt || "")));
+  const cap = limit == null ? TV_ROW.watchNextLimit : limit;
+  return cap > 0 ? rows.slice(0, cap) : rows;
+}
+
+/* 按系列分组，每系列一行。行内按首播年排 ——
+   「第一季 / 第二季 / 剧场版」在横滑行里必须按年份挨着，
+   否则用户看到的是随机顺序的同系列作品，得靠记忆拼。 */
+function seriesRowGroups(list){
+  const map = new Map();
+  list.forEach(a => {
+    const k = a.seriesId || DEFAULT_SERIES_ID;
+    if(!map.has(k)) map.set(k, []);
+    map.get(k).push(a);
+  });
+  return Array.from(map.entries())
+    .map(([id, items]) => {
+      items.sort((x, y) => String(x.airDate || "9999").localeCompare(String(y.airDate || "9999")));
+      return { id, name: seriesNameOf({ seriesId:id }), items };
+    })
+    .sort((a, b) => b.items.length - a.items.length);
+}
+
+function tvRowHTML(title, items, opts){
+  opts = opts || {};
+  if(!items.length) return "";
+  /* 行内只渲染前 moreLimit 张，其余靠行尾「更多」卡进完整列表。
+     一行铺 300 张的话，横向滚动条会变成一条看不出范围的细线。 */
+  const moreLimit = opts.moreLimit || 20;
+  const shown = items.slice(0, moreLimit);
+  const rest = items.length - shown.length;
+  /* moreKey 必须是「这一行的身份」（系列 id / ROW_CONTINUE）而不是标题 ——
+     标题可能重名（两个系列都叫「剧场版」），拿它去筛会命中错的组。 */
+  const moreKey = attr(opts.moreKey || "");
+  /* 「更多」卡只在真的还有内容时才挂：卡片数少于阈值就挂，
+     点进去还是同一批，纯噪音。 */
+  const moreCard = (rest > 0 && items.length >= TV_ROW.moreThreshold)
+    ? '<button class="tv-more" type="button" data-row-more="' + moreKey + '" ' +
+      'aria-label="查看' + attr(title) + '的全部 ' + items.length + ' 部">' +
+      '<span class="tv-more-icon">' + ic("grid",18) + "</span><span>更多 " + rest + " 部</span></button>"
+    : "";
+  return '<section class="tv-row">' +
+    '<div class="tv-row-head"><h3>' + esc(title) + "</h3>" +
+      (opts.hint ? '<span class="hint">' + esc(opts.hint) + "</span>" : "") +
+    "</div>" +
+    '<div class="tv-row-scroll">' + shown.map(cardHTML).join("") + moreCard + "</div>" +
+  "</section>";
+}
+
+/* 卡行视图的整体编排：
+   继续观看置顶 → 各系列行 → 「未归类」兜底。
+   「未归类」不能省：库里没归类的作品在系列行里根本没位置，
+   视图一换它们就从屏幕上消失了，用户会以为丢了。 */
+function rowsViewHTML(list){
+  const cont = continueWatchingList(list, 0);
+  const rows = [];
+  if(cont.length) rows.push(tvRowHTML("继续观看", cont, { hint:"有进度且还没看完", moreKey:ROW_CONTINUE }));
+
+  const groups = seriesRowGroups(list);
+  const grouped = new Set();
+  groups.forEach(g => g.items.forEach(a => grouped.add(a.id)));
+  groups.slice(0, TV_ROW.seriesRowLimit).forEach(g => {
+    /* 「继续观看」已置顶展示过的作品，系列行里不再重复占位 ——
+       一屏里出现两张一模一样的卡，用户会以为是 bug。 */
+    const items = g.items.filter(a => !cont.some(c => c.id === a.id));
+    if(!items.length) return;
+    rows.push(tvRowHTML(g.name, items, { hint: g.items.length + " 部", moreKey:g.id }));
+  });
+  /* 被 seriesRowLimit 截掉的系列，统一收进「其他系列」行 ——
+     直接丢掉等于这些作品在卡行视图里彻底消失。
+     这行的 moreKey 用哨兵 ROW_OVERFLOW：成员跨多个系列，
+     任何单个 seriesId 都定位不到它，点「更多」必须能摊出整组。 */
+  const overflow = groups.slice(TV_ROW.seriesRowLimit);
+  if(overflow.length){
+    const items = [];
+    overflow.forEach(g => g.items.forEach(a => { if(!cont.some(c => c.id === a.id)) items.push(a); }));
+    if(items.length) rows.push(tvRowHTML("其他系列", items, { hint: overflow.length + " 个系列", moreKey:ROW_OVERFLOW }));
+  }
+
+  const leftover = list.filter(a => !grouped.has(a.id) && !cont.some(c => c.id === a.id));
+  if(leftover.length) rows.push(tvRowHTML("全部作品", leftover, { hint: list.length + " 部" }));
+
+  return rows.join("") || libraryEmptyHTML();
+}
+
+function tableHTML(list){
+  const rows = list.map(a => {
+    const name = a.titleCn || a.titleOriginal || "未命名";
+    const p = progressOf(a);
+    return '<tr data-open="' + attr(a.id) + '">' +
+      '<td class="col-thumb"><div class="thumb">' + coverThumb(a) + "</div></td>" +
+      '<td><div class="truncate" style="max-width:260px">' + esc(name) + "</div>" +
+        (a.titleOriginal ? '<div class="small muted truncate" style="max-width:260px">' + esc(a.titleOriginal) + "</div>" : "") + "</td>" +
+      '<td class="nowrap">' + esc(String(a.airDate || "").slice(0,4) || "—") + "</td>" +
+      '<td><select class="select" data-inline="seriesId" data-id="' + attr(a.id) + '" aria-label="' + attr(name) + ' 系列">' +
+        seriesOptionsHTML(a.seriesId) + "</select></td>" +
+      '<td><div class="truncate" style="max-width:140px">' + esc((a.studios||[]).join("、") || "—") + "</div></td>" +
+      '<td><select class="select" data-inline="statusId" data-id="' + attr(a.id) + '" aria-label="' + attr(name) + ' 状态">' + statusOptionsHTML(a.statusId) + "</select></td>" +
+      '<td class="nowrap"><input class="input ep-input" type="number" min="0" step="1" data-inline="watchedEpisodes" data-id="' + attr(a.id) + '" value="' + (a.watchedEpisodes||0) + '" aria-label="已看集数">' +
+        "<span class=\"muted small\">/" + (a.totalEpisodes == null ? "?" : a.totalEpisodes) + "</span>" +
+        (p === null ? "" : '<div class="small muted">' + Math.round(p) + "%</div>") + "</td>" +
+      '<td><input class="input score-input" type="number" min="0" max="10" step="0.5" data-inline="myScore" data-id="' + attr(a.id) + '" value="' + (a.myScore == null ? "" : a.myScore) + '" aria-label="我的评分"></td>' +
+      '<td class="nowrap"><input class="input ep-input" type="number" min="0" step="1" data-inline="rewatchCount" data-id="' + attr(a.id) + '" value="' + (a.rewatchCount||0) + '" aria-label="重看次数"></td>' +
+      '<td class="nowrap">' +
+        '<button class="btn btn-sm btn-icon ' + (a.masterpiece ? "is-on" : "") + '" type="button" data-act="master" data-id="' + attr(a.id) + '" title="神作" aria-pressed="' + (a.masterpiece ? "true":"false") + '">' + ic("starfill",14) + "</button> " +
+        '<button class="btn btn-sm btn-icon ' + (a.favorite ? "is-on" : "") + '" type="button" data-act="fav" data-id="' + attr(a.id) + '" title="收藏" aria-pressed="' + (a.favorite ? "true":"false") + '">' + ic("heart",14) + "</button>" +
+      "</td>" +
+      '<td class="nowrap">' +
+        '<button class="btn btn-sm btn-icon" type="button" data-act="detail" data-id="' + attr(a.id) + '" title="详情" aria-label="详情">' + ic("play",14) + "</button> " +
+        '<button class="btn btn-sm btn-icon" type="button" data-act="del" data-id="' + attr(a.id) + '" title="删除" aria-label="删除">' + ic("trash",14) + "</button>" +
+      "</td>" +
+    "</tr>";
+  }).join("");
+  return '<div class="table-wrap scroll"><table class="grid-table">' +
+    "<thead><tr>" +
+      '<th class="col-thumb">封面</th><th>片名</th><th>首播</th><th>系列</th><th>制作公司</th><th>状态</th><th>已看/总集</th><th>我的评分</th><th>重看</th><th>神作/收藏</th><th>操作</th>' +
+    "</tr></thead><tbody>" + rows + "</tbody></table></div>";
+}
+
+function libraryEmptyHTML(){
+  if(!state.anime.length){
+    return '<div class="state-box">' + ic("library",40) +
+      "<h2>片库还是空的</h2><p>搜索第一部童年动画，开始建档。</p>" +
+      '<div class="row"><button class="btn btn-primary" type="button" data-act="add">' + ic("plus",16) + "添加第一部动画</button></div></div>";
+  }
+  return '<div class="state-box">' + ic("search",40) +
+    "<h2>没有符合条件的作品</h2><p>已应用 " + activeFilterCount() + " 个筛选条件。</p>" +
+    '<div class="row"><button class="btn" type="button" data-act="reset-filter">清空筛选</button></div></div>';
+}
+
+function renderLibrary(root){
+  /* 展开态优先于筛选结果：从卡行「更多」进来时，
+     网格要显示的是那一组本身，而不是叠加在筛选之上的子集
+     —— 叠加的话点「继续观看 → 更多」很可能得到空网格。 */
+  const expanded = libState.rowExpanded ? rowExpandedList() : null;
+  const list = expanded || sortAnime(filterAnime(state.anime));
+  let html = '<div class="filterbar">' +
+    '<div class="field field-wide"><label for="lib-q">搜索本地片库</label>' +
+      '<div class="search-wrap">' + ic("search",16) +
+      '<input class="input" id="lib-q" type="search" placeholder="片名 / 原名 / 别名 / 标签 / 公司" value="' + attr(libState.q) + '"></div></div>' +
+    '<div class="field"><label for="lib-status">状态</label><select class="select" id="lib-status">' +
+      '<option value="">全部</option>' + state.statuses.map(s => '<option value="' + attr(s.id) + '"' + (libState.statusId === s.id ? " selected":"") + '>' + esc(s.name) + "</option>").join("") +
+      "</select></div>" +
+    '<div class="field"><label for="lib-decade">首播年代</label><select class="select" id="lib-decade">' +
+      '<option value="">全部</option>' + allDecades().map(d => '<option value="' + attr(d) + '"' + (libState.decade === d ? " selected":"") + ">" + esc(d) + "</option>").join("") +
+      "</select></div>" +
+    '<div class="field"><label for="lib-year">观看年份</label><select class="select" id="lib-year">' +
+      '<option value="">全部</option>' + allWatchYears().map(y => '<option value="' + String(y) + '"' + (String(libState.watchYear) === String(y) ? " selected":"") + ">" + y + "</option>").join("") +
+      "</select></div>" +
+    '<div class="field"><label for="lib-grade">观看年级</label><select class="select" id="lib-grade">' +
+      '<option value="">全部</option>' + Array.from(new Set(state.anime.map(a => a.watchGrade).filter(Boolean))).map(g => '<option value="' + attr(g) + '"' + (libState.watchGrade === g ? " selected":"") + ">" + esc(g) + "</option>").join("") +
+      "</select></div>" +
+    '<div class="field"><label for="lib-studio">制作公司</label><select class="select" id="lib-studio">' +
+      '<option value="">全部</option>' + allStudios().map(s => '<option value="' + attr(s) + '"' + (libState.studio === s ? " selected":"") + ">" + esc(s) + "</option>").join("") +
+      "</select></div>" +
+    '<div class="field"><label for="lib-genre">类型</label><select class="select" id="lib-genre">' +
+      '<option value="">全部</option>' + allGenres().map(s => '<option value="' + attr(s) + '"' + (libState.genre === s ? " selected":"") + ">" + esc(s) + "</option>").join("") +
+      "</select></div>" +
+    /* 系列筛选：只列出真有作品的系列。
+       「未筛选」用 null 表达，与「筛选默认系列」（空串）区分开。 */
+    '<div class="field"><label for="lib-series">系列</label><select class="select" id="lib-series">' +
+      '<option value="__all__"' + (libState.seriesId === null ? " selected" : "") + ">全部</option>" +
+      usedSeries().map(s => {
+        const sel = libState.seriesId === s.id;
+        const n = state.anime.filter(a => (a.seriesId || DEFAULT_SERIES_ID) === s.id).length;
+        return '<option value="' + attr(s.id) + '"' + (sel ? " selected" : "") + ">" +
+          esc(s.name) + "（" + n + "）</option>";
+      }).join("") +
+      "</select></div>" +
+    '<div class="field"><label for="lib-flag">标记</label><select class="select" id="lib-flag">' +
+      '<option value="">全部</option>' +
+      '<option value="fav"' + (libState.flag === "fav" ? " selected":"") + ">仅收藏</option>" +
+      '<option value="master"' + (libState.flag === "master" ? " selected":"") + ">仅神作</option>" +
+      '<option value="review"' + (libState.flag === "review" ? " selected":"") + ">有观后感</option>" +
+      '<option value="noYear"' + (libState.flag === "noYear" ? " selected":"") + ">缺观看年份</option>" +
+      "</select></div>" +
+    '<div class="field"><label for="lib-sort">排序</label><select class="select" id="lib-sort">' +
+      SORTS.map(s => '<option value="' + attr(s.key) + '"' + (libState.sort === s.key ? " selected":"") + ">" + esc(s.name) + "</option>").join("") +
+      "</select></div>" +
+    '<div class="filterbar-right">' +
+      '<div class="seg" role="group" aria-label="视图切换">' +
+        '<button type="button" data-view="wall" aria-pressed="' + (libState.view === "wall") + '">' + ic("grid",14) + "封面墙</button>" +
+        /* 卡行只在 TV 影院套系下出现。桌面浏览器里横滑卡行是反模式 ——
+           鼠标没有「左右走」的肌肉记忆，一行 6 张还要横向滚，比网格慢得多。 */
+        (settings.ui_skin === "tv"
+          ? '<button type="button" data-view="rows" aria-pressed="' + (libState.view === "rows") + '">' + ic("film",14) + "卡行</button>"
+          : "") +
+        '<button type="button" data-view="table" aria-pressed="' + (libState.view === "table") + '">' + ic("list",14) + "表格</button>" +
+      "</div>" +
+      (activeFilterCount() ? '<button class="btn btn-sm" type="button" data-act="reset-filter">' + ic("close",14) + "清空筛选</button>" : "") +
+    "</div>" +
+  "</div>";
+
+  /* 展开条：告诉用户「现在看到的不是筛选结果，是某一行的全部」，
+     并给一个返回卡行的出口。没有它，用户会以为筛选被改坏了。 */
+  if(expanded) html += '<div class="note-box is-ok mb-3">' + ic("info",16) +
+    "<span>正在展开「" + esc(rowExpandedLabel()) + "」的 " + list.length + " 部。" +
+    (libState.view === "rows"
+      ? ""
+      : ' <button class="btn btn-sm" type="button" data-act="back-rows">返回卡行</button>') +
+    "</span></div>";
+  html += '<div class="small muted mb-3">共 ' + list.length + " 部" +
+    (expanded ? "" : (list.length !== state.anime.length ? "（从 " + state.anime.length + " 部中筛选）" : "")) + "</div>";
+  /* 三种视图：卡行（TV 套系）、封面墙、表格。
+     卡行走 rowsViewHTML 而不是复用 wall 的 class —— 它的列数不由
+     列宽公式决定，而是由一行的卡片数决定。 */
+  html += list.length
+    ? (libState.view === "rows" && settings.ui_skin !== "tv"
+        /* 非 TV 套系下 rows 是非法值（用户可能先在 TV 套系选了卡行、
+           之后切回档案馆）。必须显式落回封面墙：
+           原来的三元里它会一路掉到 table 分支，
+           于是「我只换了套系」变成「我的片库视图被偷偷换了」。 */
+        ? '<div class="wall">' + list.map(cardHTML).join("") + "</div>"
+        : (libState.view === "rows"
+            ? rowsViewHTML(list)
+            : (libState.view === "wall" ? '<div class="wall">' + list.map(cardHTML).join("") + "</div>" : tableHTML(list))))
+    : libraryEmptyHTML();
+  root.innerHTML = html;
+
+  /* 改筛选条件前先退出展开态。展开中的网格无视筛选结果，
+   用户在下拉里换了条件却看不到任何变化，会以为筛选器坏了。 */
+  const bind = (sel, key, isNum) => {
+    const n = root.querySelector(sel);
+    if(!n) return;
+    n.addEventListener("change", () => { libState.rowExpanded = ""; libState[key] = n.value; rerender(); });
+    if(!isNum) n.addEventListener("input", debounce(() => { libState.rowExpanded = ""; libState[key] = n.value; rerender(); }, 260));
+  };
+  const q = root.querySelector("#lib-q");
+  if(q){
+    bindIMEInput(q, debounce(() => { libState.rowExpanded = ""; libState.q = q.value; rerender(); const n2 = root.querySelector("#lib-q"); if(n2){ n2.focus(); n2.setSelectionRange(n2.value.length, n2.value.length); } }, 300));
+  }
+  bind("#lib-status","statusId"); bind("#lib-decade","decade"); bind("#lib-year","watchYear"); bind("#lib-grade","watchGrade");
+  bind("#lib-studio","studio"); bind("#lib-genre","genre"); bind("#lib-flag","flag"); bind("#lib-sort","sort", true);
+  /* 系列筛选要单独处理：默认系列的 id 是空串，
+     走通用 bind() 的话哨兵值会被原样写进去。 */
+  const seriesSel = root.querySelector("#lib-series");
+  if(seriesSel) seriesSel.addEventListener("change", () => {
+    libState.rowExpanded = "";
+    libState.seriesId = seriesSel.value === "__all__" ? null : seriesSel.value;
+    rerender();
+  });
+  /* 切视图不清展开态：网格 ↔ 卡行是同一组内容的两种排法，
+     清掉的话从「更多」进网格再切卡行就丢了这一组。 */
+  root.querySelectorAll("[data-view]").forEach(b => b.addEventListener("click", () => {
+    libState.view = b.dataset.view;
+    settings.default_view = libState.view;
+    saveSettings();
+    rerender();
+  }));
+  /* 「更多」卡：把这一行的全部内容摊成网格看，而不是换路由。
+     换成网格而不是弹层，是因为电视上弹层要额外处理焦点回收与返回键，
+     而网格是已经在同一页里的视图，方向键走过去、看完按回墙就回来了。
+     seriesId 走真实筛选器（用户随后能自己改条件），
+     「继续观看」这类虚拟分组没有对应筛选器，只能临时放宽筛选集合。 */
+  root.querySelectorAll("[data-row-more]").forEach(b => b.addEventListener("click", () => {
+    const key = b.dataset.rowMore;
+    if(!seriesRowIds().has(key) && key !== ROW_CONTINUE && key !== ROW_OVERFLOW){
+      /* 兜底：key 既不是已知系列也不是哨兵，说明卡片与数据不同步
+         （比如系列在渲染后被删了）。静默走进 else 会摊出一个空网格，
+         用户看到的是「全部作品不见了」。 */
+      toast("这一行已经变了，回卡行重进一次", "warn");
+      return;
+    }
+    /* 一律先清空筛选：用户带着旧条件点「更多」，叠加后会得到空网格，
+       而界面上不会有任何解释。 */
+    resetLibraryFilter();
+    if(key === ROW_CONTINUE || key === ROW_OVERFLOW){
+      /* 虚拟分组没有对应的筛选器组合，只能靠 rowExpanded 记住这一组。 */
+      libState.rowExpanded = key;
+    }else{
+      /* 真实系列除记住这一行，还要把系列筛选器拨过去 ——
+         用户在网格里看到「系列：钢炼」的下拉会以为是自己筛的，
+         其实是我们带过来的；不拨的话下拉与网格内容对不上。 */
+      libState.rowExpanded = key;
+      libState.seriesId = key;
+    }
+    libState.view = "wall";
+    rerender();
+  }));
+  const backRows = root.querySelector('[data-act="back-rows"]');
+  if(backRows) backRows.addEventListener("click", () => {
+    libState.rowExpanded = "";
+    libState.view = "rows";
+    rerender();
+  });
+  bindLibraryActions(root);
+}
+
+/* 行分组里的 seriesId 集合。「更多」卡靠它区分
+   「这是一个真实系列（走筛选器）」与「这是一个虚拟分组（走临时集合）」。
+   每次重算而不是缓存：系列能增删，缓存会过期。 */
+function seriesRowIds(){
+  const s = new Set(state.series.map(x => x.id));
+  s.add(DEFAULT_SERIES_ID);
+  return s;
+}
+const ROW_CONTINUE = "__continue__";
+/* 「其他系列」行的哨兵 key。成员跨多个 seriesId，
+   展开时按「第 N 个以后的系列」重算，不能靠 key 反查。 */
+const ROW_OVERFLOW = "__overflow__";
+
+/* 「更多」展开后网格要显示的那一批。
+   空数组 = 不展开（显示正常筛选结果）。
+   为什么要单独记而不是复用筛选器：库里没有「有进度未看完」这个筛选维度，
+   硬塞进 filterAnime 会让它在筛选栏里也出现一个语义不清的下拉项。 */
+function rowExpandedList(){
+  const key = libState.rowExpanded;
+  if(!key) return null;
+  if(key === ROW_CONTINUE) return continueWatchingList(filterAnime(state.anime), 0);
+  if(key === ROW_OVERFLOW){
+    const ids = new Set(overflowSeriesIds());
+    const cont = new Set(continueWatchingList(filterAnime(state.anime), 0).map(a => a.id));
+    return state.anime.filter(a => ids.has(a.seriesId || DEFAULT_SERIES_ID) && !cont.has(a.id));
+  }
+  const m = new Map();
+  state.anime.forEach(a => {
+    const k = a.seriesId || DEFAULT_SERIES_ID;
+    if(k === key){ if(!m.has(a.id)) m.set(a.id, a); }
+  });
+  return Array.from(m.values());
+}
+
+/* 排在 seriesRowLimit 之后的那些系列 id。
+   rowsViewHTML 与展开逻辑都要用它 —— 两处各算一次的话，
+   将来改排序规则就会算出两个不同的集合。 */
+function overflowSeriesIds(){
+  return seriesRowGroups(state.anime).slice(TV_ROW.seriesRowLimit).map(g => g.id);
+}
+
+/* 展开组的显示名。真实系列取系列名，「继续观看」是虚拟分组没有对应记录，
+   只能自己起名 —— 写成 seriesNameOf 会得到「默认系列」，
+   用户会以为点错了。 */
+function rowExpandedLabel(){
+  const key = libState.rowExpanded;
+  if(!key) return "";
+  if(key === ROW_CONTINUE) return "继续观看";
+  if(key === ROW_OVERFLOW) return "其他系列";
+  const s = seriesById(key);
+  return s ? s.name : "默认系列";
+}
+
+/* 清空筛选。抽出来是因为「更多」卡与筛选栏的「清空筛选」按钮要做同一件事，
+   两处各写一遍迟早会不一致。 */
+function resetLibraryFilter(){
+  ["q","statusId","decade","watchYear","watchGrade","studio","genre","flag"].forEach(k => { libState[k] = ""; });
+  libState.seriesId = null;
+  libState.rowExpanded = "";
+}
+
+/* 卡片当前能不能靠「悬停」翻面。
+   能 → 桌面端，:hover 已经在翻，点击直接进详情。
+   不能 → 触摸设备（手机/平板），以前靠右下角那个常驻的圆形翻面按钮，
+        该按钮已按用户要求删掉，于是翻面入口改由「点卡片」承担。
+   另有一条例外：开了「降低动效」时 CSS 根本不翻转（背面平铺在正面下方，
+   两面同时可见），此时点卡片就该直接进详情，没有翻面可言。 */
+function cardFlipByHover(){
+  if(reduceMotion()) return false;
+  return !!(window.matchMedia && window.matchMedia("(hover: hover)").matches);
+}
+
+/* 触摸端点卡片：第一次点翻面看资料，再点一次进详情。
+   翻面态统一落在 .is-flipped 上，与桌面端 :hover 是同一套样式。
+   为什么不直接进详情：背面还有完整资料和「详情」按钮，
+   直接跳走等于触摸端永远看不到背面 —— 那才是真的功能缺失。
+   （那个常驻的圆形翻面按钮已按用户要求删掉了，触摸端原本只剩它一个入口。） */
+function bindLibraryActions(root){
+  /* 触摸端是否需要「点一下翻面」。只算一次，不在每个卡片的点击里问媒体查询。 */
+  const tapToFlip = !cardFlipByHover();
+
+  root.querySelectorAll("[data-open]").forEach(n => {
+    n.addEventListener("click", (e) => {
+      if(e.target.closest("[data-act],[data-inline],input,select,button")) return;
+      /* 触摸端：卡片没翻开时先把资料面翻出来，翻开状态下再点才进详情。
+         桌面端（tapToFlip 为 false）直接进详情，行为与以前一致。 */
+      if(tapToFlip && n.classList.contains("card") && !n.classList.contains("is-flipped")){
+        n.classList.add("is-flipped");
+        return;
+      }
+      go("theater", n.dataset.open);
+    });
+    if(n.tagName === "ARTICLE"){
+      n.addEventListener("keydown", (e) => {
+        if(e.key === "Enter" || e.key === " "){ e.preventDefault(); go("theater", n.dataset.open); }
+      });
+    }
+  });
+  root.querySelectorAll("[data-act]").forEach(b => b.addEventListener("click", () => libraryAction(b.dataset.act, b.dataset.id, root)));
+  root.querySelectorAll("[data-inline]").forEach(n => {
+    n.addEventListener("change", () => inlineEdit(n.dataset.id, n.dataset.inline, n.value));
+  });
+}
+async function libraryAction(act, id, root){
+  /* 先处理不依赖具体作品的动作。
+     原来这里写的是 `const a = animeById(id); if(!a) return;` 开头，
+     于是「添加第一部动画」和「清空筛选」这两个按钮（它们没有 data-id）
+     在 animeById(undefined) 返回 null 时就被静默拦掉 —— 按钮能看见、点了没反应。
+     右上角「添加新番」是 box.innerHTML 里另一个按钮，不走这条路径，所以正常，
+     这个不对称正是它难以被发现的原因。 */
+  if(act === "add"){ openSearchModal(); return; }
+  if(act === "reset-filter"){
+    /* 统一走 resetLibraryFilter —— 这里以前手抄了一份，漏了 rowExpanded：
+       展开组变空后点「清空筛选」网格依旧为空，只有一个出口能出去。 */
+    resetLibraryFilter();
+    rerender(); return;
+  }
+  const a = animeById(id);
+  if(!a) return;
+  switch(act){
+    case "detail": go("theater", id); break;
+    case "rewatch": await promptReview(a); break;
+    case "fav": a.favorite = !a.favorite; await saveAnime(a); rerender(); break;
+    case "master": a.masterpiece = !a.masterpiece; await saveAnime(a); rerender(); break;
+    case "status": {
+      const opts = state.statuses.map(s =>
+        '<button class="btn" type="button" data-st="' + attr(s.id) + '"><span class="st-dot" style="--st-color:' + esc(s.color) + '"><i></i></span>' + esc(s.name) + "</button>").join("");
+      openModal({ title:"改状态 · " + a.titleCn, narrow:true, body:'<div class="col">' + opts + "</div>",
+        footer:(f) => { f.innerHTML = '<div class="grow"></div><button class="btn" type="button" data-close="1">取消</button>'; } });
+      $$("#modal-body [data-st]").forEach(b => b.addEventListener("click", async () => {
+        a.statusId = b.dataset.st; await saveAnime(a); closeModal(); rerender();
+      }));
+      break;
+    }
+    case "del": {
+      const ok = await confirmDialog({
+        title:"删除作品",
+        html:"确定要从片库删除《" + esc(a.titleCn) + "》吗？<br><b>该作品的 " + (a.reviews||[]).length + " 条感想会一并删除，且无法恢复。</b><br><span class=\"hint\">建议先到「设置 → 数据」导出备份。</span>",
+        okText:"删除", danger:true
+      });
+      if(ok){ await removeAnime(id); toast("已删除《" + a.titleCn + "》","ok"); rerender(); }
+      break;
+    }
+  }
+}
+async function inlineEdit(id, field, value){
+  const a = animeById(id);
+  if(!a) return;
+  if(field === "watchedEpisodes" || field === "rewatchCount" || field === "myScore"){
+    const n = numOrNull(value);
+    a[field] = field === "myScore" ? (n == null ? null : clampNum(n,0,10)) : Math.max(0, n == null ? 0 : Math.round(n));
+    if(field === "watchedEpisodes" && a.totalEpisodes != null && a.watchedEpisodes > a.totalEpisodes) toast("已看集数超过总集数，已在护照外保留","warn");
+    applyAutoStatus(a);
+  } else if(field === "statusId"){
+    a.statusId = value;
+  } else if(field === "seriesId"){
+    /* 表格视图的系列下拉：指向已不存在的系列时落回默认，
+       否则这条记录会变成「哪部作品都不属于」的孤儿。 */
+    a.seriesId = seriesById(value) ? value : DEFAULT_SERIES_ID;
+  }
+  await saveAnime(a);
+  rerender();
+}
+
+registerPage({
+  id:"library", name:"片库", icon:"library", title:"片库", sub:"本地片库的浏览与管理（此处搜索的是本地片库）",
+  actions(box){
+    box.innerHTML = '<button class="btn btn-primary" type="button" data-act="add">' + ic("plus",16) + "添加新番</button>";
+    box.querySelector("[data-act=add]").addEventListener("click", openSearchModal);
+  },
+  render: renderLibrary
+});
+

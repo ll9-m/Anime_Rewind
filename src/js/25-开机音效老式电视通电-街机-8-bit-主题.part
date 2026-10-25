@@ -1,0 +1,124 @@
+/* ============================================================
+   开机音效：老式电视通电 + 街机 8-bit 主题
+   全 WebAudio 合成，不引外部音频文件 —— 单文件是这个项目的硬约束。
+
+   为什么是这两段：
+   · 「通电」= 白噪声爆发 + 迅速衰减的高频谐振，对应老 CRT 开机那声
+     "啪嗒"和显像管预热的电流声。这是身体记忆，比任何旋律都直接。
+   · 「主题」= 三角波奏的短动机。先上行后回落，落在主音上收住，
+     像街机游戏的标题画面音乐起头那几个音。
+
+   音量刻意压得很低（峰值 0.07）：开机音应该像"仪式"而不是"警报"，
+   在办公室外放笔记本时能被听见就说明太响了。
+   ============================================================ */
+const POWER_NOISE_SEC = 0.34;
+function _noiseBuffer(ctx, sec){
+  const len = Math.max(1, Math.floor(ctx.sampleRate * sec));
+  const buf = ctx.createBuffer(1, len, ctx.sampleRate);
+  const d = buf.getChannelData(0);
+  for(let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+  return buf;
+}
+function powerSound(){
+  if(!settings.crt_power_sound || !audioCtx) return;
+  if(reduceMotion()) return;
+  try{
+    const ctx = audioCtx;
+    const now = ctx.currentTime + 0.01;
+
+    /* ---- 第一声：显像管通电 ---- */
+    // 白噪声经过高通 → 只剩"嘶"的电流感，低频电视机的嗡嗡声反而更怀旧，
+    // 所以这里刻意用带通（高通 + 低通）保留一点中频。
+    const noise = ctx.createBufferSource();
+    noise.buffer = _noiseBuffer(ctx, POWER_NOISE_SEC);
+    const hp = ctx.createBiquadFilter();
+    hp.type = "highpass"; hp.frequency.setValueAtTime(1800, now);
+    const lp = ctx.createBiquadFilter();
+    lp.type = "lowpass";
+    lp.frequency.setValueAtTime(9000, now);
+    lp.frequency.exponentialRampToValueAtTime(1200, now + POWER_NOISE_SEC);
+    const nGain = ctx.createGain();
+    nGain.gain.setValueAtTime(0.0001, now);
+    nGain.gain.exponentialRampToValueAtTime(0.075, now + 0.012);
+    nGain.gain.exponentialRampToValueAtTime(0.0001, now + POWER_NOISE_SEC);
+    noise.connect(hp); hp.connect(lp); lp.connect(nGain); nGain.connect(ctx.destination);
+    noise.start(now); noise.stop(now + POWER_NOISE_SEC);
+
+    /* ---- 第二声：显像管起振的高频"叮" ---- */
+    // 15.7kHz 是很多 CRT 通电时的谐振频率，也是"显像管在预热"的听觉符号
+    const ring = ctx.createOscillator();
+    ring.type = "sine";
+    ring.frequency.setValueAtTime(15734, now);
+    ring.frequency.exponentialRampToValueAtTime(14200, now + 0.5);
+    const rGain = ctx.createGain();
+    rGain.gain.setValueAtTime(0.0001, now);
+    rGain.gain.exponentialRampToValueAtTime(0.032, now + 0.02);
+    rGain.gain.exponentialRampToValueAtTime(0.0001, now + 0.55);
+    ring.connect(rGain); rGain.connect(ctx.destination);
+    ring.start(now); ring.stop(now + 0.6);
+
+    /* ---- 第三声：8-bit 主题动机 ---- */
+    // 街机标题音乐最常见的那句「起—落—定」：C5 E5 G5 上行，短暂停顿，落到 C5 收尾。
+    // 用三角波（脉冲波的柔和版）而不是方波：方波太刺，三角波才是老掌机的音色。
+    const MELODY = [
+      [523.25, 0.00, 0.13],  // C5
+      [659.25, 0.11, 0.13],  // E5
+      [783.99, 0.22, 0.15],  // G5
+      [659.25, 0.35, 0.11],  // E5
+      [523.25, 0.44, 0.42]   // C5 收
+    ];
+    const t0 = now + 0.42;
+    const master = ctx.createGain();
+    master.gain.value = 0.07;
+    // 一点点低通，把方波的高次谐波削掉，听起来像小喇叭而非耳机
+    const tone = ctx.createBiquadFilter();
+    tone.type = "lowpass"; tone.frequency.value = 2600; tone.Q.value = 0.6;
+    master.connect(tone); tone.connect(ctx.destination);
+    MELODY.forEach(([freq, at, dur]) => {
+      const o = ctx.createOscillator();
+      o.type = "triangle";
+      o.frequency.value = freq;
+      const g = ctx.createGain();
+      const st = t0 + at;
+      g.gain.setValueAtTime(0.0001, st);
+      g.gain.exponentialRampToValueAtTime(0.9, st + 0.018);
+      g.gain.exponentialRampToValueAtTime(0.0001, st + dur);
+      o.connect(g); g.connect(master);
+      o.start(st); o.stop(st + dur + 0.05);
+    });
+  }catch(e){ /* 音频不可用时静默 */ }
+}
+/* 试听：设置页给一个「试听开机音」按钮用，独立于首次 pointerdown 触发。 */
+function previewPowerSound(){
+  if(!settings.crt_power_sound) return false;
+  if(reduceMotion()){ toast("系统开启了减弱动效，开机音已静音","info"); return false; }
+  try{
+    if(!audioCtx) initAudioOnce();
+    if(!audioCtx){ toast("浏览器不支持音频合成","warn"); return false; }
+    // 浏览器要求音频上下文必须在用户手势中 resume
+    if(audioCtx.state === "suspended") audioCtx.resume();
+    powerSound();
+    return true;
+  }catch(e){ return false; }
+}
+function initAudioOnce(){
+  if(audioCtx) return;
+  const AC = window.AudioContext || window.webkitAudioContext;
+  if(!AC) return;
+  try{ audioCtx = new AC(); }catch(e){ audioCtx = null; }
+  /* 原来这里还要求 tv_skin === "crt"。待机屏保删除后 tv_skin 已无作用对象，
+     若继续用它当前置条件，开机音效会随一个不可见的设置被静默关闭 ——
+     用户在设置里根本找不到它，音效却「自己坏了」。
+     音效开关只剩 crt_power_sound 一个，语义反而更干净。 */
+  if(settings.crt_power_sound) powerSound();
+}
+window.addEventListener("pointerdown", function once(){
+  window.removeEventListener("pointerdown", once);
+  initAudioOnce();
+}, { once:true });
+
+/* CRT 雪花渲染（drawSnow，1/4 分辨率 + 24fps + ImageData 复用）原本只服务待机屏保。
+   屏保删除后已无调用点，随之移除。把这行记在这里，是为了不让后来者重新踩
+   「全分辨率逐帧 createImageData 写 192 万像素 ≈ 每秒 830 万次内存写入」的坑 —
+   那正是本函数当初被降采样的原因。 */
+

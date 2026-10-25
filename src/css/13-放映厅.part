@@ -1,0 +1,73 @@
+/* ============================================================
+   放映厅
+   ============================================================ */
+.theater{ position:relative; }
+/* CRT / 现代影院两套皮肤原本服务于「待机屏保」的大屏外框。
+   屏保按用户要求删除后，这整块约 50 行 CSS 已无任何调用点 ——
+   留着不会报错，但会让后来的人以为放映厅还有屏幕皮肤。
+   .q-text 系列的样式这里也一并清掉了：语录本用的是
+   .quote-card .q-text（见下），自成一套，不依赖本块。 */
+/* 详情内容（两皮肤共用） */
+.detail-wrap{ position:relative; z-index:2; padding:var(--sp-5); }
+/* 选片网格：放映厅未选作品时的入口 */
+.pick-grid{ display:grid; grid-template-columns:repeat(auto-fill,minmax(220px,1fr)); gap:var(--sp-3); }
+.pick-card{
+  display:grid; grid-template-columns:52px minmax(0,1fr); gap:var(--sp-3); align-items:center;
+  padding:var(--sp-3); text-align:left; cursor:pointer;
+  background:var(--panel-2); border:1px solid var(--border); border-radius:var(--r-md);
+  transition:border-color var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease);
+}
+.pick-card:hover{ border-color:var(--accent); background:var(--panel-3); }
+.pick-cover{ display:block; width:52px; aspect-ratio:3/4; border-radius:var(--r-sm); overflow:hidden; background:var(--panel-3); }
+.pick-cover img{ width:100%; height:100%; object-fit:cover; display:block; }
+.pick-body{ display:flex; flex-direction:column; gap:2px; min-width:0; }
+.pick-body b{ font-size:var(--fs-sm); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+/* 播放记录提示：紧跟进度条 */
+.stream-note{
+  display:flex; align-items:center; gap:var(--sp-2);
+  padding:var(--sp-2) var(--sp-3); border-radius:var(--r-sm);
+  background:var(--panel-2); border:1px solid var(--border);
+  font-size:var(--fs-sm); color:var(--text-2);
+}
+/* 数字不用 var(--accent)：像素风的强调色是 #ff004d（深粉），
+   配米色面板只有 3.55:1，达不到正文 4.5:1。
+   改用 --text（面板上的最深色，各套系都过 AA），
+   靠字重而不是颜色来强调 —— 颜色不是唯一的信息载体。 */
+.stream-note b{ color:var(--text); font-weight:700; }
+/* 简介与感想改用原生 details 折叠：详情页上半部要给进度与播放器让位，
+   全文默认铺开会把这块屏幕推得很长。summary 保留 .sec-title 样式以视觉统一。 */
+details > summary{ cursor:pointer; list-style:none; }
+details > summary::-webkit-details-marker{ display:none; }
+details > summary::after{ content:"▾"; margin-left:auto; color:var(--muted); font-size:11px; }
+details[open] > summary::after{ content:"▴"; }
+details > summary:hover{ color:var(--accent); }
+.detail-hero{ display:grid; grid-template-columns:200px minmax(0,1fr); gap:var(--sp-5); }
+@media (max-width:1500px){ .detail-hero{ grid-template-columns:150px minmax(0,1fr); } }
+.detail-cover{ border-radius:var(--r-lg); overflow:hidden; border:1px solid var(--border); background:var(--panel-3); box-shadow:var(--shadow); }
+.detail-cover img{ width:100%; display:block; }
+.detail-title{ font-size:var(--fs-3xl); font-weight:700; line-height:1.25; }
+.detail-orig{ color:var(--text-2); font-size:var(--fs-sm); margin-top:4px; }
+.detail-meta{ display:flex; flex-wrap:wrap; gap:var(--sp-2) var(--sp-4); margin-top:var(--sp-3); font-size:var(--fs-sm); color:var(--text-2); }
+.detail-meta b{ color:var(--text); font-weight:600; }
+.sec-title{ font-size:var(--fs-md); font-weight:600; margin-bottom:var(--sp-2); display:flex; align-items:center; gap:var(--sp-2); }
+.summary-box{ font-size:var(--fs-sm); line-height:1.75; color:var(--text-2); max-height:200px; overflow-y:auto; white-space:pre-wrap; }
+.kv-grid{ display:grid; grid-template-columns:repeat(auto-fit,minmax(160px,1fr)); gap:var(--sp-3); }
+.kv{ padding:var(--sp-3); border-radius:var(--r-md); background:var(--panel-2); border:1px solid var(--border); }
+.kv label{ display:block; font-size:11px; color:var(--muted); margin-bottom:2px; }
+.kv .v{ font-size:var(--fs-sm); font-weight:600; }
+.review-timeline{ display:flex; flex-direction:column; gap:var(--sp-3); border-left:2px solid var(--border); padding-left:var(--sp-4); }
+.review-item{ position:relative; }
+.review-item::before{ content:""; position:absolute; left:calc(-1 * var(--sp-4) - 6px); top:8px; width:10px; height:10px; border-radius:50%; background:var(--accent); box-shadow:0 0 0 3px var(--accent-soft); }
+.review-head{ display:flex; align-items:center; gap:var(--sp-2); font-size:var(--fs-xs); color:var(--muted); }
+/* 感想条目的编辑/删除：默认淡到几乎看不见，悬停条目时浮现；
+   键盘聚焦时也必须完全可见（不能只靠 hover）。 */
+.review-ops{ margin-left:auto; display:inline-flex; gap:4px; opacity:0; transition:opacity .15s ease; }
+.review-item:hover .review-ops, .review-ops:focus-within{ opacity:1; }
+.icon-ghost-btn{ display:inline-flex; align-items:center; justify-content:center; width:24px; height:24px; padding:0; border:1px solid var(--border); border-radius:var(--r-sm,6px); background:var(--panel-2, transparent); color:var(--muted); cursor:pointer; }
+.icon-ghost-btn:hover{ color:var(--text); border-color:var(--text-2); }
+.icon-ghost-btn:focus-visible{ outline:2px solid var(--accent); outline-offset:1px; opacity:1; }
+.review-round{ padding:1px 8px; border-radius:var(--r-pill); background:var(--accent-soft); color:var(--text); font-weight:600; border:1px solid var(--accent); }
+.review-body{ margin-top:4px; font-size:var(--fs-sm); line-height:1.7; color:var(--text-2); white-space:pre-wrap; }
+.pending-row{ display:flex; align-items:center; gap:var(--sp-3); padding:var(--sp-2) var(--sp-3); border:1px dashed var(--warn); border-radius:var(--r-md); background:var(--panel-2); }
+.lock-note{ font-size:11px; color:var(--warn); }
+

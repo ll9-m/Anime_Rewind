@@ -1,0 +1,170 @@
+/* ============================================================
+   套系 B：像素风（8-bit / dither）
+   ------------------------------------------------------------
+   遵循硬约束（来自 pixel-dither-web 技能）：
+   · 所有缩放图像 image-rendering:pixelated，禁止平滑插值
+   · 有限调色板（8 色），用 CSS 变量表达，不引入其他色
+   · 渐变必须是抖动（ordered dither），不用平滑 linear-gradient
+   · 粗边框 2-3px、0 圆角、硬投影（4px 4px 0），无模糊无柔影
+   · 动效用 steps() 做逐帧snap，而不是平滑缓动
+   · prefers-reduced-motion 时冻结
+   ============================================================ */
+[data-skin="pixel"]{
+  /* PICO-8 调色板的暗部与常用色，限定 8 色 */
+  --px-ink:#000000;
+  --px-dark:#1d2b53;
+  --px-mid:#5f574f;
+  --px-line:#83769c;
+  --px-paper:#c2c3c7;
+  --px-bright:#fff1e8;
+  --px-red:#ff004d;
+  --px-gold:#ffa300;
+  --px-yellow:#ffec27;
+  --px-green:#00e436;
+
+  /* 覆盖形状令牌：0 圆角、硬边框、硬投影 */
+  --r-sm:0px; --r-md:0px; --r-lg:0px; --r-xl:0px; --r-pill:0px;
+  --px-border:3px;
+  --shadow:4px 4px 0 var(--px-ink);
+  --shadow-2:6px 6px 0 var(--px-ink);
+  --hairline:var(--px-dark);
+  --panel:var(--px-paper);
+  --panel-2:var(--px-bright);
+  --panel-3:#e6e6e6;
+  /* 深蓝底必须配亮字：--text 是黑的（为了在米色面板上达 AA），
+     若页面底色也用深色就会出现「黑字深蓝底 = 1.52:1」。
+     所以另设 --text-on-bg 给主区/侧栏外层用。 */
+  --bg:#1d2b53;
+  --bg-deep:#000000;
+  --text-on-bg:var(--px-bright);
+  --text-2-on-bg:var(--px-paper);
+  --text:#000000;
+  --text-2:#1d2b53;
+  /* muted 原为 #5f574f，配 #c2c3c7 只有 4.02:1。
+     压深到 #3a342e 后升到 7.1:1 —— 仍是"弱化"的观感，但读得清。 */
+  --muted:#3a342e;
+  --border:#000000;
+  --border-2:#000000;
+  --accent:#ff004d;
+  /* accent-ink 必须是黑：#fff1e8 配 #ff004d 只有 3.55:1，达不到 AA */
+  --accent-ink:#000000;
+  --accent-soft:#ffec27;
+  --panel-blur:none;
+  --glass-edge:none;
+
+  --font:"Press Start 2P","Silkscreen","Fusion Pixel 12px",var(--font);
+  --font-mono:"Press Start 2P","VT323","Fusion Pixel 12px",ui-monospace,monospace;
+
+  /* 像素风的核心：抖动背景。用 4x4 Bayer 阈值把渐变切成网点，
+     纯 CSS 实现（repeating-conic-gradient 拼出的棋盘），
+     避免为了一个装饰引入 canvas 主循环。 */
+  --dither-a:#1d2b53;
+  --dither-b:#000000;
+  image-rendering:pixelated;
+}
+/* 抖动底纹：叠在 body 上，2px 网点，静态无动画 */
+[data-skin="pixel"] body::before{
+  content:""; position:fixed; inset:0; z-index:0; pointer-events:none;
+  background:
+    repeating-conic-gradient(var(--px-dark) 0 25%, transparent 0 50%) 0 0 / 4px 4px,
+    repeating-conic-gradient(#000000 0 25%, transparent 0 50%) 2px 2px / 4px 4px;
+  opacity:.28;
+}
+/* 像素风：所有容器方角 + 硬投影 */
+[data-skin="pixel"] .panel,
+[data-skin="pixel"] .card-3d,
+[data-skin="pixel"] .fc-face,
+[data-skin="pixel"] .modal,
+[data-skin="pixel"] .tk,
+[data-skin="pixel"] .tk-perf{
+  border-radius:0 !important;
+  border:var(--px-border) solid var(--px-ink) !important;
+  box-shadow:var(--shadow) !important;
+}
+[data-skin="pixel"] .panel{ background:var(--px-paper); }
+[data-skin="pixel"] .panel-head{ border-bottom:var(--px-border) solid var(--px-ink); }
+[data-skin="pixel"] .btn{
+  border-radius:0; border:var(--px-border) solid var(--px-ink);
+  background:var(--px-bright); color:var(--px-ink);
+  box-shadow:4px 4px 0 var(--px-ink);
+  font-family:var(--font); font-size:11px; letter-spacing:0;
+  text-transform:uppercase;
+  transition:none;
+}
+[data-skin="pixel"] .btn:hover{ background:var(--px-yellow); color:var(--px-ink); }
+[data-skin="pixel"] .btn:active{ transform:translate(3px,3px); box-shadow:0 0 0 var(--px-ink); }
+[data-skin="pixel"] .btn-primary{ background:var(--px-red); color:var(--px-bright); }
+[data-skin="pixel"] .btn-primary:hover{ background:var(--px-gold); color:var(--px-ink); }
+[data-skin="pixel"] .btn-danger{ background:var(--px-ink); color:var(--px-red); border-color:var(--px-ink); }
+[data-skin="pixel"] .btn-danger:hover{ background:var(--px-red); color:var(--px-bright); }
+[data-skin="pixel"] .input,
+[data-skin="pixel"] .select,
+[data-skin="pixel"] .textarea{
+  border-radius:0; border:var(--px-border) solid var(--px-ink);
+  background:var(--px-bright); color:var(--px-ink);
+  box-shadow:inset 2px 2px 0 rgba(0,0,0,.18);
+}
+[data-skin="pixel"] .input::placeholder,
+[data-skin="pixel"] .textarea::placeholder{ color:var(--px-mid); opacity:1; }
+[data-skin="pixel"] .seg{ border-radius:0; border:var(--px-border) solid var(--px-ink); background:var(--px-bright); }
+[data-skin="pixel"] .seg button{ border-radius:0; }
+[data-skin="pixel"] .seg button[aria-pressed="true"]{ background:var(--px-ink); color:var(--px-yellow); }
+/* 血条：像素风的进度条语言 */
+[data-skin="pixel"] .progress,
+[data-skin="pixel"] .tk-progress{
+  border:2px solid var(--px-ink); border-radius:0; height:12px; background:var(--px-bright);
+  image-rendering:pixelated;
+}
+[data-skin="pixel"] .progress > i,
+[data-skin="pixel"] .tk-progress > i{
+  background:repeating-linear-gradient(90deg, var(--px-green) 0 6px, transparent 6px 8px);
+  border-radius:0;
+}
+[data-skin="pixel"] .stat-card::before{ background:var(--px-red); }
+/* 像素标题：硬阴影，无模糊 */
+[data-skin="pixel"] h1,
+[data-skin="pixel"] h2,
+[data-skin="pixel"] .tk-head span,
+[data-skin="pixel"] .stat-card b{
+  text-shadow:3px 3px 0 var(--px-ink);
+  color:var(--px-ink);
+}
+/* ---- 深底文字修正 ----
+   像素风把 --text 定成纯黑（为了在米色面板上达 11.9:1），
+   而 --bg 是深蓝 #1d2b53。#main 没有自己的背景，透出 body，
+   于是顶栏（.page-title / .page-sub）会变成"黑字深蓝底"= 1.52:1，
+   完全读不出来 —— 上面那条 h1 规则甚至主动把它压成了黑色。
+   这里把落在深底上的文字单独换成亮色；面板内部不受影响。 */
+[data-skin="pixel"] #topbar .page-title{
+  color:var(--text-on-bg);
+  text-shadow:3px 3px 0 var(--bg-deep);
+}
+[data-skin="pixel"] #topbar .page-sub{ color:var(--text-2-on-bg); }
+/* 顶栏里的幽灵按钮透明底，落在深蓝上，必须跟着换亮色 */
+[data-skin="pixel"] #topbar .btn-ghost{ color:var(--text-on-bg); }
+[data-skin="pixel"] #topbar .btn-ghost:hover{ background:var(--px-dark); color:var(--px-yellow); }
+/* 侧栏与主区之间的黑分隔线画在深蓝 body 上 = 1.52:1，等于没有。
+   像素风本就要硬边，换成纸色亮线反而更"8-bit"。 */
+[data-skin="pixel"] #sidebar{ border-right-color:var(--px-paper); }
+[data-skin="pixel"] .tk{ background:var(--px-paper); }
+[data-skin="pixel"] .tk-perf{ background:var(--px-paper); box-shadow:none; }
+[data-skin="pixel"] .tk.is-got .tk-seal{ background:var(--px-green); color:var(--px-ink); border:2px solid var(--px-ink); border-radius:0; }
+[data-skin="pixel"] .tk:not(.is-got) .tk-bg{ filter:saturate(0) brightness(.72) contrast(1.1); }
+[data-skin="pixel"] .quote-card,
+[data-skin="pixel"] .chip,
+[data-skin="pixel"] .badge{ border-radius:0; border:2px solid var(--px-ink); }
+/* 像素风下滚动条也是方的 */
+[data-skin="pixel"] *::-webkit-scrollbar{ width:12px; height:12px; }
+[data-skin="pixel"] *::-webkit-scrollbar-thumb{ background:var(--px-red); border:2px solid var(--px-ink); border-radius:0; }
+[data-skin="pixel"] *::-webkit-scrollbar-track{ background:var(--px-paper); }
+[data-skin="pixel"] :focus-visible{ outline:3px solid var(--px-ink); outline-offset:0; }
+/* 逐帧 snap：像素风的动效不追求流畅 */
+[data-skin="pixel"] .btn,
+[data-skin="pixel"] .panel,
+[data-skin="pixel"] .tk{ transition:none; }
+@media (prefers-reduced-motion:reduce){
+  [data-skin="pixel"] *,
+  [data-skin="pixel"] *::before,
+  [data-skin="pixel"] *::after{ animation:none !important; transition:none !important; }
+}
+

@@ -1,0 +1,272 @@
+/* ============================================================
+   21.5 荣誉墙
+   ------------------------------------------------------------
+   两类荣誉：
+   · 内置（BUILTIN_HONORS）—— 条件自动判定，配图是 AI 生成的怀旧场景（见 HONOR_ART）
+   · 自定义（settings.custom_honors）—— 用户自己建，可传图；没图就用纯色玻璃背景
+   两类共用同一套 ticket card 渲染，所以外观完全一致。
+   ============================================================ */
+/* 卡片背景三级回退（用户明确要求第 3 级存在且好看）：
+   1) 自定义荣誉传了图 → 该图
+   2) 内置荣誉 → AI 生成的 HONOR_ART
+   3) 都没有 → 纯色玻璃（.tk-glass 的全息 conic 渐变），不是灰底 */
+const honorArtCache = {};
+function honorArtURL(h){
+  if(h.builtin) return (typeof HONOR_ART !== "undefined" && HONOR_ART[h.art]) || "";
+  if(!h.art) return "";
+  return honorArtCache[h.id] || "";
+}
+/* 自定义荣誉的图存在 assets 里（key = h.art），需要异步读。
+   读完后写入缓存并直接改 DOM 的 background-image，不整页重渲染 ——
+   重渲染会让用户刚点开的弹窗抖动。 */
+async function hydrateHonorArt(root){
+  const list = customHonors().filter(h => h.art && !honorArtCache[h.id]);
+  if(!list.length) return;
+  let changed = false;
+  for(const h of list){
+    const v = await Repo.getAsset(h.art);
+    if(v && typeof v === "string"){ honorArtCache[h.id] = v; changed = true; }
+    else honorArtCache[h.id] = "";   // 资产丢失：记空，不再反复重试
+  }
+  if(!changed || !root) return;
+  const wall = root.querySelector("#honor-wall");
+  if(!wall) return;
+  for(const h of list){
+    const url = honorArtCache[h.id];
+    if(!url) continue;
+    const card = wall.querySelector('.tk[data-ch="' + (window.CSS && CSS.escape ? CSS.escape(h.id) : h.id) + '"]');
+    if(!card) continue;
+    const bg = card.querySelector(".tk-bg");
+    if(!bg) continue;
+    const glass = bg.querySelector(".tk-glass");
+    if(glass) glass.remove();
+    bg.classList.add("has-art");
+    bg.style.backgroundImage = 'url("' + url + '")';
+  }
+}
+/* 每个自定义荣誉一个稳定色相：按 id 散列到色环，
+   纯色玻璃背景每次打开颜色一致，不会闪。 */
+function honorTint(h){
+  if(h.tint) return h.tint;
+  let s = 0;
+  const id = String(h.id || "");
+  for(let i = 0; i < id.length; i++) s = (s * 31 + id.charCodeAt(i)) >>> 0;
+  return "hsl(" + (s % 360) + " 62% 46%)";
+}
+function honorTicketHTML(h, has, ctx){
+  const st = honorStatus(h, ctx);
+  const pct = st.need ? Math.min(100, Math.round(st.cur / st.need * 100)) : (st.got ? 100 : 0);
+  const art = honorArtURL(h);
+  const tint = honorTint(h);
+  const progress = has ? "" : '<div class="tk-progress"><i style="width:' + pct + '%"></i></div>';
+  const foot = has
+    ? '<div class="tk-foot"><span class="tk-seal">已获得</span><div class="tk-barcode" aria-hidden="true"></div></div>'
+    : '<div class="tk-foot"><span class="tk-prog">' + st.cur + " / " + st.need + " " + esc(st.unit) + "</span></div>";
+  return '<article class="tk' + (has ? " is-got" : "") + '"' + (h.builtin ? "" : ' data-ch="' + attr(h.id) + '"') + ">" +
+    '<div class="tk-bg' + (art ? " has-art" : "") + '">' +
+      (art
+        ? '<img class="tk-art" src="' + attr(art) + '" alt="" loading="lazy" decoding="async">'
+        : '<div class="tk-glass" style="--tk-tint:' + tint + '"></div>') +
+    "</div>" +
+    '<div class="tk-perf" aria-hidden="true"></div>' +
+    '<div class="tk-head">' + ic(has ? "medal" : "lock", 18) + "<span>" + esc(h.name) + "</span></div>" +
+    '<div class="tk-cat">' + esc(h.cat || "自定义") + "</div>" +
+    '<div class="tk-desc">' + esc(h.desc || (has ? "自定义荣誉" : "尚未获得")) + "</div>" +
+    progress + foot +
+    (h.builtin ? "" :
+      '<div class="tk-ops">' +
+        '<button class="btn btn-sm" type="button" data-hact="toggle" data-hid="' + attr(h.id) + '">' + ic(has ? "check" : "plus", 13) + (has ? "取消授予" : "授予") + "</button>" +
+        '<button class="btn btn-sm" type="button" data-hact="edit" data-hid="' + attr(h.id) + '" aria-label="编辑">' + ic("edit", 13) + "</button>" +
+        '<button class="btn btn-sm btn-danger" type="button" data-hact="del" data-hid="' + attr(h.id) + '" aria-label="删除">' + ic("trash", 13) + "</button>" +
+      "</div>") +
+  "</article>";
+}
+function honorWallHTML(){
+  if(!settings.module_honor) return "";
+  const ctx = honorContext();
+  const list = allHonors();
+  const got = [], todo = [];
+  list.forEach(h => { honorStatus(h, ctx).got ? got.push(h) : todo.push(h); });
+  return '<div class="panel"><div class="panel-head">' + ic("medal",16) + "<h3>荣誉墙</h3>" +
+    '<span class="hint">已获 ' + got.length + " / " + list.length + "</span>" +
+    '<button class="btn btn-sm" type="button" data-hact="add" style="margin-left:var(--sp-3)">' + ic("plus",14) + "自定义荣誉</button></div>" +
+    '<div class="tk-grid" id="honor-wall">' + got.map(h => honorTicketHTML(h, true, ctx)).join("") +
+      todo.map(h => honorTicketHTML(h, false, ctx)).join("") + "</div>" +
+    '<p class="hint mt-3">内置称号依据片库数据实时计算；自定义荣誉由你自己授予。没获得的荣誉显示为暗色卡面。</p>' +
+  "</div>";
+}
+/* ---- 自定义荣誉的增删改 ---- */
+function openHonorForm(existing){
+  const base = existing || { name:"", cat:"自定义", desc:"" };
+  // 重要：开表单前先把“当时堆荣墙是否开着”快照下来。
+  // 不能在 closeModal() 之后再查（closeModal 会把标志位清掉），
+  // 也不能查 DOM（表单已把开的内容替换掉）。
+  const fromWall = honorWallOpen;
+  const root = openModal({
+    title: existing ? "编辑自定义荣誉" : "新建自定义荣誉",
+    body:
+      '<div class="field mb-3"><label for="hf-name">荣誉名称 *（1–12 字）</label>' +
+        '<input class="input" id="hf-name" maxlength="12" value="' + attr(base.name) + '" data-autofocus></div>' +
+      '<div class="field mb-3"><label for="hf-cat">分类（1–8 字）</label>' +
+        '<input class="input" id="hf-cat" maxlength="8" value="' + attr(base.cat || "") + '" placeholder="例如：童年、毅力、收藏"></div>' +
+      '<div class="field mb-3"><label for="hf-desc">说明（1–40 字）</label>' +
+        '<input class="input" id="hf-desc" maxlength="40" value="' + attr(base.desc || "") + '"></div>' +
+      '<div class="field"><label>背景图片（选填）</label>' +
+        '<p class="hint mb-2">不传图片时使用纯色玻璃背景，按荣誉自动配色。</p>' +
+        '<div class="row gap-2" style="flex-wrap:wrap">' +
+          '<button class="btn btn-sm" type="button" id="hf-pick">' + ic("image",14) + "选择图片</button>" +
+          '<button class="btn btn-sm" type="button" id="hf-clear"' + (base.art ? "" : " disabled") + '>' + ic("trash",14) + "移除图片</button>" +
+          '<span class="hint" id="hf-artinfo">' + (base.art ? "已有背景图" : "当前为纯色玻璃") + "</span>" +
+        "</div>" +
+        '<div id="hf-thumb" class="hf-thumb mt-2">' + (base.art ? '<img alt="" src="">' : ic("image",22)) + "</div>" +
+      "</div>",
+    footer:(f) => {
+      f.innerHTML = '<span class="hint" id="hf-msg"></span><div class="grow"></div>' +
+        '<button class="btn" type="button" data-close="1">取消</button>' +
+        '<button class="btn btn-primary" type="button" id="hf-save">保存</button>';
+    }
+  });
+  const nameEl = root.querySelector("#hf-name");
+  const catEl = root.querySelector("#hf-cat");
+  const descEl = root.querySelector("#hf-desc");
+  const thumb = root.querySelector("#hf-thumb");
+  const artInfo = root.querySelector("#hf-artinfo");
+  let newArtKey = null, removeArt = false;
+
+  function refreshThumb(){
+    const key = newArtKey || (removeArt ? null : (base.art || null));
+    if(key && (honorArtCache[key] || newArtKey)){
+      const url = honorArtCache[key];
+      if(url){ thumb.innerHTML = '<img src="' + attr(url) + '" alt="">'; artInfo.textContent = "已选择背景图"; return; }
+    }
+    thumb.innerHTML = ic("image",22);
+    artInfo.textContent = key ? "图片处理中…" : "当前为纯色玻璃";
+  }
+  // 已有图：从 assets 读出来显示缩略图
+  if(base.art && !removeArt){
+    const cached = honorArtCache[base.id];
+    if(cached) refreshThumb();
+    else{
+      artInfo.textContent = "正在载入已有图片…";
+      Repo.getAsset(base.art).then(v => {
+        if(v && typeof v === "string"){ honorArtCache[base.id] = v; refreshThumb(); }
+        else artInfo.textContent = "原图片已丢失，保存后将使用纯色玻璃";
+      });
+    }
+  }
+  root.querySelector("#hf-pick").addEventListener("click", () => {
+    const inp = document.createElement("input");
+    inp.type = "file"; inp.accept = "image/*";
+    inp.addEventListener("change", async () => {
+      const file = inp.files && inp.files[0];
+      if(!file) return;
+      const raw = await readFileAsDataURL(file);
+      // 卡片背景不需要原图画质，压缩到长边 720 —— 否则 localStorage 降级模式下必然写不进
+      const dataUrl = await compressBgImage(raw, 720, 0.8);
+      const key = "honor_" + Date.now().toString(36);
+      try{
+        await Repo.setAsset(key, dataUrl);
+        newArtKey = key;
+        removeArt = false;
+        honorArtCache["tmp_" + key] = dataUrl;
+        // 缩略图直接用新图，不等缓存
+        thumb.innerHTML = '<img src="' + attr(dataUrl) + '" alt="">';
+        artInfo.textContent = "已选择背景图";
+        root.querySelector("#hf-clear").disabled = false;
+      }catch(e){
+        toast(e && e.message === "QUOTA" ? "存储空间不足，请换一张小一点的图" : "图片处理失败：" + (e && e.message), "err", 5000);
+      }
+    });
+    inp.click();
+  });
+  root.querySelector("#hf-clear").addEventListener("click", () => {
+    newArtKey = null; removeArt = true;
+    root.querySelector("#hf-clear").disabled = true;
+    refreshThumb();
+  });
+  root.querySelector("#hf-save").addEventListener("click", () => {
+    const name = nameEl.value.trim();
+    if(!name){ root.querySelector("#hf-msg").innerHTML = '<span class="err-text">荣誉名称不能为空</span>'; return; }
+    const list = customHonors().slice();
+    const rec = existing
+      ? Object.assign({}, existing, { name, cat: catEl.value.trim() || "自定义", desc: descEl.value.trim() })
+      : { id: uid("h"), name, cat: catEl.value.trim() || "自定义", desc: descEl.value.trim(), awarded:false };
+    if(newArtKey){
+      rec.art = newArtKey;
+      if(existing && existing.art && existing.art !== newArtKey){
+        Repo.delAsset(existing.art).catch(() => {});   // 换图后清掉旧图，别让 assets 无限膨胀
+      }
+    }else if(removeArt){
+      rec.art = "";
+      if(existing && existing.art) Repo.delAsset(existing.art).catch(() => {});
+    }
+    if(existing){
+      const i = list.findIndex(x => x.id === existing.id);
+      if(i >= 0) list[i] = rec;
+    }else{
+      list.push(rec);
+    }
+    saveCustomHonors(list);
+    closeModal();
+    toast(existing ? "已更新" : "已创建自定义荣誉", "ok");
+    // 关键：不能只 refreshAll()。荣誉墙可能正开在弹窗里，
+    // 而 openModal 会用表单替换掉弹窗内容、refreshAll 又不会重绘弹窗，
+    // 结果是「新建完弹窗直接消失」，用户什么都看不到还得自己再点一次。
+    // honorWallOpen 标志在 openHonorWall 时置位、由弹窗关闭时清掉，
+    // 不能靠查 DOM —— 此刻荣誉墙的 DOM 已经被表单替换掉了。
+    if(fromWall) openHonorWall();
+    refreshAll();
+  });
+}
+async function honorAction(act, id){
+  const list = customHonors();
+  const i = list.findIndex(x => x.id === id);
+  if(act === "add"){ openHonorForm(null); return; }
+  if(i < 0) return;
+  if(act === "toggle"){
+    list[i].awarded = !list[i].awarded;
+    saveCustomHonors(list);
+    rerender();
+    toast(list[i].awarded ? ("已授予「" + list[i].name + "」") : ("已取消「" + list[i].name + "」"), "ok", 2000);
+    return;
+  }
+  if(act === "edit"){ openHonorForm(list[i]); return; }
+  if(act === "del"){
+    const ok = await confirmDialog({
+      title:"删除自定义荣誉", danger:true, okText:"删除",
+      html:"确定删除「" + esc(list[i].name) + "」吗？<br><span class=\"small muted\">它的背景图片也会一并删除，无法恢复。</span>"
+    });
+    if(!ok) return;
+    if(list[i].art) Repo.delAsset(list[i].art).catch(() => {});
+    list.splice(i, 1);
+    saveCustomHonors(list);
+    toast("已删除","ok");
+    refreshAll();
+  }
+}
+function bindHonorWall(root){
+  root.querySelectorAll("[data-hact]").forEach(b => b.addEventListener("click", () => {
+    honorAction(b.dataset.hact, b.dataset.hid);
+  }));
+  hydrateHonorArt(root);
+}
+/* 荣誉墙弹窗是否处于打开状态。
+   用标志位而不是查 DOM：openModal 打开表单时会整体替换弹窗内容，
+   那时荣誉墙的 DOM 已经不存在，但逻辑上"荣誉墙还开着"
+   （用户是从荣誉墙点进来的，保存后应该回到荣誉墙而不是被踢回主页面）。 */
+function openHonorWall(){
+  honorWallOpen = true;
+  const root = openModal({
+    title:"荣誉墙", wide:true,
+    body: honorWallHTML(),
+    footer:(f) => {
+      f.innerHTML = '<span class="hint">称号实时计算，无需领取。</span><div class="grow"></div>' +
+        '<button class="btn" type="button" data-close="1">关闭</button>';
+      f.querySelector("[data-close]").addEventListener("click", () => { honorWallOpen = false; });
+    }
+  });
+  const closer = root.querySelector("[data-close]");
+  if(closer) closer.addEventListener("click", () => { honorWallOpen = false; });
+  bindHonorWall(root);
+  return root;
+}

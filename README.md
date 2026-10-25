@@ -279,6 +279,45 @@ Chromium 内核下还可以在设置 → 数据里**选择一个备份文件夹*
 
 ## 开发
 
+### 源码结构与构建（2026-10 模块化）
+
+仓库的**可编辑源码在 `src/`**，产物仍是根目录的单文件 `anime-rewind.html`
+（双击可用、静态托管可跑的交付承诺不变）。`src/manifest.json` 按构建顺序
+登记全部 64 个模块（shell 4 + css 20 + js 40），每个条目写明模块名与职责：
+
+```
+src/shell/   页面外壳切片（head / 中段 / script 标签 / 收尾）
+src/css/     按设计区块切分的样式（令牌层 / 组件 / 套系…）
+src/js/      按层序排列的脚本模块：
+             L0 核心    应用头 → 常量与工具 → 通用UI → 默认设置 → 存储层
+             L1 领域    播放源体系 → 状态 → 持久化 → 台账写操作 → 统计口径
+                        → 荣誉称号(纯计算) → 外观 → 图表
+             L2 服务    路由 → 数据源 → 去重 → 表单 → 感想 → 筛选 → 片库
+             L3 页面    TV影院 → 添加新番 → 放映厅簇 → 荣誉墙 → 编年史
+                        → 转盘 → 语录 → 导出导入 → 首页 → 设置
+             L4 启动
+```
+
+```bash
+node tools/build.js           # 把 src/ 拼接成 anime-rewind.html
+node tools/build.js --check   # 校验 src/ 与产物字节级一致（提交前必跑）
+node tools/check-architecture.js   # 分层守门：产物一致性 + 模块契约 + 单向依赖
+```
+
+**改代码的规矩**：改 `src/` 里对应模块 → `node tools/build.js` → 跑测试。
+直接改产物而不改 src，`build.js --check` 会拦下；反之亦然。
+层序即依赖方向：底层模块引用上层标识符 = 架构检查失败；
+确需跨层引用的（放映厅装配簇等既成结构），在
+`check-architecture.js` 的 `ALLOWED_FORWARD` 里登记并写明原因——耦合必须显式可见。
+`src/js/00-honor-art.js` 是生成物（`tools/build-honor-art.js`），勿手改。
+
+### 冗余清理记录（2026-10）
+
+删除了从未被应用调用的「偏好 DFS 选源 + 分阶段自动选源」算法族
+（`pickByPreference`/`autoSelect`/`AUTO_SELECT_STAGES` 等，连同其测试用例）、
+零引用的 `refreshIfVisible`/`coverNeedsLocalize` 与恒空的 if 分支。
+全量顶层声明的引用扫描工具在 `tools/scan-dead.js`（注意其对 `$` 的词边界误报，见文件内注释）。
+
 ### 测试
 
 需要 `jsdom`（仓库里已有 `node_modules`）。若缺失：
@@ -299,7 +338,7 @@ node tools/test-honor.js             #  60 项 · 称号计算
 node tools/test-library-actions.js   #  22 项 · 片库卡片动作
 node tools/test-series.js            #  48 项 · 系列归类全链路
 node tools/test-skins.js             #  48 项 · 四套 UI 套系交叉
-node tools/test-source.js            #  47 项 · 迁移幂等、三态筛选、DFS 偏好、台账状态参与选源
+node tools/test-source.js            #  37 项 · 迁移幂等、三态筛选、台账状态参与选源
 node tools/test-source-manager.js    #  81 项 · 台账摊平、统计口径、四种排序、待办行、批量写操作、徽标诚实性、手动指定默认线路
 node tools/test-tv-skin.js           # 132 项 · TV 影院几何、列数公式、CSS 泄漏、卡行分组、剧集卡
 node tools/test-proxy.js             #  30 项 · 代理响应解包、自检分层、AniList 走代理

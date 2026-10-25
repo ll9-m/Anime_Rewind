@@ -1,0 +1,104 @@
+/* ============================================================
+   20. 统计口径（§11）
+   ============================================================ */
+function stats(){
+  const list = state.anime;
+  const done = list.filter(isDone);
+  const drop = list.filter(a => a.statusId === "st_drop");
+  const totalEps = list.reduce((s,a) => s + (a.watchedEpisodes || 0), 0);
+  const minutes = list.reduce((s,a) => {
+    if(a.durationMinutes && (a.totalEpisodes === 1 || a.totalEpisodes == null)) return s + a.durationMinutes;
+    return s + (a.watchedEpisodes || 0) * clampNum(settings.episode_minutes,1,600);
+  }, 0);
+  const rewatches = list.reduce((s,a) => s + (a.rewatchCount || 0), 0);
+  const masterpieces = list.filter(a => a.masterpiece).length;
+  return {
+    total: list.length,
+    done: done.length,
+    totalEps,
+    hours: Math.round(minutes / 60),
+    rewatches,
+    masterpieces,
+    doneRate: list.length ? done.length / list.length : 0,
+    dropRate: list.length ? drop.length / list.length : 0,
+    drop: drop.length
+  };
+}
+function topCount(keyFn, list, n){
+  const map = new Map();
+  (list || state.anime).forEach(a => {
+    (keyFn(a) || []).forEach(k => { if(!k) return; map.set(k, (map.get(k) || 0) + 1); });
+  });
+  return Array.from(map.entries()).sort((a,b) => b[1]-a[1] || String(a[0]).localeCompare(String(b[0]))).slice(0, n || 10);
+}
+function recentAdded(n){
+  return state.anime.slice().sort((a,b) => String(b.createdAt).localeCompare(String(a.createdAt))).slice(0, n || 5);
+}
+function recentReviews(n){
+  const out = [];
+  state.anime.forEach(a => (a.reviews || []).forEach(r => out.push({ anime:a, review:r })));
+  return out.sort((x,y) => String(y.review.date).localeCompare(String(x.review.date))).slice(0, n || 3);
+}
+
+/* ---- 观看记录 ----
+   每次观看都留档（感想可空），这里集中放派生量：
+   上次观看日期、时隔重逢年数、旧数据里没留下日期的观看次数。 */
+function lastViewingOf(a){
+  let best = "";
+  (a && a.reviews || []).forEach(r => {
+    const d = String(r.date || "");
+    if(/^\d{4}-\d{2}-\d{2}$/.test(d) && d > best) best = d;
+  });
+  return best;
+}
+function lastViewingYearOf(a){
+  const d = lastViewingOf(a);
+  return d ? Number(d.slice(0,4)) : null;
+}
+/* 最近一次观看距首播多少年。没有日期记录或没有首播年 → null */
+function reunionYearsOf(a){
+  const airY = yearOf(a && a.airDate);
+  const lastY = lastViewingYearOf(a);
+  return (airY && lastY) ? Math.max(0, lastY - airY) : null;
+}
+/* 旧数据里「看过但没留下日期」的观看次数：
+   总观看数 = rewatchCount + 1，留下记录的是 reviews 条数，差值即无日期的部分。 */
+function legacyViewingGap(a){
+  if(!a) return 0;
+  return Math.max(0, (Number(a.rewatchCount) || 0) + 1 - (a.reviews || []).length);
+}
+/* 今年重新看过的作品数（「重新」= 此前已有观看记录，含没日期的旧记录） */
+function rewatchedThisYear(){
+  const y = new Date().getFullYear();
+  return state.anime.filter(a => {
+    const hasThisYear = (a.reviews || []).some(r => Number(String(r.date || "").slice(0,4)) === y);
+    if(!hasThisYear) return false;
+    const hadBefore = (Number(a.rewatchCount) || 0) >= 1 ||
+      (a.reviews || []).some(r => { const ry = Number(String(r.date || "").slice(0,4)); return ry && ry < y; });
+    return hadBefore;
+  }).length;
+}
+
+function allDecades(){
+  const set = new Set();
+  state.anime.forEach(a => { const d = decadeOf(a.airDate); if(d) set.add(d); });
+  return Array.from(set).sort();
+}
+
+function allWatchYears(){
+  const set = new Set();
+  state.anime.forEach(a => { if(a.watchYear) set.add(a.watchYear); });
+  return Array.from(set).sort((a,b) => b-a);
+}
+
+function allStudios(){
+  const map = new Map();
+  state.anime.forEach(a => (a.studios || []).forEach(s => map.set(s, (map.get(s)||0)+1)));
+  return Array.from(map.entries()).sort((a,b) => b[1]-a[1]).map(x => x[0]);
+}
+
+function allGenres(){
+  const map = new Map();
+  state.anime.forEach(a => (a.genres || []).forEach(s => map.set(s, (map.get(s)||0)+1)));
+  return Array.from(map.entries()).sort((a,b) => b[1]-a[1]).map(x => x[0]);
+}

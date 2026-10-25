@@ -1,0 +1,322 @@
+/* ============================================================
+   播放器（原生 video 层）
+   ------------------------------------------------------------
+   几何取自 Izuko_TV 的 TvPlayerControls.kt，不是我自己拟的：
+     底部 scrim 380px / alpha .72，顶部 scrim 180px / alpha .64，
+     按钮 48px 圆钮，图标 20px，控制层 5 秒自动隐藏。
+   两层 scrim 而不是一块 —— 底部要压住进度条与按钮的可读性，
+   顶部只压标题，两者需要的强度不同，合成一层会出现
+   「顶部也跟着变暗」或「底部压不够」。
+
+   为什么原生 video 而不是继续用 iframe：
+     iframe 里的播放器我们读不到 currentTime，也控制不了倍速与续播。
+     进度续播、片尾自动下一集这两件事必须能读时间轴，
+     所以直链走 <video>，只有站点拒绝直连时才退回 iframe。 */
+.vplayer{
+  position:absolute; inset:0; width:100%; height:100%;
+  background:#000; display:block;
+  outline:none;
+}
+.vplayer-scrim{
+  position:absolute; left:0; right:0; pointer-events:none;
+  opacity:1; transition:opacity var(--dur) var(--ease);
+}
+.vplayer-scrim-top{ top:0; height:180px; background:linear-gradient(to bottom, rgba(0,0,0,.64), transparent); }
+.vplayer-scrim-bot{
+  bottom:0; padding:0 var(--sp-5) var(--sp-4);
+  background:linear-gradient(to top, rgba(0,0,0,.72), rgba(0,0,0,.35) 55%, transparent);
+  display:flex; flex-direction:column; gap:var(--sp-3);
+}
+.vplayer.is-idle .vplayer-scrim{ opacity:0; }
+/* 隐藏时必须连点击一起关掉，否则不可见的控制条仍会吃掉点击，
+   表现为「点了没反应」。pointer-events 不是可选项。 */
+.vplayer.is-idle .vplayer-scrim-bot{ pointer-events:none; }
+
+.vplayer-title{
+  position:absolute; top:0; left:0; right:0;
+  display:flex; align-items:center; gap:var(--sp-3);
+  padding:var(--sp-4) var(--sp-5);
+  pointer-events:none;
+}
+.vplayer-title b{ color:#fff; font-size:var(--fs-lg); font-weight:600; }
+.vplayer-title span{ color:rgba(255,255,255,.72); font-size:var(--fs-sm); }
+
+.vplayer-bar{
+  display:flex; align-items:center; gap:var(--sp-3);
+  height:38px;
+}
+/* 进度条：可点可拖。padding 让点击区比视觉高度大，
+   3px 的条直接给 pointer 目标会难点中。 */
+.vplayer-track{
+  position:relative; flex:1; height:20px; cursor:pointer;
+  display:flex; align-items:center;
+}
+.vplayer-track-rail{ position:absolute; left:0; right:0; height:4px; border-radius:2px; background:rgba(255,255,255,.28); }
+.vplayer-track-buf{ position:absolute; left:0; height:4px; border-radius:2px; background:rgba(255,255,255,.42); }
+.vplayer-track-fill{ position:absolute; left:0; height:4px; border-radius:2px; background:var(--accent); }
+.vplayer-knob{
+  position:absolute; width:13px; height:13px; border-radius:50%;
+  background:var(--accent); transform:translateX(-50%);
+  box-shadow:0 1px 4px rgba(0,0,0,.5);
+  transition:width var(--dur-fast) var(--ease), height var(--dur-fast) var(--ease);
+}
+.vplayer-track:hover .vplayer-knob{ width:17px; height:17px; }
+.vplayer-time{ color:rgba(255,255,255,.9); font-size:var(--fs-sm); font-variant-numeric:tabular-nums; min-width:104px; text-align:right; }
+
+.vplayer-btns{ display:flex; align-items:center; gap:var(--sp-1); flex-wrap:wrap; }
+.vplayer-btn{
+  width:38px; height:38px; border-radius:50%;
+  display:inline-flex; align-items:center; justify-content:center;
+  border:1px solid transparent; background:rgba(255,255,255,.1);
+  color:#fff; cursor:pointer; padding:0;
+  transition:background var(--dur-fast) var(--ease), transform var(--dur-fast) var(--ease);
+}
+.vplayer-btn:hover{ background:rgba(255,255,255,.22); }
+.vplayer-btn:active{ transform:scale(.94); }
+.vplayer-btn:focus-visible{ outline:2px solid var(--accent); outline-offset:2px; }
+.vplayer-btn.is-on{ background:var(--accent); color:var(--accent-ink); }
+/* 文字型按钮（倍速 / 选源）：宽度放开，按文字长度走 */
+.vplayer-btn-text{
+  width:auto; min-width:52px; padding:0 var(--sp-3); border-radius:var(--r-pill);
+  font-size:var(--fs-sm); font-family:var(--font-mono); font-variant-numeric:tabular-nums;
+}
+.vplayer-badge{
+  position:absolute; left:50%; top:50%; transform:translate(-50%,-50%);
+  padding:var(--sp-2) var(--sp-4); border-radius:var(--r-md);
+  background:rgba(0,0,0,.68); color:#fff; font-size:var(--fs-lg);
+  pointer-events:none; opacity:0; transition:opacity var(--dur-fast) var(--ease);
+}
+.vplayer-badge.is-on{ opacity:1; }
+/* 中心大播放键：暂停时出现，Izuko_TV 也有同构的「确认键启停」 */
+.vplayer-center{
+  position:absolute; left:50%; top:50%; transform:translate(-50%,-50%);
+  width:76px; height:76px; border-radius:50%;
+  background:rgba(0,0,0,.55); color:#fff; border:0; cursor:pointer;
+  display:inline-flex; align-items:center; justify-content:center;
+  transition:opacity var(--dur) var(--ease), transform var(--dur) var(--ease);
+}
+.vplayer-center[hidden]{ display:none; }
+/* 倍速斜坡提示（长按加速时用） */
+.vplayer-rate{
+  position:absolute; left:var(--sp-5); bottom:96px;
+  padding:var(--sp-2) var(--sp-3); border-radius:var(--r-pill);
+  background:rgba(0,0,0,.72); color:#fff; font-family:var(--font-mono);
+  font-size:var(--fs-sm); pointer-events:none; opacity:0;
+  transition:opacity var(--dur-fast) var(--ease);
+}
+.vplayer-rate.is-on{ opacity:1; }
+
+/* 选源面板：从底部浮出，条目吸附底部。Izuko_TV 的 TvPlayerPanels
+   高度取「顶部信息下缘与胶囊行上缘的实测间距」，不锁死小窗。 */
+.vplayer-panel{
+  position:absolute; left:0; right:0; bottom:0; max-height:min(62%, 420px);
+  background:rgba(16,20,26,.96); border-top:1px solid rgba(255,255,255,.12);
+  transform:translateY(101%); transition:transform var(--dur) var(--ease);
+  display:flex; flex-direction:column; z-index:3;
+}
+.vplayer-panel.is-open{ transform:translateY(0); }
+.vplayer-panel-head{
+  display:flex; align-items:center; gap:var(--sp-2);
+  padding:var(--sp-3) var(--sp-4); border-bottom:1px solid rgba(255,255,255,.09);
+  flex:0 0 auto;
+}
+.vplayer-panel-head h4{ margin:0; font-size:var(--fs-md); color:#fff; }
+.vplayer-panel-body{ overflow-y:auto; padding:var(--sp-2) var(--sp-3) var(--sp-4); }
+/* 线路胶囊行：横向可滚，聚焦/选中有明确视觉差。
+   Izuko_TV 用胶囊而不是卡片网格，注释写明「InputChip 的聚焦指示看不清」——
+   网页上这一点同样成立，胶囊的高对比描边比卡片阴影更容易看出焦点。 */
+.vsrc-row{ display:flex; gap:var(--sp-2); flex-wrap:wrap; padding:var(--sp-1) 0; }
+.vsrc{
+  display:inline-flex; align-items:center; gap:var(--sp-2);
+  padding:var(--sp-2) var(--sp-3); border-radius:var(--r-pill);
+  /* 底色原来写的是 rgba(255,255,255,.08) —— 那是给深色底设计的「提亮」。
+   浅色主题与 pixel/tv 套系的胶囊底本来就亮，再叠一层白会把底推到
+   0.58–0.67 亮度，而文字是深色 —— 底越亮对比度越低，
+   实测这两套系下只有 3.3:1 / 4.2:1，都不过 AA。
+   改用 --panel-3 实色（比面板更深一档，各套系都有），
+   并逐套系实测过4.5:1。
+   不能用 --panel-2 —— pixel 套系的 panel-2 是 #fff1e8，
+   比文字亮太多，文字反而更看不清。 */
+background:var(--panel-3); color:var(--text); cursor:pointer;
+  border:1px solid transparent; font-size:var(--fs-sm); text-align:left;
+  transition:background var(--dur-fast) var(--ease), transform var(--dur-fast) var(--ease);
+}
+/* 播放器控制条上的选源面板铺在视频之上，底色恒为深色，
+   这里的胶囊必须继续用「深底 + 白字」，
+   不能跟着主题走 --panel-3 —— 浅色主题下会变成浅底上的深字，
+   而播放器内部还有自己的层叠上下文。 */
+.vplayer-panel .vsrc{
+  background:rgba(255,255,255,.08); color:#fff;
+}
+.vplayer-panel .vsrc .vsrc-reason{ color:#ffd9a0; }
+.vplayer-panel .vsrc.is-off{ color:rgba(255,255,255,.45); }
+.vsrc:hover{ background:var(--panel-2); }
+.vplayer-panel .vsrc:hover{ background:rgba(255,255,255,.16); }
+.vsrc.is-on{ background:var(--accent); color:var(--accent-ink); border-color:var(--accent); }
+/* 「淡」必须是不透明色，**不能**用 color-mix(..., transparent)。
+   往 transparent 混是降 alpha —— 文字与底色同时变淡，对比度跟着一起塌：
+   实测 0.62 时只有 1.7–2.4:1，0.82 时也只有 2.0–3.0:1，
+   线路名等于看不见，而「这条能不能用」正是选线路时唯一要判断的事。
+   正确做法是往**底色**混：不透明度不变，只把颜色推向胶囊自己的底。
+   混色比例 82% 是四套 UI × 明暗 8 种组合实测出来的下限，
+   68% 时最差的一套只有 3.6:1，82% 全部过 4.5:1，
+   而视觉上仍与可用线路有明确区分。 */
+.vsrc.is-off{
+  color:color-mix(in srgb, var(--text-2) 82%, var(--panel-3));
+  cursor:not-allowed;
+}
+.vsrc.is-off:hover{ background:var(--panel-2); }
+.vsrc.is-off .vsrc-meta{ opacity:.85; }
+/* 不支持 color-mix 的旧引擎退回 --text-2（各套系都保证过 AA）。 */
+@supports not (color: color-mix(in srgb, red 50%, blue)){
+  .vsrc.is-off{ color:var(--text-2); }
+}
+.vsrc-dot{ width:7px; height:7px; border-radius:50%; background:currentColor; flex:0 0 auto; }
+.vsrc-meta{ color:inherit; opacity:.72; font-size:var(--fs-xs); font-family:var(--font-mono); }
+/* 「为什么不会被选中」独占一行。
+   胶囊是 inline-flex 单行容器，塞第二行会把整排的基线拉乱 ——
+   实测是名字和元信息被挤成两截，元信息竖着排下来很难读。
+   所以让带原因的胶囊整体换行：flex-wrap + 主行占满、原因另起。 */
+.vsrc{ flex-wrap:wrap; max-width:100%; }
+.vsrc-name{ display:inline-flex; align-items:center; gap:var(--sp-2); min-width:0; }
+/* 「为什么不会被选中」独占一行。
+   胶囊是 inline-flex 单行容器，塞第二行会把整排的基线拉乱 ——
+   实测是名字和元信息被挤成两截，元信息竖着排下来很难读。
+   所以让带原因的胶囊整体换行：flex-wrap + 主行占满、原因另起。 */
+.vsrc-reason{
+  /* 文字色用 --text 而不是 --warn：
+     --warn 在 4 套 UI × 明暗 8 种组合下与胶囊底色的实测对比度只有
+     2.3–4.0:1，全部不过 AA。--text 是每个套系里最保证可读的一档。 */
+  flex-basis:100%; color:var(--text);
+  font-size:var(--fs-xs); margin-top:3px; line-height:1.35;
+  /* 关键：整颗胶囊的淡化不能压到这行文字上。
+     之前给 .vsrc.is-off 加 opacity:.382，文字与底色同时合成，
+     实测 pixel 套系下这行只剩 1.23:1 —— 「已停用」四个字几乎看不见，
+     而它恰恰是用户最需要读到的那句结论。
+     「看起来淡」由名字那行承担，结论这行必须清楚。 */
+  opacity:1; font-weight:600;
+}
+/* 警示语义不靠颜色单独承担 ——
+   前缀标记 + 字重给出，色盲用户看到的是这个而不是颜色。 */
+.vsrc-reason::before{ content:"! "; font-family:var(--font-mono); opacity:.7; }
+/* 带原因的胶囊是两行的，胶囊圆角（左半圆 + 右半圆）会显得像被拉长的药丸，
+   改成小圆角才读得出「这是一块带说明的标签」。 */
+.vsrc.has-reason{ border-radius:var(--r-md); align-items:flex-start; }
+.vsrc.has-reason .vsrc-name{ padding-top:1px; }
+/* 详情页的线路列表：包一层卡片把「选线路」这件事圈出来。
+   直接裸放一排胶囊会和上面的输入框、按钮混成一片 ——
+   用户看不出哪些能点、点了会发生什么。 */
+.line-picker{
+  border:1px solid var(--line); border-radius:var(--r-md);
+  padding:var(--sp-3); background:rgba(255,255,255,.03);
+}
+.line-picker-head{
+  display:flex; align-items:center; gap:var(--sp-2);
+  margin-bottom:var(--sp-2);
+}
+.line-picker-head .hint{ flex:1; }
+.mb-3{ margin-bottom:var(--sp-3); }
+
+/* 内联提示条：解析结果、导入诊断用。左侧 2px 色条承担语义，
+   不靠整块底色 —— 大面积底色会和内容抢注意力。 */
+.note-box{
+  display:flex; gap:var(--sp-2); align-items:flex-start;
+  padding:var(--sp-3); border:1px solid var(--border);
+  border-left:2px solid var(--muted); border-radius:var(--r-sm);
+  background:var(--panel-2); font-size:var(--fs-xs); line-height:1.6;
+}
+.note-box.is-ok{ border-left-color:var(--ok); }
+.note-box.is-ok svg{ color:var(--ok); flex:0 0 16px; }
+.note-box.is-warn{ border-left-color:var(--warn); }
+.note-box.is-warn svg{ color:var(--warn); flex:0 0 16px; }
+.note-box.is-err{ border-left-color:var(--danger); }
+.note-box.is-err svg{ color:var(--danger); flex:0 0 16px; }
+
+/* 徽标 / 角标：直角签而非圆角胶囊 —— 档案馆的分类标签，不是消费级应用的 chip。
+   颜色只来自状态本身，不加填充色块，避免与内容抢注意力。 */
+.badge{
+  display:inline-flex; align-items:center; gap:4px;
+  padding:1px 6px; border-radius:var(--r-sm);
+  font-size:10.5px; font-weight:600; letter-spacing:.03em;
+  border:1px solid currentColor; line-height:1.5; white-space:nowrap;
+}
+.badge svg{ width:11px; height:11px; }
+.badge-master{ color:var(--warn); }
+.badge-fav{ color:var(--accent); }
+.badge-src{ color:var(--muted); }
+
+/* 评分 */
+.score-pill{
+  display:inline-flex; align-items:center; gap:4px; padding:2px 8px; border-radius:var(--r-sm);
+  background:var(--panel-3); border:1px solid var(--border); font-size:var(--fs-xs); font-weight:600;
+}
+.score-pill svg{ width:11px; height:11px; color:var(--warn); }
+.score-pill.mine svg{ color:var(--accent); }
+
+/* 进度条 */
+.progress{ height:6px; border-radius:var(--r-pill); background:var(--panel-3); overflow:hidden; border:1px solid var(--border); }
+.progress > i{ display:block; height:100%; background:var(--accent); border-radius:var(--r-pill); transition:width var(--dur); }
+
+/* 模态层 */
+#modal-root{ position:fixed; inset:0; z-index:60; display:none; }
+#modal-root.open{ display:block; }
+.modal-mask{ position:absolute; inset:0; background:rgba(4,7,12,.66); backdrop-filter:blur(3px); animation:fade var(--dur) var(--ease); }
+.modal{
+  position:absolute; left:50%; top:50%; transform:translate(-50%,-50%);
+  width:min(760px,calc(100vw - 64px)); max-height:calc(100vh - 64px);
+  display:flex; flex-direction:column; overflow:hidden;
+  background:var(--panel); border:1px solid var(--border-2); border-radius:var(--r-xl); box-shadow:var(--shadow-2);
+  animation:pop var(--dur) var(--ease);
+}
+.modal-wide{ width:min(1040px,calc(100vw - 48px)); }
+.modal-narrow{ width:min(460px,calc(100vw - 48px)); }
+.modal-head{ display:flex; align-items:center; gap:var(--sp-3); padding:var(--sp-4); border-bottom:1px solid var(--border); flex:0 0 auto; }
+.modal-head h3{ font-size:var(--fs-lg); font-weight:600; }
+.modal-head .btn-icon{ margin-left:auto; }
+.modal-body{ padding:var(--sp-4); overflow-y:auto; flex:1; min-height:0; }
+.modal-foot{ display:flex; align-items:center; gap:var(--sp-2); padding:var(--sp-3) var(--sp-4); border-top:1px solid var(--border); flex:0 0 auto; }
+.modal-foot .grow{ margin-left:auto; }
+@keyframes fade{ from{opacity:0} to{opacity:1} }
+@keyframes pop{ from{opacity:0;transform:translate(-50%,-46%) scale(.97)} to{opacity:1;transform:translate(-50%,-50%) scale(1)} }
+
+/* 吐司 */
+#toast-root{ position:fixed; right:20px; bottom:20px; z-index:80; display:flex; flex-direction:column; gap:var(--sp-2); align-items:flex-end; pointer-events:none; }
+.toast{
+  pointer-events:auto; display:flex; align-items:center; gap:var(--sp-2); max-width:420px;
+  padding:10px var(--sp-4); border-radius:var(--r-md); background:var(--panel-2);
+  border:1px solid var(--border-2); box-shadow:var(--shadow-2); font-size:var(--fs-sm);
+  animation:slidein var(--dur) var(--ease);
+}
+.toast svg{ width:16px; height:16px; flex:0 0 16px; }
+.toast-ok svg{ color:var(--ok); } .toast-err svg{ color:var(--danger); } .toast-warn svg{ color:var(--warn); } .toast-info svg{ color:var(--accent); }
+@keyframes slidein{ from{opacity:0;transform:translateY(8px)} to{opacity:1;transform:none} }
+
+/* 空态 / 加载 / 错误 */
+.state-box{
+  display:flex; flex-direction:column; align-items:center; justify-content:center; gap:var(--sp-2);
+  padding:var(--sp-7) var(--sp-4); text-align:center; color:var(--muted);
+  border:1px dashed var(--border-2); border-radius:var(--r-lg); background:var(--panel-2);
+}
+.state-box svg{ width:40px; height:40px; color:var(--muted); opacity:.7; }
+.state-box h2{ font-size:var(--fs-lg); color:var(--text); font-weight:600; letter-spacing:-.01em; text-wrap:balance; }
+.state-box .row{ margin-top:var(--sp-2); }
+.skeleton{ background:linear-gradient(90deg,var(--panel-2),var(--panel-3),var(--panel-2)); background-size:200% 100%; animation:shimmer 1.2s infinite linear; border-radius:var(--r-md); }
+@keyframes shimmer{ from{background-position:200% 0} to{background-position:-200% 0} }
+.spinner{ width:18px; height:18px; border:2px solid var(--border-2); border-top-color:var(--accent); border-radius:50%; animation:spin .8s linear infinite; }
+@keyframes spin{ to{transform:rotate(360deg)} }
+
+/* 启动屏 */
+#boot{ position:fixed; inset:0; z-index:100; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:var(--sp-3); background:var(--bg); transition:opacity var(--dur-slow) var(--ease); }
+#boot.hide{ opacity:0; pointer-events:none; }
+#boot .rewind{ width:56px; height:56px; color:var(--accent); animation:rewind 1.4s var(--ease) infinite; }
+@keyframes rewind{ 0%{transform:rotate(0)} 100%{transform:rotate(-360deg)} }
+#boot p{ color:var(--muted); font-size:var(--fs-sm); letter-spacing:.1em; }
+
+/* 窄屏提示 */
+#too-narrow{ position:fixed; inset:0; z-index:90; display:none; align-items:center; justify-content:center; padding:var(--sp-5); background:var(--bg); text-align:center; }
+#too-narrow .card{ max-width:520px; }
+@media (max-width:1099px){ #too-narrow{ display:flex; } }
+
+/* 可视化隐藏 */
+.sr-only{ position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0 0 0 0); white-space:nowrap; border:0; }
+

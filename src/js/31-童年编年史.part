@@ -1,0 +1,113 @@
+/* ============================================================
+   17. 童年编年史
+   ============================================================ */
+function chronicleGroups(){
+  const map = new Map();
+  const rest = [];
+  state.anime.forEach(a => {
+    if(!a.watchYear){ rest.push(a); return; }
+    const y = Number(a.watchYear);
+    if(!map.has(y)) map.set(y, []);
+    map.get(y).push(a);
+  });
+  const years = Array.from(map.keys()).sort((x,y) => x-y);
+  return years.map(y => {
+    const list = map.get(y).slice().sort((a,b) => String(a.airDate||"").localeCompare(String(b.airDate||"")));
+    const gradeMap = new Map();
+    list.forEach(a => { if(a.watchGrade) gradeMap.set(a.watchGrade, (gradeMap.get(a.watchGrade)||0)+1); });
+    let topGrade = null, max = 0;
+    gradeMap.forEach((v,k) => { if(v > max){ max = v; topGrade = k; } });
+    const eps = list.reduce((s,a) => s + (a.watchedEpisodes||0), 0);
+    const total = list.reduce((s,a) => s + (a.totalEpisodes||0), 0);
+    return { year:y, list, grade: max === list.length ? topGrade : null, eps, total };
+  }).concat(rest.length ? [{ year:null, list:rest, grade:null, eps:rest.reduce((s,a)=>s+(a.watchedEpisodes||0),0), total:rest.reduce((s,a)=>s+(a.totalEpisodes||0),0) }] : []);
+}
+function renderChronicle(root){
+  const groups = chronicleGroups();
+  if(!state.anime.length){
+    root.innerHTML = '<div class="state-box">' + ic("chronicle",40) + "<h2>还没有可归档的年份</h2>" +
+      '<p>给作品填上「观看年份」，这里会长成一条时间轴。</p>' +
+      '<div class="row"><button class="btn btn-primary" type="button" data-act="goto-lib">去片库添加作品</button></div></div>';
+    const b = root.querySelector("[data-act=goto-lib]");
+    if(b) b.addEventListener("click", () => go("library"));
+    return;
+  }
+  if(!groups.length){
+    root.innerHTML = '<div class="state-box">' + ic("chronicle",40) + "<h2>全部作品都缺观看年份</h2>" +
+      '<p>补上年份后它们会被钉到对应的年份分组里。</p>' +
+      '<div class="row"><button class="btn btn-primary" type="button" data-act="fill">批量补录年份</button></div></div>';
+    const b = root.querySelector("[data-act=fill]");
+    if(b) b.addEventListener("click", () => fillYearFlow(state.anime));
+    return;
+  }
+  let html = '<div class="row small muted mb-3">' +
+    ic("info",14) + "<span>共 " + groups.length + " 个分组、" + state.anime.length + " 部作品；鼠标悬停标题可看该年统计。</span></div>" +
+    '<div class="chronicle scroll">';
+  groups.forEach(g => {
+    const isRest = g.year == null;
+    html += '<section class="chron-year' + (isRest ? " chron-unarchived" : "") + '">' +
+      "<header title=\"" + (isRest ? "待补观看年份" : g.year + " 年") + "：" + g.list.length + " 部 / 已看 " + g.eps + " 集\">" +
+        '<h3>' + (isRest ? "未归档" : g.year) + "</h3>" +
+        '<div class="group-stat">' + (isRest
+            ? g.list.length + " 部待补观看年份"
+            : (g.grade ? esc(g.grade) + " · " : "") + g.list.length + " 部 · 已看 " + g.eps + " 集") + "</div>" +
+        (isRest ? '<button class="btn btn-sm mt-3" type="button" data-act="fill">' + ic("edit",14) + "逐条补录</button>" : "") +
+      "</header>" +
+      '<div class="chron-list scroll">' + g.list.map(a =>
+        '<div class="chron-item" role="button" tabindex="0" data-open="' + attr(a.id) + '">' +
+          '<span class="chron-thumb">' + coverThumb(a) + "</span>" +
+          '<span style="min-width:0">' +
+            '<span class="name clamp-2">' + esc(a.titleCn || a.titleOriginal) + "</span>" +
+            '<span class="meta">' + esc(String(a.airDate||"").slice(0,4) || "—") + " · " + esc(statusName(a)) + "</span>" +
+          "</span></div>").join("") + "</div></section>";
+  });
+  html += "</div>";
+  root.innerHTML = html;
+  root.querySelectorAll("[data-open]").forEach(n => {
+    n.addEventListener("click", () => go("theater", n.dataset.open));
+    n.addEventListener("keydown", (e) => { if(e.key === "Enter" || e.key === " "){ e.preventDefault(); go("theater", n.dataset.open); } });
+  });
+  root.querySelectorAll("[data-act=fill]").forEach(b => b.addEventListener("click", () => fillYearFlow(state.anime.filter(a => !a.watchYear))));
+}
+function fillYearFlow(list){
+  const noYear = list.filter(a => !a.watchYear);
+  if(!noYear.length){ toast("没有缺年份的作品了","ok"); return; }
+  let idx = 0;
+  const step = () => {
+    if(idx >= noYear.length){ toast("补录完成","ok"); rerender(); return; }
+    const a = noYear[idx];
+    openModal({
+      title:"补录观看年份（" + (idx+1) + "/" + noYear.length + "）",
+      narrow:true,
+      body:'<p class="hint mb-3">' + esc(a.titleCn) + "</p>" +
+        '<div class="field mb-3"><label for="fy-year">观看年份</label>' +
+          '<input class="input" id="fy-year" type="number" min="1950" max="2100" step="1" data-autofocus placeholder="如 2008"></div>' +
+        '<div class="field"><label for="fy-grade">当时年级</label>' +
+          '<select class="select" id="fy-grade">' + gradeOptionsHTML(a.watchGrade) + "</select></div>",
+      footer:(f) => {
+        f.innerHTML = '<button class="btn btn-sm" type="button" id="fy-skip">跳过</button><div class="grow"></div>' +
+          '<button class="btn btn-sm" type="button" id="fy-stop">结束</button>' +
+          '<button class="btn btn-primary btn-sm" type="button" id="fy-ok">保存并继续</button>';
+        f.querySelector("#fy-skip").addEventListener("click", () => { idx++; closeModal(); step(); });
+        f.querySelector("#fy-stop").addEventListener("click", () => { closeModal(); rerender(); });
+        f.querySelector("#fy-ok").addEventListener("click", async () => {
+          const y = f.ownerDocument.querySelector("#fy-year").value;
+          const gr = f.ownerDocument.querySelector("#fy-grade").value;
+          a.watchYear = numOrNull(y);
+          a.watchGrade = gr || null;
+          await saveAnime(a);
+          idx++; closeModal(); step();
+        });
+      }
+    });
+  };
+  step();
+}
+
+registerPage({
+  id:"chronicle", name:"童年编年史", icon:"chronicle", title:"童年编年史",
+  sub:"按「几岁/几年级看的」把作品钉回时间轴上",
+  settingKey:"module_chronicle",
+  render: renderChronicle
+});
+

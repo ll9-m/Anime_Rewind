@@ -1,0 +1,195 @@
+/* ============================================================
+   套系 C：科技感 / 全息（holo）
+   ------------------------------------------------------------
+   三个控件原型（均按用户提供的示例改造，非照搬）：
+   1) 按钮：clip-path 分层 + steps() 故障动画
+   2) 开关：全息轨道 + 能量环（原示例的固定 150x60 尺寸改为自适应）
+   3) 输入框：conic-gradient 旋转描边（原示例的固定 301x56 改为 100%）
+   关键取舍：原示例所有动画都是 4s 无限旋转，在数据密集界面里
+   24 个控件同时转等于满屏抖动。因此统一改为「仅 hover/focus 激活」，
+   静止时完全不动 —— 科技感来自质感与高光，不是来自永不停歇的动画。
+   ============================================================ */
+[data-skin="holo"]{
+  --holo:#00e5ff;
+  --holo-2:#ff2fd0;
+  --holo-dim:rgba(0,229,255,.32);
+  --holo-deep:#050914;
+  --r-sm:2px; --r-md:3px; --r-lg:4px; --r-xl:6px; --r-pill:2px;
+  --shadow:0 0 0 1px var(--holo-dim), 0 4px 18px rgba(0,229,255,.1);
+  --shadow-2:0 0 0 1px var(--holo-dim), 0 8px 40px rgba(0,229,255,.16);
+  --hairline:rgba(0,229,255,.16);
+  --panel-blur:none;
+  --glass-edge:inset 0 1px 0 rgba(0,229,255,.2);
+  --font-mono:"JetBrains Mono",ui-monospace,Consolas,monospace;
+}
+[data-skin="holo"] .panel,
+[data-skin="holo"] .modal,
+[data-skin="holo"] .tk{
+  border-color:var(--holo-dim);
+  box-shadow:var(--shadow), var(--glass-edge);
+}
+[data-skin="holo"] .panel-head{ border-bottom-color:var(--holo-dim); }
+[data-skin="holo"] .panel-head h3{ letter-spacing:.14em; text-transform:uppercase; }
+[data-skin="holo"] .hint,
+[data-skin="holo"] .stat-card span{ letter-spacing:.06em; }
+
+/* ---- 故障按钮 ---- */
+[data-skin="holo"] .btn{
+  position:relative; isolation:isolate; overflow:visible;
+  background:transparent; border:1px solid var(--holo-dim);
+  color:var(--text); letter-spacing:.08em; text-transform:uppercase;
+}
+[data-skin="holo"] .btn::before{
+  /* 静止时的全息描边：conic 渐变 + 遮罩挖空，只留边框一圈 */
+  content:""; position:absolute; inset:-2px; z-index:-2; border-radius:inherit;
+  background:conic-gradient(from 0deg, transparent 0 62%, var(--holo) 78%, var(--holo-2) 88%, transparent 100%);
+  opacity:.42; transition:opacity var(--dur) var(--ease);
+}
+[data-skin="holo"] .btn:hover::before,
+[data-skin="holo"] .btn:focus-visible::before{ opacity:1; }
+/* 故障层：hover 时才出现的错位文字副本 */
+[data-skin="holo"] .btn::after{
+  content:attr(data-label); position:absolute; inset:0; z-index:-1;
+  display:flex; align-items:center; justify-content:center;
+  color:var(--holo); clip-path:inset(50% 50% 50% 50%); pointer-events:none;
+}
+[data-skin="holo"] .btn:hover{
+  border-color:var(--holo);
+  box-shadow:0 0 18px rgba(0,229,255,.34), inset 0 0 12px rgba(0,229,255,.12);
+  text-shadow:0 0 8px rgba(0,229,255,.5);
+}
+[data-skin="holo"] .btn:hover::after{
+  /* steps(2,end) 是关键：两帧一跳才有数字故障的顿挫感，
+     用普通 easing 会变成平滑抖动，反而廉价。 */
+  animation:holo-glitch .5s steps(2,end) 1;
+}
+[data-skin="holo"] .btn-primary{
+  background:linear-gradient(180deg, rgba(0,229,255,.2), rgba(0,229,255,.06));
+  border-color:var(--holo); color:var(--holo);
+}
+[data-skin="holo"] .btn-danger{ border-color:rgba(255,77,109,.5); color:#ff4d6d; }
+[data-skin="holo"] .btn-danger:hover{ box-shadow:0 0 18px rgba(255,77,109,.34); }
+@keyframes holo-glitch{
+  0%  { clip-path:inset(50% 50% 50% 50%); transform:translate(0,0); color:var(--holo); }
+  20% { clip-path:inset(12% 0 62% 0); transform:translate(-2px,1px); color:var(--holo-2); }
+  40% { clip-path:inset(58% 0 18% 0); transform:translate(2px,-1px); color:var(--holo); }
+  60% { clip-path:inset(28% 0 44% 0); transform:translate(-1px,1px); color:var(--holo-2); }
+  80% { clip-path:inset(66% 0 8% 0);  transform:translate(1px,-1px); color:var(--holo); }
+  100%{ clip-path:inset(50% 50% 50% 50%); transform:translate(0,0); }
+}
+@media (prefers-reduced-motion:reduce){
+  [data-skin="holo"] .btn:hover::after{ animation:none; }
+}
+
+/* ---- 全息开关 ----
+   原型是固定 150x60 的胶囊；这里改成 44x24 的紧凑尺寸，
+   因为设置页有近 20 个开关，150px 宽的开关会把标签挤没。 */
+.holo-switch{ display:inline-flex; align-items:center; position:relative; width:46px; height:24px; flex:0 0 46px; vertical-align:middle; }
+.holo-switch > input{ position:absolute; inset:0; width:100%; height:100%; margin:0; opacity:0; cursor:pointer; z-index:3; }
+.holo-switch input{ position:absolute; opacity:0; width:0; height:0; }
+.holo-switch .hs-track{
+  position:absolute; inset:0; border-radius:var(--r-pill); cursor:pointer;
+  background:linear-gradient(180deg, rgba(0,229,255,.07), rgba(0,20,40,.5));
+  border:1px solid var(--holo-dim);
+  box-shadow:inset 0 0 8px rgba(0,0,0,.7);
+  transition:background var(--dur) var(--ease), border-color var(--dur) var(--ease), box-shadow var(--dur) var(--ease);
+  overflow:hidden;
+}
+/* 轨道内扫描线：静止时极慢，hover 加速 */
+.holo-switch .hs-track::after{
+  content:""; position:absolute; left:0; right:0; top:50%; height:1px;
+  background:repeating-linear-gradient(90deg, var(--holo-dim) 0 3px, transparent 3px 9px);
+  transform:translateY(-50%);
+  transition:background var(--dur) var(--ease);
+}
+.holo-switch .hs-thumb{
+  position:absolute; top:3px; left:3px; width:18px; height:18px; border-radius:50%;
+  background:radial-gradient(circle at 40% 35%, #9ff6ff, #0a6c8a 70%);
+  box-shadow:0 0 10px rgba(0,229,255,.6), inset 0 0 6px rgba(255,255,255,.5);
+  border:1px solid rgba(0,229,255,.7);
+  transition:left var(--dur) var(--ease), box-shadow var(--dur) var(--ease), background var(--dur) var(--ease);
+  z-index:2;
+}
+/* 能量环：只在开启态显示，且只在 hover/focus 时旋转 —— 静止的环没有信息量 */
+.holo-switch .hs-ring{
+  position:absolute; top:3px; left:3px; width:18px; height:18px; border-radius:50%;
+  border:1.5px solid transparent; opacity:0; pointer-events:none; z-index:1;
+  transition:opacity var(--dur) var(--ease);
+}
+.holo-switch .hs-ring::before{
+  content:""; position:absolute; inset:-3px; border-radius:50%;
+  border-top-color:var(--holo); border-right-color:rgba(0,229,255,.35);
+}
+.holo-switch:hover .hs-ring,
+.holo-switch input:focus-visible ~ .hs-track + .hs-ring{ animation:holo-spin 2.4s linear infinite; }
+.holo-switch input:checked ~ .hs-track{
+  background:linear-gradient(180deg, rgba(0,229,255,.2), rgba(0,60,90,.4));
+  border-color:var(--holo);
+  box-shadow:0 0 12px rgba(0,229,255,.24), inset 0 0 8px rgba(0,0,0,.6);
+}
+.holo-switch input:checked ~ .hs-track + .hs-thumb{
+  left:calc(100% - 21px);
+  background:radial-gradient(circle at 40% 35%, #d6fff8, #0e8f6a 70%);
+  box-shadow:0 0 12px rgba(0,255,200,.6), inset 0 0 6px rgba(255,255,255,.55);
+}
+.holo-switch input:checked ~ .hs-track + .hs-thumb + .hs-ring{ opacity:1; }
+.holo-switch input:focus-visible ~ .hs-track{ outline:2px solid var(--holo); outline-offset:2px; }
+@keyframes holo-spin{ to{ transform:rotate(360deg); } }
+@media (prefers-reduced-motion:reduce){
+  .holo-switch:hover .hs-ring,
+  .holo-switch input:focus-visible ~ .hs-track + .hs-ring{ animation:none; }
+}
+
+/* ---- 全息输入框：conic 渐变旋转描边 ----
+   原型用 4 层 600px 的伪元素叠出描边；这里压到 2 层，
+   并把动画改为 focus 才转（原型是 hover/always，转不停）。 */
+.holo-field{ position:relative; display:block; }
+.holo-field .hf-glow{
+  position:absolute; inset:-6px; z-index:-1; border-radius:inherit; pointer-events:none;
+  background:conic-gradient(from 0deg, transparent 0 55%, var(--holo) 72%, var(--holo-2) 84%, transparent 100%);
+  filter:blur(8px); opacity:0;
+  transition:opacity var(--dur) var(--ease);
+}
+.holo-field .hf-edge{
+  position:absolute; inset:-2px; z-index:-1; border-radius:inherit; pointer-events:none;
+  background:conic-gradient(from 0deg, transparent 0 55%, var(--holo) 72%, var(--holo-2) 84%, transparent 100%);
+  opacity:0; transition:opacity var(--dur) var(--ease);
+}
+.holo-field:hover .hf-glow,
+.holo-field:focus-within .hf-glow{ opacity:.5; }
+.holo-field:focus-within .hf-edge{ opacity:.85; }
+.holo-field:focus-within .hf-edge{ animation:holo-edge-spin 3s linear infinite; }
+.holo-field .input,
+.holo-field .select,
+.holo-field .textarea{
+  /* 输入框底色必须跟随主题：固定深蓝底在浅色主题下，
+     浅色正文相对深底只有 2.07:1，完全读不清。
+     改用主题自身的 --panel-2 加极轻的深色偏移，三套主题都自然达标。 */
+  background:color-mix(in srgb, var(--panel-2) 88%, var(--holo-deep));
+  border-color:var(--holo-dim); color:var(--text);
+}
+[data-theme="light"][data-skin="holo"] .holo-field .input,
+[data-theme="light"][data-skin="holo"] .holo-field .select,
+[data-theme="light"][data-skin="holo"] .holo-field .textarea{
+  background:color-mix(in srgb, var(--panel-2) 94%, #ffffff);
+}
+/* 浅色主题下亮青接近白色，看不见 —— 换足够深的一档 */
+[data-theme="light"][data-skin="holo"]{ --holo:#0a6c8a; --holo-2:#a0218a; --holo-dim:rgba(10,108,138,.34); }
+.holo-field:focus-within .input,
+.holo-field:focus-within .select,
+.holo-field:focus-within .textarea{
+  border-color:var(--holo); outline:none;
+  box-shadow:0 0 12px rgba(0,229,255,.2), inset 0 0 14px rgba(0,229,255,.06);
+}
+@keyframes holo-edge-spin{ to{ transform:rotate(360deg); } }
+@media (prefers-reduced-motion:reduce){
+  .holo-field:focus-within .hf-edge{ animation:none; }
+}
+
+/* 套系切换时禁用所有装饰动画，避免残留的 rAF/transition 继续跑 */
+[data-skin="archive"] .holo-field .hf-glow,
+[data-skin="archive"] .holo-field .hf-edge{ display:none; }
+[data-skin="archive"] .btn::before,
+[data-skin="archive"] .btn::after{ display:none; }
+[data-skin="archive"] .holo-switch{ display:none; }
+

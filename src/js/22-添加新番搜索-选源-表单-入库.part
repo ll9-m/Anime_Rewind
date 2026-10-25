@@ -1,0 +1,101 @@
+/* ============================================================
+   14. 添加新番：搜索 → 选源 → 表单 → 入库
+   ============================================================ */
+function openSearchModal(){
+  let lastKeyword = "", timer = null, busy = false, pendingKw = "";
+  const root = openModal({
+    title:"添加新番",
+    body:
+      '<div class="field mb-3"><label for="s-kw">作品名</label>' +
+        '<div class="search-wrap">' + ic("search",16) + '<input class="input" id="s-kw" data-autofocus placeholder="如：数码宝贝 / 葫芦兄弟 / STEINS;GATE"></div></div>' +
+      '<div id="s-status" class="small muted mb-3">输入片名后将依次搜索 Bangumi、AniList。</div>' +
+      '<div id="s-list" class="col"></div>',
+    footer: (f) => {
+      f.innerHTML = '<span class="hint">抓不到资料？可以手动录入</span><div class="grow"></div>' +
+        '<button class="btn" type="button" id="s-manual" hidden>' + ic("edit",16) + "手动录入</button>" +
+        '<button class="btn" type="button" data-close="1">关闭</button>';
+    }
+  });
+  const kwNode = root.querySelector("#s-kw");
+  const listNode = root.querySelector("#s-list");
+  const stNode = root.querySelector("#s-status");
+  const manualBtn = root.querySelector("#s-manual");
+  if(kwNode) kwNode.addEventListener("keydown", (e) => { if(e.key === "Enter"){ e.preventDefault(); doSearch(true); } });
+  kwNode && bindIMEInput(kwNode, debounce(() => doSearch(false), 380));
+  manualBtn && manualBtn.addEventListener("click", () => { closeModal(); openAnimeForm({ candidate: { titleCn: kwNode.value.trim(), source:"manual" } }); });
+
+  async function doSearch(immediate){
+    const kw = kwNode.value.trim();
+    if(!kw || busy){
+      /* busy 期间的新关键词记下来，请求结束后补跑一次 ——
+         否则 Bangumi 8 秒超时窗口内改词，结果永远停在旧词且无提示。 */
+      if(busy && kw && kw !== lastKeyword) pendingKw = kw;
+      return;
+    }
+    if(kw === lastKeyword && !immediate) return;
+    lastKeyword = kw;
+    clearTimeout(timer);
+    busy = true;
+    manualBtn.hidden = true;
+    listNode.innerHTML = Array.from({length:3}).map(() => '<div class="skeleton" style="height:76px"></div>').join("");
+    stNode.textContent = "正在搜索…";
+    let out;
+    try{
+      out = await searchAll(kw);
+    }catch(e){
+      out = { results:[], notices:[], errors:[{name:"搜索", message:String(e && e.message || e)}] };
+    }
+    busy = false;
+    renderResults(out, kw);
+    /* 用户在等待期间又改了词：用最新关键词补跑一次。
+       输入框此刻已不是那个词的话，交给输入防抖自然触发，不在这里抢跑。 */
+    if(pendingKw && pendingKw !== lastKeyword && kwNode.value.trim() === pendingKw){
+      pendingKw = "";
+      doSearch(false);
+    }else{
+      pendingKw = "";
+    }
+  }
+  function renderResults(out, kw){
+    const errList = out.errors || [];
+    if(!out.results.length){
+      listNode.innerHTML =
+        '<div class="state-box">' + ic("empty",40) +
+        "<h2>两个数据源都没有找到「" + esc(kw) + "」</h2>" +
+        "<p>" + esc(errList.map(e => e.name + "：" + e.message).join("；") || "结果为空") + "</p>" +
+        '<div class="row"><button class="btn" type="button" id="s-retry">' + ic("refresh",16) + "重试</button>" +
+        '<button class="btn btn-primary" type="button" id="s-manual2">' + ic("edit",16) + "手动录入</button></div></div>";
+      const r = listNode.querySelector("#s-retry");
+      if(r) r.addEventListener("click", () => { lastKeyword = ""; doSearch(true); });
+      const m = listNode.querySelector("#s-manual2");
+      if(m) m.addEventListener("click", () => { closeModal(); openAnimeForm({ candidate:{ titleCn:kw, source:"manual" } }); });
+      stNode.textContent = errList.length ? "搜索失败：" + errList.map(e => e.message).join("；") + "。可在设置中配置代理，或直接手动录入。" : "没有匹配结果。";
+      manualBtn.hidden = false;
+      return;
+    }
+    stNode.innerHTML = "找到 " + out.results.length + " 条" + ((out.notices||[]).length ? " · " + esc(out.notices.join(" · ")) : "") +
+      (errList.length ? ' · <span class="lock-note">' + esc(errList.map(e => e.name + " " + e.message).join("；")) + "</span>" : "");
+    manualBtn.hidden = false;
+    listNode.innerHTML = out.results.map((r, i) =>
+      '<button class="src-result" type="button" data-i="' + i + '">' +
+        '<span class="src-thumb">' + coverImg(r) + "</span>" +
+        '<span style="min-width:0;flex:1">' +
+          '<b class="truncate" style="display:block;max-width:100%">' + esc(r.titleCn || r.titleOriginal) + "</b>" +
+          '<span class="small muted truncate" style="display:block;max-width:100%">' + esc(r.titleOriginal || "") + "</span>" +
+          '<span class="row small muted">' + esc(String(r.airDate||"").slice(0,4) || "—") +
+            (r.totalEpisodes ? " · " + r.totalEpisodes + " 集" : "") + "</span>" +
+        "</span>" +
+        '<span class="badge badge-src">' + esc(r.sourceLabel) + "</span>" +
+      "</button>").join("");
+    listNode.querySelectorAll("[data-i]").forEach(b => b.addEventListener("click", async () => {
+      const c = out.results[Number(b.dataset.i)];
+      b.disabled = true;
+      const old = b.innerHTML;
+      b.innerHTML = '<span class="spinner"></span><span class="small">抓取详情…</span>';
+      const full = await enrichCandidate(c);
+      closeModal();
+      openAnimeForm({ candidate: full });
+    }));
+  }
+}
+

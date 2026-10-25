@@ -1,0 +1,95 @@
+
+/* ============================================================
+   Anime Rewind・番忆 — 设计令牌层
+   单位基准 4px；对比度 ≥4.5:1
+
+   字体策略：中文正文用系统最优中文字族（自托管字体会让单文件体积
+   膨胀数 MB，且中文字形质量不如系统字体）。西文与数字使用 Outfit
+   / JetBrains Mono 作为「档案馆标签」的声音 —— 数字全部等宽对齐，
+   像机读卡片的字段。绝不以平台系统字充当主字体。
+   ============================================================ */
+:root{
+  /* 间距 */
+  --sp-1:4px; --sp-2:8px; --sp-3:12px; --sp-4:16px; --sp-5:24px; --sp-6:32px; --sp-7:48px; --sp-8:64px;
+  /* 字号 */
+  --fs-xs:12px; --fs-sm:14px; --fs-md:16px; --fs-lg:18px; --fs-xl:20px; --fs-2xl:24px; --fs-3xl:30px; --fs-4xl:36px;
+  /* 圆角：容器柔、内件紧，避免万物同半径 */
+  --r-sm:4px; --r-md:7px; --r-lg:11px; --r-xl:16px; --r-pill:999px;
+  /* 动效：指数减速，不用 linear */
+  --dur-fast:140ms; --dur:260ms; --dur-slow:520ms;
+  --ease:cubic-bezier(.16,1,.3,1);          /* 主曲线：快起慢收 */
+  --ease-out:cubic-bezier(.22,.61,.36,1);
+  /* 布局 */
+  --sidebar-w:236px;
+  --measure:68ch;                            /* 正文行宽上限 */
+  /* 强调色（可被 accent_color 覆盖） */
+  --accent:#22d3ee; --accent-ink:#06232a; --accent-soft:rgba(34,211,238,.16);
+  /* 状态色 */
+  --st-want:#7c93a8; --st-watching:#22c3a6; --st-done:#4caf7d; --st-hold:#e0a020; --st-drop:#e05a5a;
+  /* 语义色 */
+  --danger:#e05a5a; --warn:#e0a020; --ok:#4caf7d;
+  /* 字体：西文 Outfit（人格化标签） + 中文系统最优 + 数字等宽 */
+  --font:"Outfit","PingFang SC","Hiragino Sans GB","Microsoft YaHei","Source Han Sans SC","Noto Sans CJK SC",system-ui,sans-serif;
+  --font-mono:"JetBrains Mono","SF Mono","Cascadia Mono",ui-monospace,Menlo,Consolas,monospace;
+}
+/* 主题：深色（默认）—— 冷灰家族，阴影带蓝夜色相，不用纯黑 */
+[data-theme="dark"]{
+  --bg:#0d1117; --bg-deep:#080b10;
+  --panel:#141a22; --panel-2:#1a222c; --panel-3:#222c38;
+  --text:#e8eef5; --text-2:#b3c0cd; --muted:#8b9aab;
+  --border:#232d3a; --border-2:#33404f;
+  /* 阴影携带背景色相（蓝夜），非纯黑 —— 这是深度系统，不是装饰 */
+  --shadow:0 1px 2px rgba(8,11,16,.5), 0 4px 14px rgba(8,11,16,.42);
+  --shadow-2:0 2px 6px rgba(8,11,16,.55), 0 16px 44px rgba(8,11,16,.5);
+  --hairline:rgba(255,255,255,.055);            /* 发丝线：分隔靠它，不靠边框盒子 */
+  --bg-image:none; --panel-blur:none;
+}
+/* 主题：浅色 —— 同一冷灰家族提亮，保持色温一致 */
+[data-theme="light"]{
+  --bg:#eceff3;
+  --bg-deep:#e3e7ec;
+  --panel:#fbfcfd; --panel-2:#f2f5f8; --panel-3:#e7ebf0;
+  --text:#111820; --text-2:#3a4756; --muted:#5d6b7a;
+  --border:#dbe1e8; --border-2:#bfc9d4;
+  --shadow:0 1px 2px rgba(24,36,52,.06), 0 3px 10px rgba(24,36,52,.07);
+  --shadow-2:0 2px 5px rgba(24,36,52,.08), 0 12px 30px rgba(24,36,52,.12);
+  --hairline:rgba(17,24,32,.07);
+  --accent:#0b7186; --accent-ink:#ffffff; --accent-soft:rgba(11,113,134,.12);
+  /* 浅色主题下强调色/警示色已按 WCAG AA 压暗：与白字对比度 ≥ 4.5:1 */
+  --st-want:#5b708a; --st-watching:#0f8f7a; --st-done:#2f855a; --st-hold:#8a5706; --st-drop:#c33a3a;
+  --danger:#c33a3a; --warn:#8a5706; --ok:#2f855a;
+}
+/* 主题：液态玻璃 —— 真实折射：模糊 + 1px 内高光边，模拟边缘光弯曲 */
+[data-theme="glass"]{
+  --bg:#0f151c;
+  --bg-deep:#0a0e14;
+  --panel:rgba(26,34,44,.66); --panel-2:rgba(34,44,57,.6); --panel-3:rgba(45,57,72,.54);
+  --text:#eaf1f8; --text-2:#c1cfdd; --muted:#9fb0c1;
+  --border:rgba(255,255,255,.11); --border-2:rgba(255,255,255,.2);
+  --shadow:0 1px 2px rgba(6,9,13,.4), 0 6px 20px rgba(6,9,13,.36);
+  --shadow-2:0 2px 8px rgba(6,9,13,.45), 0 20px 52px rgba(6,9,13,.44);
+  --hairline:rgba(255,255,255,.09);
+  /* 内侧 1px 高光 = 玻璃边缘折射的关键细节 */
+  --glass-edge:inset 0 1px 0 rgba(255,255,255,.13), inset 0 -1px 0 rgba(255,255,255,.05);
+  --panel-blur:blur(20px) saturate(150%);
+}
+[data-theme="dark"]{ --glass-edge:none; }
+[data-theme="light"]{ --glass-edge:none; }
+/* 强调色预设（4+2） */
+[data-accent="cyan"]{ --accent:#22d3ee; --accent-ink:#06232a; --accent-soft:rgba(34,211,238,.16); }
+[data-accent="amber"]{ --accent:#f0a63c; --accent-ink:#2b1a02; --accent-soft:rgba(240,166,60,.16); }
+[data-accent="magenta"]{ --accent:#ef6ba8; --accent-ink:#2b0715; --accent-soft:rgba(239,107,168,.16); }
+[data-accent="emerald"]{ --accent:#3ddc97; --accent-ink:#04261a; --accent-soft:rgba(61,220,151,.16); }
+[data-accent="violet"]{ --accent:#a78bfa; --accent-ink:#1b1233; --accent-soft:rgba(167,139,250,.16); }
+[data-accent="red"]{ --accent:#f2776b; --accent-ink:#2b0b08; --accent-soft:rgba(242,119,107,.16); }
+[data-theme="light"][data-accent="cyan"]{ --accent:#0b7186; --accent-ink:#fff; --accent-soft:rgba(11,113,134,.12); }
+[data-theme="light"][data-accent="amber"]{ --accent:#a2660a; --accent-ink:#fff; --accent-soft:rgba(162,102,10,.12); }
+[data-theme="light"][data-accent="magenta"]{ --accent:#b63f78; --accent-ink:#fff; --accent-soft:rgba(182,63,120,.12); }
+[data-theme="light"][data-accent="emerald"]{ --accent:#1d7a53; --accent-ink:#fff; --accent-soft:rgba(29,122,83,.12); }
+[data-theme="light"][data-accent="violet"]{ --accent:#6d4ad1; --accent-ink:#fff; --accent-soft:rgba(109,74,209,.12); }
+[data-theme="light"][data-accent="red"]{ --accent:#c33a2f; --accent-ink:#fff; --accent-soft:rgba(195,58,47,.12); }
+
+/* 紧凑模式 */
+[data-density="compact"]{ --card-min:156px; --row-py:6px; --card-p:10px; }
+[data-density="cozy"]{ --card-min:196px; --row-py:10px; --card-p:14px; }
+

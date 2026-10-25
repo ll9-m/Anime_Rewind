@@ -82,7 +82,9 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
     if(i < 0 || j < 0) throw new Error("无法从应用中提取片段: " + startMark);
     return appHtml.slice(i, j);
   };
+  /* normalizeStreamURL/hostOf 已下沉到常量模块（2026-10 模块化），两段分别抓取后拼接 */
   const seasonSrc =
+    grab("function hostOf", "/* ====") + "\n" +
     grab("const EMBED_RULES = [", "/* 打开外部播放器");
   const httpEval = async (expr) => {
     await send("Page.navigate", { url:"https://www.bilibili.com/" });

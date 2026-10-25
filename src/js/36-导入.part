@@ -1,0 +1,423 @@
+/* ============================================================
+   25. 导入（§8 校验 / 预览报告 / 三种去重模式）
+   ============================================================ */
+function parseJSONWithPosition(text){
+  try{ return { ok:true, data: JSON.parse(text) }; }
+  catch(e){
+    const msg = String(e.message || e);
+    const posMatch = /position (\d+)/i.exec(msg);
+    let line = null, col = null;
+    if(posMatch){
+      const pos = Number(posMatch[1]);
+      const before = text.slice(0, pos);
+      line = before.split("\n").length;
+      col = pos - before.lastIndexOf("\n");
+    }
+    return { ok:false, error: msg, line, col };
+  }
+}
+function importWarningsFor(raw, index){
+  const warns = [];
+  if(!raw.titleCn || !String(raw.titleCn).trim()) return { skip:true, warns:["第 " + index + " 条：缺少 titleCn，已跳过"] };
+  if(raw.totalEpisodes != null && raw.watchedEpisodes != null && Number(raw.watchedEpisodes) > Number(raw.totalEpisodes)){
+    warns.push("《" + raw.titleCn + "》：已看集数 " + raw.watchedEpisodes + " 大于总集数 " + raw.totalEpisodes);
+  }
+  ["myScore","communityScore"].forEach(f => {
+    if(raw[f] != null && (Number(raw[f]) < 0 || Number(raw[f]) > 10)) warns.push("《" + raw.titleCn + "》：" + f + " = " + raw[f] + " 超出 0–10");
+  });
+  if(raw.status && !statusByName(raw.status)) warns.push("《" + raw.titleCn + "》：状态「" + raw.status + "」不存在，已归入「想看」");
+  if(raw.watchChannel && CHANNELS.indexOf(raw.watchChannel) < 0) warns.push("《" + raw.titleCn + "》：观看渠道「" + raw.watchChannel + "」非法，已置空");
+  if(raw.watchGrade && GRADES.indexOf(raw.watchGrade) < 0) warns.push("《" + raw.titleCn + "》：年级「" + raw.watchGrade + "」非标准枚举，按手填保留");
+  return { skip:false, warns };
+}
+function rawToDraft(raw){
+  const st = statusByName(raw.status) || statusById("st_want");
+  const an = draftFromCandidate(null, null);
+  an.titleCn = String(raw.titleCn).trim();
+  an.titleOriginal = String(raw.titleOriginal || "").trim() || null;
+  an.aliases = Array.isArray(raw.aliases) ? raw.aliases.map(String) : [];
+  if(raw.coverUrl) an.coverUrl = String(raw.coverUrl);
+  /* 本地化的封面随记录走：备份里带 coverData 就搬过来（档案换机不褪色） */
+  if(typeof raw.coverData === "string" && /^data:image\//i.test(raw.coverData)) an.coverData = raw.coverData;
+  an.airDate = validateDateInput(raw.airDate) || "";
+  an.totalEpisodes = numOrNull(raw.totalEpisodes);
+  an.durationMinutes = numOrNull(raw.durationMinutes);
+  an.genres = Array.isArray(raw.genres) ? raw.genres.map(String) : [];
+  an.studios = Array.isArray(raw.studios) ? raw.studios.map(String) : [];
+  an.summary = String(raw.summary || "");
+  an.communityScore = numOrNull(raw.communityScore);
+  /* statusId 优先取记录里的真字段（raw.status 按名称兜底，兼容外部工具的备份）。
+     备份里指向自定义状态的 id 由 analyzeImport 的 statusIdMap 重映射后覆盖。 */
+  an.statusId = (raw.statusId && statusById(raw.statusId)) ? raw.statusId : (st ? st.id : "st_want");
+  an.watchedEpisodes = Number(raw.watchedEpisodes) || 0;
+  an.myScore = numOrNull(clampScore(raw.myScore));
+  an.watchYear = numOrNull(raw.watchYear);
+  an.watchGrade = raw.watchGrade || null;
+  an.watchChannel = CHANNELS.indexOf(raw.watchChannel) >= 0 ? raw.watchChannel : null;
+  an.rewatchCount = Number(raw.rewatchCount) || 0;
+  an.favorite = !!raw.favorite;
+  an.masterpiece = !!raw.masterpiece;
+  an.personalTags = Array.isArray(raw.personalTags) ? raw.personalTags.map(String) : [];
+  /* seriesId 由 analyzeImport 按名称重映射后覆盖，这里只兜底成默认系列，
+     避免 undefined 流进库里（boot 的孤儿清理只处理字符串）。 */
+  an.seriesId = DEFAULT_SERIES_ID;
+  an.source = raw.source || "manual";
+  if(raw.sourceIds) an.sourceIds = raw.sourceIds;
+  /* 播放源必须随记录一起迁移 —— 导出端是整记录原样 dump，
+     这里丢了 sources/activeSourceId/旧片源字段，
+     「备份→恢复」就会静默清空整份线路台账（P0）。
+     normalizeSource 会补齐缺省字段并保留原 id。 */
+  an.sources = Array.isArray(raw.sources)
+    ? raw.sources.map((s, i) => normalizeSource(s, i, new Date().toISOString())).filter(Boolean)
+    : [];
+  /* 搜索型片源不能当当前线路（与 addSourceFromInput/setActiveSource 同一不变量） */
+  an.activeSourceId = (typeof raw.activeSourceId === "string" &&
+    an.sources.some(s => s.id === raw.activeSourceId && s.kind !== "search")) ? raw.activeSourceId : "";
+  /* 旧片源字段原样保留：boot 的 migrateSources 靠 streamUrl 迁移老备份 */
+  an.streamUrl = typeof raw.streamUrl === "string" ? raw.streamUrl : "";
+  an.streamEp = (raw.streamEp == null || raw.streamEp === "") ? null : Number(raw.streamEp) || null;
+  an.streamUrlAt = typeof raw.streamUrlAt === "string" ? raw.streamUrlAt : "";
+  an.reviews = (Array.isArray(raw.reviews) ? raw.reviews : []).map(r => ({
+    id: r.id || uid("rv"), date: validateDateInput(r.date) || todayISO(),
+    round: Number(r.round) || 1, content: String(r.content || ""), createdAt: r.createdAt || new Date().toISOString()
+  }));
+  an.reviews.sort((x,y) => String(x.date).localeCompare(String(y.date)));
+  const maxRound = an.reviews.reduce((m, r) => Math.max(m, Number(r.round) || 1), 0);
+  an.rewatchCount = Math.max(an.rewatchCount, Math.max(0, maxRound - 1));
+  if(raw.createdAt) an.createdAt = raw.createdAt;
+  if(raw.updatedAt) an.updatedAt = raw.updatedAt;
+  return an;
+}
+function clampScore(v){
+  const n = numOrNull(v);
+  if(n == null) return null;
+  return n < 0 ? 0 : (n > 10 ? 10 : Math.round(n*2)/2);
+}
+function analyzeImport(payload){
+  const result = { add:[], dup:[], suspect:[], quoteAdd:[], quoteSkip:[], warnings:[], statusAdd:[], seriesAdd:[], settingPatch:{} };
+
+  /* 系列先于作品处理：作品里的 seriesId 指向的是「备份那台机器」的 id，
+     直接搬过来在本机一条都匹配不上，所有作品都会掉回默认系列。
+     正确做法是按名称在本机找同名系列，命中则复用其 id，
+     未命中则新建并记下「旧 id → 新 id」的映射。 */
+  const seriesIdMap = {};
+  const rawSeries = Array.isArray(payload.series) ? payload.series : [];
+  for(const s of rawSeries){
+    if(!s || !String(s.name || "").trim()) continue;
+    const nm = String(s.name).trim().slice(0, 30);
+    const local = state.series.find(x => normalize(x.name) === normalize(nm));
+    if(local){ if(s.id) seriesIdMap[s.id] = local.id; continue; }
+    const rec = { id: uid("se"), name:nm, createdAt:s.createdAt || new Date().toISOString(), schemaVersion:SCHEMA_VERSION };
+    result.seriesAdd.push(rec);
+    if(s.id) seriesIdMap[s.id] = rec.id;
+  }
+  if(result.seriesAdd.length){
+    result.warnings.push("将新建 " + result.seriesAdd.length + " 个系列：" +
+      result.seriesAdd.map(s => s.name).join("、"));
+  }
+  if(rawSeries.length && !Object.keys(seriesIdMap).length){
+    result.warnings.push("备份里的系列清单无法识别，这些作品会归入「默认系列」。");
+  }
+
+  /* 状态也先于作品处理：作品 statusId 指向「备份那台机器」的状态 id，
+     自定义状态在本机要按名称复用或新建后重映射（与 seriesIdMap 同理），
+     否则整库状态会被静默归零成「想看」。 */
+  const rawStatuses = Array.isArray(payload.statuses) ? payload.statuses : [];
+  const statusIdMap = {};
+  rawStatuses.forEach(s => {
+    if(!s || !s.name) return;
+    const exist = state.statuses.find(x => normalize(x.name) === normalize(s.name));
+    if(exist){ if(s.id) statusIdMap[s.id] = exist.id; return; }
+    const rec = { id: uid("st"), name:String(s.name).slice(0,20), color: /^#[0-9a-fA-F]{6}$/.test(s.color||"") ? s.color : "#8AB4F8",
+      matchType: s.matchType === "progress" ? "progress" : "manual",
+      progressMin: s.matchType === "progress" ? clampNum(s.progressMin == null ? 0 : s.progressMin, 0, 100) : null,
+      progressMax: s.matchType === "progress" ? clampNum(s.progressMax == null ? 100 : s.progressMax, 0, 100) : null,
+      isSystem:false, schemaVersion:SCHEMA_VERSION };
+    result.statusAdd.push(rec);
+    if(s.id) statusIdMap[s.id] = rec.id;
+  });
+
+  const rawAnime = Array.isArray(payload.anime) ? payload.anime : [];
+  rawAnime.forEach((raw, i) => {
+    const chk = importWarningsFor(raw, i+1);
+    result.warnings = result.warnings.concat(chk.warns);
+    if(chk.skip) return;
+    const draft = rawToDraft(raw);
+    // 按名称重映射到本机 id；映射不到（老备份无系列清单）就落默认系列
+    draft.seriesId = (raw.seriesId && seriesIdMap[raw.seriesId]) || DEFAULT_SERIES_ID;
+    // 状态 id 同理重映射：备份的自定义状态此刻已拿到本机新 id
+    if(raw.statusId && statusIdMap[raw.statusId]) draft.statusId = statusIdMap[raw.statusId];
+    const d = detectDuplicate(draft);
+    if(!d) result.add.push(draft);
+    else if(d.level === "L1" || d.level === "L2") result.dup.push({ draft, level:d.level, match:d.match });
+    else result.suspect.push({ draft, level:d.level, match:d.match });
+  });
+  const rawQuotes = Array.isArray(payload.quotes) ? payload.quotes : [];
+  rawQuotes.forEach((q, i) => {
+    if(!q || !q.text || !String(q.text).trim() || !q.sourceAnimeTitle){ result.warnings.push("第 " + (i+1) + " 条语录：正文或出处缺失，已跳过"); result.quoteSkip.push({ q, index:i+1 }); return; }
+    const norm = normalize(q.text);
+    const exist = state.quotes.find(x => normalize(x.text) === norm);
+    if(exist) result.quoteSkip.push({ q, index:i+1, exist });
+    else result.quoteAdd.push({ id: uid("q"), text:String(q.text).slice(0,200), sourceAnimeTitle:String(q.sourceAnimeTitle), character: q.character ? String(q.character).slice(0,50) : null, isBuiltin:false, favorite:!!q.favorite, schemaVersion:SCHEMA_VERSION, createdAt:new Date().toISOString() });
+  });
+  if(payload.settings && typeof payload.settings === "object"){
+    Object.keys(DEFAULT_SETTINGS).forEach(k => {
+      if(payload.settings[k] !== undefined) result.settingPatch[k] = payload.settings[k];
+    });
+    /* 自定义荣誉不在 DEFAULT_SETTINGS 里，但属于用户数据：备份里有就带回来
+       （配套的荣誉配图随 payload.assets 一起迁移，见 applyImport）。 */
+    if(Array.isArray(payload.settings.custom_honors)) result.settingPatch.custom_honors = payload.settings.custom_honors;
+  }
+  return result;
+}
+async function applyImport(analysis, mode, opts){
+  opts = opts || {};
+  const decisions = opts.decisions || {};
+  let added = 0, skipped = 0, merged = 0;
+  /* 系列必须先落库：作品的 seriesId 已经被映射到这些新 id 上，
+     顺序反了会写出一批指向不存在系列的记录（boot 的孤儿清理会兜底，
+     但那意味着用户刚导入完series 列表是空的，得重开页面才恢复）。 */
+  for(const s of analysis.seriesAdd){ await saveSeries(s); }
+  /* 落库走静默路径（不 touch）：备份记录自带 createdAt/updatedAt，
+     saveAnime 会把它们刷成导入时刻，破坏「最近更新」排序和合并优先级。 */
+  for(const draft of analysis.add){
+    upsertLocal(state.anime, draft);
+    await persistAnimeQuiet(draft);
+    added++;
+  }
+  for(const item of analysis.dup){
+    if(mode === "skip") { skipped++; continue; }
+    if(mode === "overwrite"){
+      const over = Object.assign({}, item.draft, { id: item.match.id, createdAt: item.match.createdAt, reviews: mergeUniqueReviews(item.match.reviews, item.draft.reviews), sourceIds: Object.assign({}, item.match.sourceIds, item.draft.sourceIds) });
+      upsertLocal(state.anime, over);
+      await persistAnimeQuiet(over);
+      added++;
+    } else {
+      const mergedRec = mergeRecords(item.match, item.draft, {});
+      upsertLocal(state.anime, mergedRec);
+      await persistAnimeQuiet(mergedRec);
+      merged++;
+    }
+  }
+  for(const item of analysis.suspect){
+    const decision = decisions[item.draft.id] || (mode === "skip" ? "skip" : (mode === "overwrite" ? "new" : "skip"));
+    if(decision === "merge"){
+      const mergedRec = mergeRecords(item.match, item.draft, {});
+      upsertLocal(state.anime, mergedRec);
+      await persistAnimeQuiet(mergedRec);
+      merged++;
+    } else if(decision === "new"){
+      upsertLocal(state.anime, item.draft);
+      await persistAnimeQuiet(item.draft);
+      added++;
+    } else skipped++;
+  }
+  for(const q of analysis.quoteAdd){ await saveQuote(q); }
+  for(const qs of analysis.quoteSkip){
+    if(qs.exist && qs.q && qs.q.favorite && !qs.exist.favorite){
+      qs.exist.favorite = true;
+      await saveQuote(qs.exist);
+    }
+  }
+  for(const s of analysis.statusAdd){ await saveStatus(s); }
+  // 背景图：备份里带图时，key 必须跟着图一起迁移。
+  // 旧代码把图存进一个全新的 "bg_<时间戳>"，却让 settings.bg_image 继续指着
+  // 备份里的旧 key —— 那个 key 在本机根本不存在，于是导入后背景图必然失效，
+  // 而且连同 settingPatch 里的 bg_image 一起变成一颗定时炸弹：
+  // 用户下次打开页面读到空 asset，却一直以为「导入成功过」。
+  if(payloadBg && /^data:image\//i.test(payloadBg)){
+    const key = "bg_" + Date.now().toString(36);
+    try{
+      const packed = await compressBgImage(payloadBg);
+      await Repo.setAsset(key, packed);
+      const back = await Repo.getAsset(key);
+      if(!back || typeof back !== "string") throw new Error("背景图写入后读不回来");
+      if(opts.applySettings !== false){
+        if(settings.bg_image && settings.bg_image !== key){ try{ await Repo.delAsset(settings.bg_image); }catch(e){} }
+        settings.bg_image = key;
+        saveSettings();
+      }
+      bgImageUrl = back;
+    }catch(e){
+      // 图没迁成功就别留悬空 key，否则设置指向一张不存在的图
+      if(opts.applySettings !== false){ settings.bg_image = ""; saveSettings(); }
+      bgImageUrl = "";
+      analysis.warnings.push("背景图未能导入：" + (e.message === "QUOTA" ? "本机存储空间不足" : e.message));
+    }
+  } else if(payloadBg){
+    analysis.warnings.push("背景图数据不是有效的图片，已跳过");
+    if(opts.applySettings !== false && settings.bg_image){ settings.bg_image = ""; saveSettings(); }
+    bgImageUrl = "";
+  }
+  /* 荣誉配图等 assets 必须先于设置落库：
+     custom_honors 里的 art 键指向这些 asset，顺序反了图全部落空。 */
+  const rawAssets = Array.isArray(payloadAssets) ? payloadAssets : [];
+  for(const as of rawAssets){
+    if(!as || !as.key) continue;
+    try{ await Repo.setAsset(String(as.key), as.value); }
+    catch(e){ analysis.warnings.push("资源「" + String(as.key) + "」未能导入：" + (e.message === "QUOTA" ? "本机存储空间不足" : (e && e.message) || e)); }
+  }
+  if(opts.applySettings !== false && Object.keys(analysis.settingPatch).length){
+    settings = Object.assign({}, DEFAULT_SETTINGS, Object.assign({}, settings, analysis.settingPatch));
+    if(analysis.settingPatch.card_fields) settings.card_fields = Object.assign({}, DEFAULT_SETTINGS.card_fields, analysis.settingPatch.card_fields);
+    // settingPatch 可能带着备份机器上的旧 bg_image，而本机并没有那张图。
+    // 只有当 payloadBg 没能把 key 迁过来时才允许保留，否则一律以本机实际存的为准。
+    if(!(payloadBg && bgImageUrl) && !bgRenderable()) settings.bg_image = "";
+    saveSettings();
+    await refreshBgImage();
+    applyAppearance();
+  }
+  return { added, skipped, merged, quotes: analysis.quoteAdd.length, quoteSkip: analysis.quoteSkip.length, statuses: analysis.statusAdd.length, series: analysis.seriesAdd.length, warnings: analysis.warnings };
+}
+let payloadBg = null;
+let payloadAssets = null;
+function mergeUniqueReviews(a, b){
+  const seen = new Set(), out = [];
+  (a || []).concat(b || []).forEach(r => {
+    /* 与 mergeRecords 同一规则：round 进 key，空感想的不同轮次不会互相误杀 */
+    const k = normalize(r.date) + "|" + String(Number(r.round) || 1) + "|" + normalize(r.content);
+    if(seen.has(k)) return;
+    seen.add(k); out.push(r);
+  });
+  return out.sort((x,y) => String(y.date).localeCompare(String(x.date)));
+}
+function openImportDialog(){
+  let file = null, analysis = null, mode = "skip";
+  const root = openModal({
+    title:"导入 JSON",
+    wide:true,
+    body:
+      '<div class="col mb-3">' +
+        '<div class="field"><label for="imp-file">选择备份文件</label>' +
+          '<input class="input" id="imp-file" type="file" accept="application/json,.json"></div>' +
+        '<div class="field"><label>去重模式</label>' +
+          '<div class="row gap-3" style="flex-wrap:wrap">' +
+            ["skip:跳过重复（默认）","merge:智能合并","overwrite:覆盖导入"].map((opt, i) => {
+              const [val, label] = opt.split(":");
+              return '<label class="checkline"><input type="radio" name="impmode" value="' + val + '"' + (i === 0 ? " checked" : "") + "><span>" + label + "</span></label>";
+            }).join("") +
+          "</div></div>" +
+        '<p class="hint">导入前会展示预览报告，确认后才会写入。</p>' +
+      "</div>" +
+      '<div id="imp-preview"><div class="small muted">选择文件后显示预览报告。</div></div>',
+    footer: (f) => {
+      f.innerHTML = '<span class="hint" id="imp-hint"></span><div class="grow"></div>' +
+        '<button class="btn" type="button" data-close="1">取消</button>' +
+        '<button class="btn btn-primary" type="button" id="imp-run" disabled>执行导入</button>';
+      f.querySelector("#imp-run").addEventListener("click", onRun);
+    }
+  });
+  const fileInput = root.querySelector("#imp-file");
+  const preview = root.querySelector("#imp-preview");
+  const runBtn = root.querySelector("#imp-run");
+  const hint = root.querySelector("#imp-hint");
+  fileInput.addEventListener("change", async () => {
+    file = fileInput.files && fileInput.files[0];
+    if(!file) return;
+    const text = await file.text();
+    const parsed = parseJSONWithPosition(text);
+    if(!parsed.ok){
+      preview.innerHTML = '<div class="state-box">' + ic("warning",40) + "<h2>文件无法解析</h2>" +
+        "<p>" + esc(parsed.error) + (parsed.line ? "（第 " + parsed.line + " 行第 " + parsed.col + " 个字符附近）" : "") + "</p>" +
+        "<p class=\"small\">整批不写入任何数据。</p></div>";
+      runBtn.disabled = true;
+      return;
+    }
+    const p = parsed.data;
+    if(!p || typeof p !== "object" || !p.app){
+      preview.innerHTML = '<div class="state-box">' + ic("warning",40) + "<h2>缺少 app 标识</h2>" +
+        "<p>顶层需要 <code>app: \"anime-rewind\"</code>，当前文件无法识别为番忆备份。</p>" +
+        "<p class=\"small\">整批不写入任何数据。</p></div>";
+      runBtn.disabled = true;
+      return;
+    }
+    if(String(p.app) !== APP_KEY){
+      const cont = await confirmDialog({
+        title:"文件标识不匹配",
+        html:"该文件的 app 标识是 <b>" + esc(String(p.app)) + "</b>，不是当前版本期望的 <b>" + APP_KEY + "</b>。<br>继续导入可能结构不兼容，确定要尝试吗？",
+        okText:"仍要导入"
+      });
+      if(!cont){ hint.textContent = "已取消"; return; }
+    }
+    /* schemaVersion 只警告不拦截：新版本备份导入旧版本应用时，
+       未知的字段/语义会被静默丢掉，用户至少该被告知这件事。 */
+    if(p.schemaVersion != null && Number(p.schemaVersion) > Number(SCHEMA_VERSION)){
+      const cont = await confirmDialog({
+        title:"备份版本较新",
+        html:"该备份的 schemaVersion 是 <b>" + esc(String(p.schemaVersion)) + "</b>，当前应用是 <b>" + SCHEMA_VERSION + "</b>。<br>新版本特有的字段可能无法导入，确定要尝试吗？",
+        okText:"仍要导入"
+      });
+      if(!cont){ hint.textContent = "已取消"; return; }
+    }
+    payloadBg = (p.backgroundImage && p.backgroundImage.dataUrl) ? p.backgroundImage.dataUrl : null;
+    payloadAssets = Array.isArray(p.assets) ? p.assets : null;
+    analysis = analyzeImport(p);
+    mode = (Array.from(root.querySelectorAll("input[name=impmode]")).find(r => r.checked) || {}).value || "skip";
+    renderPreview();
+    runBtn.disabled = false;
+  });
+  root.querySelectorAll("input[name=impmode]").forEach(r => r.addEventListener("change", () => {
+    mode = r.value;
+    if(analysis) renderPreview();
+  }));
+  function renderPreview(){
+    const a = analysis;
+    let rows = "";
+    if(a.suspect.length){
+      rows += '<div class="sec-title">' + ic("warning",16) + "<span>疑似重复：" + a.suspect.length + " 部</span></div>";
+      rows += '<div class="report-list scroll">' + a.suspect.map((item, i) =>
+        '<li><span class="truncate" style="flex:1">《' + esc(item.draft.titleCn) + "》 ≈ 《" + esc(item.match.titleCn) + "》</span>" +
+        '<div class="row">' +
+          ['<label class="checkline small"><input type="radio" name="dec_' + i + '" value="merge"' + (mode === "merge" ? " checked" : (mode === "skip" ? "" : " checked")) + "><span>合并</span></label>",
+           '<label class="checkline small"><input type="radio" name="dec_' + i + '" value="new"' + (mode === "overwrite" ? " checked" : "") + "><span>新建</span></label>",
+           '<label class="checkline small"><input type="radio" name="dec_' + i + '" value="skip"' + (mode === "skip" ? " checked" : "") + "><span>跳过</span></label>"].join("") +
+        "</div></li>").join("") + "</div>";
+    }
+    if(a.warnings.length){
+      rows += '<div class="sec-title mt-3">' + ic("info",16) + "<span>字段警告：" + a.warnings.length + " 条</span></div>" +
+        '<details><summary class="hint">展开查看明细</summary><div class="report-list scroll">' +
+        a.warnings.map(w => '<li>' + ic("warning",12) + '<span class="truncate">' + esc(w) + "</span></li>").join("") + "</div></details>";
+    }
+    preview.innerHTML =
+      '<div class="import-report">' +
+        '<div class="row gap-3" style="flex-wrap:wrap">' +
+          '<span class="chip chip-on">新增 ' + a.add.length + " 部</span>" +
+          '<span class="chip">重复 ' + a.dup.length + " 部</span>" +
+          '<span class="chip">疑似 ' + a.suspect.length + " 部</span>" +
+          '<span class="chip">语录新增/跳过 ' + a.quoteAdd.length + " / " + a.quoteSkip.length + " 条</span>" +
+          '<span class="chip">自定义状态 ' + a.statusAdd.length + " 个</span>" +
+          (a.seriesAdd.length ? '<span class="chip">新建系列 ' + a.seriesAdd.length + " 个</span>" : "") +
+          '<span class="chip">字段警告 ' + a.warnings.length + " 条</span>" +
+        "</div>" + rows +
+      "</div>";
+  }
+  async function onRun(){
+    if(!analysis) return;
+    const decisions = {};
+    analysis.suspect.forEach((item, i) => {
+      const picked = root.querySelector('input[name="dec_' + i + '"]:checked');
+      decisions[item.draft.id] = picked ? picked.value : (mode === "merge" ? "merge" : (mode === "overwrite" ? "new" : "skip"));
+    });
+    runBtn.disabled = true;
+    const res = await applyImport(analysis, mode, { decisions });
+    closeModal();
+    buildNav();
+    refreshAll();
+    toast("导入完成：新增 " + res.added + " 部、合并 " + res.merged + " 部、跳过 " + res.skipped + " 部、语录 +" + res.quotes, "ok", 4200);
+    openModal({
+      title:"导入结果", narrow:true,
+      body:'<div class="col">' +
+        "<div><b>新增</b> " + res.added + " 部</div>" +
+        "<div><b>合并</b> " + res.merged + " 部</div>" +
+        "<div><b>跳过</b> " + res.skipped + " 部</div>" +
+        "<div><b>语录</b> 新增 " + res.quotes + " 条 / 跳过 " + res.quoteSkip + " 条</div>" +
+        "<div><b>自定义状态</b> " + res.statuses + " 个</div>" +
+        (res.series ? "<div><b>新建系列</b> " + res.series + " 个</div>" : "") +
+        (res.warnings.length ? '<details><summary class="hint">字段警告 ' + res.warnings.length + " 条</summary>" +
+          '<div class="report-list scroll mt-3" style="max-height:200px">' + res.warnings.map(w => "<li>" + esc(w) + "</li>").join("") + "</div></details>" : "") +
+      "</div>",
+      footer: (f) => { f.innerHTML = '<div class="grow"></div><button class="btn btn-primary" type="button" data-close="1">知道了</button>'; }
+    });
+  }
+}
+

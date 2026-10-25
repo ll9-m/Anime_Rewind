@@ -1,0 +1,551 @@
+/* ============================================================
+   10. 添加 / 编辑作品的通用表单
+   ============================================================ */
+function draftFromCandidate(c, an){
+  return Object.assign({
+    id: uid("an"),
+    source: "manual",
+    sourceIds: {},
+    titleCn: "", titleOriginal: "", aliases: [], coverUrl: "",
+    airDate: "", totalEpisodes: null, genres: [], studios: [], summary: "",
+    communityScore: null, durationMinutes: null, fetchedAt: new Date().toISOString(),
+    statusId: "st_want", watchedEpisodes: 0, myScore: null, watchYear: null,
+    watchGrade: null, watchChannel: null, rewatchCount: 0,
+    /* 系列：空串 = 未归类（UI 显示「默认系列」）。
+       一部动画常有多季/剧场版，靠这个字段把它们聚在一起。 */
+    seriesId: DEFAULT_SERIES_ID,
+    favorite: false, masterpiece: false, personalTags: [], reviews: [],
+    /* 在线播放：按作品独立保存多条线路，而不是全局一份。
+       原先是 settings.stream_url —— 一部番的片源会覆盖另一部，
+       「不用每次都重新输入」这个需求等于没实现。
+       sources 是多线路数组（旧数据由 migrateSources 迁来），
+       activeSourceId 记「上次用的是哪条」，选源算法靠它做记忆优先。 */
+    sources: [], activeSourceId: "",
+    /* 旧字段保留在默认对象里：migrateSources 要读它们做迁移，
+       且用户从旧备份导入时这两个字段会被原样带进来。 */
+    streamUrl: "", streamEp: null, streamUrlAt: "",
+    createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+    locked: {}, pending: {}, schemaVersion: SCHEMA_VERSION
+  }, an || {}, c || {});
+}
+
+function gradeOptionsHTML(sel){
+  let opts = '<option value="">未填写</option>';
+  GRADES.forEach(g => { opts += '<option value="' + attr(g) + '"' + (sel === g ? " selected" : "") + ">" + esc(g) + "</option>"; });
+  if(sel && GRADES.indexOf(sel) < 0) opts += '<option value="' + attr(sel) + '" selected>' + esc(sel) + "（自定义）</option>";
+  return opts;
+}
+function statusOptionsHTML(sel, includeNone){
+  let opts = includeNone ? '<option value="">未设定</option>' : "";
+  state.statuses.forEach(s => { opts += '<option value="' + attr(s.id) + '"' + (sel === s.id ? " selected" : "") + ">" + esc(s.name) + "</option>"; });
+  return opts;
+}
+function channelOptionsHTML(sel){
+  let opts = '<option value="">未填写</option>';
+  CHANNELS.forEach(c => { opts += '<option value="' + attr(c) + '"' + (sel === c ? " selected" : "") + ">" + esc(c) + "</option>"; });
+  return opts;
+}
+function arrToStr(a){ return Array.isArray(a) ? a.join("、") : (a || ""); }
+function strToArr(s){ return String(s || "").split(/[、,，;；]/).map(x => x.trim()).filter(Boolean); }
+
+/* 封面兜底占位图（内联 SVG / 文字块，带片名首字）
+   图片 error 事件不冒泡，统一在捕获阶段处理，兼容动态插入的封面 */
+/* 封面统一出口：本地缓存优先，远程地址兜底。
+   所有渲染点都必须走这里 —— 直接读 coverUrl 会让本地化的封面永远不显示。 */
+function coverSrcOf(a){
+  return (a && a.coverData) || (a && a.coverUrl) || "";
+}
+function coverImg(a, cls){
+  const url = coverSrcOf(a);
+  const name = (a && (a.titleCn || a.titleOriginal)) || "?";
+  const first = esc(String(name).trim().charAt(0) || "?");
+  if(!url) return '<div class="placeholder" role="img" aria-label="' + attr(name) + ' 封面缺失">' + first + "</div>";
+  return '<img src="' + attr(url) + '" alt="' + attr(name) + ' 封面" loading="lazy"' + (cls ? ' class="' + attr(cls) + '"' : "") + ">";
+}
+function coverThumb(a){
+  const url = coverSrcOf(a);
+  const name = (a && (a.titleCn || a.titleOriginal)) || "?";
+  if(!url) return '<div class="placeholder" style="font-size:14px" role="img" aria-label="封面缺失">' + esc(String(name).trim().charAt(0) || "?") + "</div>";
+  return '<img src="' + attr(url) + '" alt="' + attr(name) + ' 封面" loading="lazy">';
+}
+function installImageFallback(){
+  document.addEventListener("error", (e) => {
+    const t = e.target;
+    if(!t || t.tagName !== "IMG") return;
+    if(t.dataset.fallbackDone === "1") return;
+    t.dataset.fallbackDone = "1";
+    const name = (t.getAttribute("alt") || "?").replace(/\s*封面$/, "");
+    const ph = document.createElement("div");
+    ph.className = t.classList.contains("thumb-img") ? "placeholder" : "placeholder";
+    ph.setAttribute("role", "img");
+    ph.setAttribute("aria-label", name + " 封面缺失");
+    ph.textContent = String(name).trim().charAt(0) || "?";
+    if(t.parentNode) t.parentNode.replaceChild(ph, t);
+  }, true);
+}
+
+function animeFormBody(an){
+  return '' +
+  '<div class="form-grid">' +
+    '<div class="field full"><label for="f-titleCn">中文名 / 常用名 *</label>' +
+      '<input class="input" id="f-titleCn" data-f="titleCn" data-autofocus value="' + attr(an.titleCn || "") + '" maxlength="120" required></div>' +
+    '<div class="field"><label for="f-titleOriginal">原名</label>' +
+      '<input class="input" id="f-titleOriginal" data-f="titleOriginal" value="' + attr(an.titleOriginal || "") + '" maxlength="160"></div>' +
+    '<div class="field"><label for="f-aliases">别名（用 、 分隔）</label>' +
+      '<input class="input" id="f-aliases" data-f="aliases" value="' + attr(arrToStr(an.aliases)) + '"></div>' +
+    '<div class="field"><label for="f-coverUrl">封面图 URL</label>' +
+      '<input class="input" id="f-coverUrl" data-f="coverUrl" value="' + attr(an.coverUrl || "") + '" placeholder="https://…"></div>' +
+    '<div class="field"><label for="f-coverFile">或上传本地封面</label>' +
+      '<input class="input" id="f-coverFile" type="file" accept="image/*"></div>' +
+    '<div class="field"><label for="f-airDate">首播日期</label>' +
+      '<input class="input" id="f-airDate" data-f="airDate" value="' + attr(an.airDate || "") + '" placeholder="YYYY / YYYY-MM / YYYY-MM-DD"></div>' +
+    '<div class="field"><label for="f-totalEpisodes">总集数</label>' +
+      '<input class="input" id="f-totalEpisodes" data-f="totalEpisodes" type="number" min="0" step="1" value="' + (an.totalEpisodes == null ? "" : an.totalEpisodes) + '"></div>' +
+    '<div class="field"><label for="f-communityScore">社区评分（10 分制）</label>' +
+      '<input class="input" id="f-communityScore" data-f="communityScore" type="number" min="0" max="10" step="0.1" value="' + (an.communityScore == null ? "" : an.communityScore) + '"></div>' +
+    '<div class="field"><label for="f-durationMinutes">单部片长（分钟，剧场版用）</label>' +
+      '<input class="input" id="f-durationMinutes" data-f="durationMinutes" type="number" min="0" step="1" value="' + (an.durationMinutes == null ? "" : an.durationMinutes) + '"></div>' +
+    '<div class="field"><label for="f-studios">制作公司（、分隔）</label>' +
+      '<input class="input" id="f-studios" data-f="studios" value="' + attr(arrToStr(an.studios)) + '"></div>' +
+    '<div class="field"><label for="f-genres">类型标签（、分隔）</label>' +
+      '<input class="input" id="f-genres" data-f="genres" value="' + attr(arrToStr(an.genres)) + '"></div>' +
+    '<div class="field full"><label for="f-summary">简介</label>' +
+      '<textarea class="textarea" id="f-summary" data-f="summary" rows="5">' + esc(an.summary || "") + "</textarea></div>" +
+  "</div>" +
+  '<div class="divider"></div>' +
+  '<div class="section-title">' + ic("heart",16) + "<span>我的记录</span></div>" +
+  '<div class="form-grid">' +
+    '<div class="field"><label for="f-statusId">观看状态</label>' +
+      '<select class="select" id="f-statusId" data-f="statusId">' + statusOptionsHTML(an.statusId) + "</select></div>" +
+    '<div class="field"><label for="f-watchedEpisodes">已看集数</label>' +
+      '<input class="input" id="f-watchedEpisodes" data-f="watchedEpisodes" type="number" min="0" step="1" value="' + (an.watchedEpisodes || 0) + '"></div>' +
+    '<div class="field"><label for="f-myScore">我的评分（0–10，步进 0.5）</label>' +
+      '<input class="input" id="f-myScore" data-f="myScore" type="number" min="0" max="10" step="0.5" value="' + (an.myScore == null ? "" : an.myScore) + '"></div>' +
+    '<div class="field"><label for="f-rewatchCount">重看次数</label>' +
+      '<input class="input" id="f-rewatchCount" data-f="rewatchCount" type="number" min="0" step="1" value="' + (an.rewatchCount || 0) + '"></div>' +
+    '<div class="field"><label for="f-watchYear">观看年份</label>' +
+      '<input class="input" id="f-watchYear" data-f="watchYear" type="number" min="1900" max="2100" step="1" value="' + (an.watchYear == null ? "" : an.watchYear) + '" placeholder="如 2008"></div>' +
+    '<div class="field"><label for="f-watchGrade">当时年级</label>' +
+      '<select class="select" id="f-watchGrade" data-f="watchGrade">' + gradeOptionsHTML(an.watchGrade) + "</select></div>" +
+    '<div class="field"><label for="f-watchChannel">观看渠道</label>' +
+      '<select class="select" id="f-watchChannel" data-f="watchChannel">' + channelOptionsHTML(an.watchChannel) + "</select></div>" +
+    '<div class="field"><label for="f-personalTags">个人标签（、分隔）</label>' +
+      '<input class="input" id="f-personalTags" data-f="personalTags" value="' + attr(arrToStr(an.personalTags)) + '"></div>' +
+    '<div class="field full"><div class="series-pick">' +
+      '<label for="f-seriesId">所属系列</label>' +
+      '<div class="row gap-2" style="flex-wrap:wrap">' +
+        '<select class="select" id="f-seriesId" data-f="seriesId" style="flex:1 1 200px">' +
+          seriesOptionsHTML(an.seriesId) + "</select>" +
+        '<input class="input" id="f-seriesNew" placeholder="新系列名称" maxlength="30" style="flex:1 1 160px" ' +
+          'aria-label="新建系列名称，留空则不创建">' +
+        '<button class="btn" type="button" id="f-seriesAdd">' + ic("plus",14) + "新建系列</button>" +
+      "</div>" +
+      '<div class="hint" id="f-seriesHint">同一部动画的多季、剧场版请归到同一系列，便于在片库按系列查看。留空则归入「默认系列」。</div>' +
+    "</div></div>" +
+    '<div class="field full"><div class="row gap-3">' +
+      '<label class="checkline"><input type="checkbox" id="f-favorite"' + (an.favorite ? " checked" : "") + "><span>收藏</span></label>" +
+      '<label class="checkline"><input type="checkbox" id="f-masterpiece"' + (an.masterpiece ? " checked" : "") + "><span>神作</span></label>" +
+      "</div></div>" +
+  "</div>";
+}
+
+function readFormAnime(modalRoot, base){
+  const an = draftFromCandidate(null, base);
+  const get = id => { const n = modalRoot.querySelector("#" + id); return n ? n.value : null; };
+  an.titleCn = (get("f-titleCn") || "").trim();
+  an.titleOriginal = (get("f-titleOriginal") || "").trim();
+  an.aliases = strToArr(get("f-aliases"));
+  an.coverUrl = (get("f-coverUrl") || "").trim();
+  an.airDate = validateDateInput(get("f-airDate"));
+  an.totalEpisodes = numOrNull(get("f-totalEpisodes"));
+  an.communityScore = numOrNull(get("f-communityScore"));
+  an.durationMinutes = numOrNull(get("f-durationMinutes"));
+  an.studios = strToArr(get("f-studios"));
+  an.genres = strToArr(get("f-genres"));
+  an.summary = (get("f-summary") || "").trim();
+  an.statusId = get("f-statusId") || "st_want";
+  /* min/step 只是控件提示，拦不住手输 —— 与表格视图 inlineEdit 同一套钳制，
+     否则表单路径能存进 -5 / 12.5 这样的进度。 */
+  an.watchedEpisodes = Math.max(0, Math.round(Number(get("f-watchedEpisodes")) || 0));
+  an.myScore = numOrNull(get("f-myScore"));
+  an.rewatchCount = Math.max(0, Math.round(Number(get("f-rewatchCount")) || 0));
+  an.watchYear = numOrNull(get("f-watchYear"));
+  an.watchGrade = get("f-watchGrade") || null;
+  an.watchChannel = get("f-watchChannel") || null;
+  an.personalTags = strToArr(get("f-personalTags"));
+  an.seriesId = get("f-seriesId") || DEFAULT_SERIES_ID;
+  an.favorite = !!modalRoot.querySelector("#f-favorite").checked;
+  an.masterpiece = !!modalRoot.querySelector("#f-masterpiece").checked;
+  return an;
+}
+function numOrNull(v){
+  if(v === "" || v == null) return null;
+  const n = Number(v);
+  return isFinite(n) ? n : null;
+}
+function validateDateInput(v){
+  const s = String(v || "").trim();
+  if(!s) return "";
+  /* 常见手写格式先归一成 YYYY-MM-DD（/ YYYY-MM）：2001-4-5、2001/4/5、
+     2001年4月5日 都是用户会输入的。以前这些一律判非法静默清空，
+     从外部数据带进来的短格式还会在编辑一次后被抹掉。 */
+  const m = /^(\d{4})[年./\-](\d{1,2})(?:[月./\-](\d{1,2})日?)?$/.exec(s);
+  if(m){
+    const mo = Number(m[2]), day = m[3] ? Number(m[3]) : null;
+    if(mo >= 1 && mo <= 12 && (day == null || (day >= 1 && day <= 31))){
+      const p = n => String(n).padStart(2,"0");
+      return m[1] + "-" + p(mo) + (day == null ? "" : "-" + p(day));
+    }
+    return "";
+  }
+  if(!parseDateOnly(s)) return "";
+  return s;
+}
+
+/* 标记手动修订（locked）与自动匹配状态 */
+function commitAnime(an, prev){
+  if(prev){
+    ["titleCn","titleOriginal","aliases","coverUrl","airDate","totalEpisodes","genres","studios","summary","communityScore","durationMinutes"].forEach(f => {
+      const before = Array.isArray(prev[f]) ? JSON.stringify(prev[f]) : String(prev[f] == null ? "" : prev[f]);
+      const after = Array.isArray(an[f]) ? JSON.stringify(an[f]) : String(an[f] == null ? "" : an[f]);
+      if(before !== after) an.locked[f] = true;
+    });
+    an.createdAt = prev.createdAt;
+  }
+  applyAutoStatus(an);
+  return an;
+}
+
+function openAnimeForm(opts){
+  const base = opts.anime || draftFromCandidate(opts.candidate ? Object.assign({ fetchedAt:new Date().toISOString() }, opts.candidate) : null, null);
+  const isNew = !opts.anime;
+  let warned = false;
+  const root = openModal({
+    title: isNew ? "添加新番" : "编辑资料",
+    body: (opts.candidate && opts.candidate._warn ? '<p class="pending-row">' + ic("warning",16) + "<span>" + esc(opts.candidate._warn) + "</span></p>" : "") +
+          animeFormBody(base),
+    footer: (f) => {
+      f.innerHTML =
+        '<span class="hint" id="form-msg"></span><div class="grow"></div>' +
+        '<button class="btn" type="button" id="f-cancel">取消</button>' +
+        '<button class="btn btn-primary" type="button" id="f-save">' + (isNew ? "入库" : "保存") + "</button>";
+      f.querySelector("#f-cancel").addEventListener("click", closeModal);
+      f.querySelector("#f-save").addEventListener("click", onSave);
+    }
+  });
+  const fileInput = root.querySelector("#f-coverFile");
+  if(fileInput) fileInput.addEventListener("change", async () => {
+    const file = fileInput.files && fileInput.files[0];
+    if(!file) return;
+    try{
+      const dataUrl = await readFileAsDataURL(file);
+      root.querySelector("#f-coverUrl").value = dataUrl;
+      root.querySelector("#form-msg").textContent = "已选择本地封面（保存时会存入本机数据库）";
+    }catch(e){ toast("读取图片失败", "err"); }
+  });
+
+  /* 新建系列：真正写库并立刻选中新项。
+     不能只在输入框里打字然后保存时才建 —— 用户会以为按钮坏了，
+     而且同名系列会因大小写/空格差异被建出两条。 */
+  bindSeriesCreator(root, () => base);
+
+  async function onSave(){
+    const an = readFormAnime(root, base);
+    if(!an.titleCn){
+      const input = root.querySelector("#f-titleCn");
+      input.classList.add("is-invalid");
+      root.querySelector("#form-msg").innerHTML = '<span class="err-text">中文名 / 常用名必填</span>';
+      input.focus();
+      return;
+    }
+    if(an.totalEpisodes != null && an.watchedEpisodes > an.totalEpisodes && !warned){
+      warned = true;
+      root.querySelector("#form-msg").innerHTML = '<span class="err-text">已看集数超过总集数，再次点击保存将保留</span>';
+      toast("已看集数超过总集数", "warn");
+      return;
+    }
+    commitAnime(an, opts.anime || null);
+    if(isNew){
+      const dup = detectDuplicate(an);
+      if(dup){
+        closeModal();
+        handleDuplicate(an, dup, opts);
+        return;
+      }
+      await saveAnime(an);
+      closeModal();
+      toast("《" + an.titleCn + "》已入库", "ok");
+      refreshAll();
+      localizeCover(an);   // 异步补抓封面，不阻塞入库
+      if(opts.onSaved) opts.onSaved(an);
+      return;
+    }
+    await saveAnime(an);
+    closeModal();
+    toast("已保存", "ok");
+    refreshAll();
+    localizeCover(an);
+  }
+}
+/* 按名称找或建系列。名称比较走 normalize（去空白、大小写归一），
+   否则「XX 第二季」和「xx第二季」会被当成两个系列。 */
+async function ensureSeries(name){
+  const n = String(name || "").trim().slice(0, 30);
+  if(!n) return null;
+  const hit = state.series.find(s => normalize(s.name) === normalize(n));
+  if(hit) return hit;
+  const rec = { id: uid("se"), name:n, createdAt:new Date().toISOString(), schemaVersion:SCHEMA_VERSION };
+  const ok = await saveSeries(rec);
+  if(!ok) return null;
+  return rec;
+}
+
+/* 表单里的「新建系列」控件。行为必须可见：
+   点按钮 → 立即写库 → 下拉里出现新项并选中 → 输入框清空。
+   静默失败（只清输入框、不建记录）是最糟的一种，用户无从判断。 */
+function bindSeriesCreator(root, getBase){
+  const btn = root.querySelector("#f-seriesAdd");
+  const input = root.querySelector("#f-seriesNew");
+  const sel = root.querySelector("#f-seriesId");
+  if(!btn || !input || !sel) return;
+  const hint = root.querySelector("#f-seriesHint");
+
+  const setHint = (html, isErr) => {
+    if(!hint) return;
+    hint.innerHTML = isErr ? '<span class="err-text">' + html + "</span>" : html;
+  };
+  const restoreHint = () => setHint(
+    "同一部动画的多季、剧场版请归到同一系列，便于在片库按系列查看。留空则归入「默认系列」。");
+
+  btn.addEventListener("click", async () => {
+    const name = input.value.trim();
+    if(!name){ setHint("请先填写新系列名称", true); input.focus(); return; }
+    const dup = state.series.find(s => normalize(s.name) === normalize(name));
+    if(dup){
+      // 已存在就直接选它，不报错也不重复建 —— 用户的意图是「归到这个系列」
+      sel.value = dup.id;
+      input.value = "";
+      restoreHint();
+      toast("「" + dup.name + "」已存在，已直接选中", "warn");
+      return;
+    }
+    btn.disabled = true;
+    const prevText = btn.innerHTML;
+    btn.innerHTML = '<span class="spinner"></span>';
+    const rec = await ensureSeries(name);
+    btn.disabled = false;
+    btn.innerHTML = prevText;
+    if(!rec){ setHint("新建系列失败，请重试", true); return; }
+    sel.innerHTML = seriesOptionsHTML(rec.id);
+    input.value = "";
+    restoreHint();
+    toast("已创建系列「" + rec.name + "」并选中", "ok");
+  });
+  // 输入框回车等同点按钮，否则键盘用户按了没反应
+  input.addEventListener("keydown", e => {
+    if(e.key === "Enter"){ e.preventDefault(); btn.click(); }
+  });
+}
+
+function readFileAsDataURL(file){
+  return new Promise((resolve, reject) => {
+    const fr = new FileReader();
+    fr.onload = () => resolve(fr.result);
+    fr.onerror = () => reject(fr.error || new Error("读取失败"));
+    fr.readAsDataURL(file);
+  });
+}
+/* 背景图压缩：上传的原始照片动辄 3-8MB，dataURL 还要再涨 33%。
+   file:// 下降级到 localStorage 时上限只有约 5MB，实测 4MB 能写、5MB 直接
+   QuotaExceededError —— 原图几乎必然写不进去，用户只会看到一句干巴巴的
+   「存储空间不足」。这里在入库前统一缩到长边 1920 并转 JPEG，
+   1920×1080 的 JPEG 约 200-400KB，三个主题都够用，且模糊后看不出画质差别。
+   压缩失败（canvas 不可用、HEIC 等浏览器解不了的格式）时退回原图，
+   让后续的存储错误提示去接住，不在这里提前失败。 */
+const BG_MAX_EDGE = 1920;
+const BG_JPEG_QUALITY = 0.82;
+function loadImageEl(src){
+  return new Promise((resolve, reject) => {
+    const im = new win_img();
+    im.onload = () => resolve(im);
+    im.onerror = () => reject(new Error("图片解码失败，浏览器可能不支持该格式"));
+    im.src = src;
+  });
+}
+let win_img = null;
+function initImageCtor(){
+  if(win_img) return win_img;
+  try{ win_img = new Image(); }catch(e){ win_img = null; }
+  return win_img;
+}
+/* maxEdge / quality 可指定：背景图需 1920，老授权卡片只需 720，
+   同一套压缩逻辑服务于两种尺寸。 */
+async function compressBgImage(dataUrl, maxEdge, quality){
+  const edge = maxEdge || BG_MAX_EDGE;
+  const q = quality || BG_JPEG_QUALITY;
+  const skipUnder = Math.round(edge * edge * 0.00012); // 体积阈值随目标边长缩放
+  if(!/^data:image\//i.test(dataUrl)) return dataUrl;
+  const head = dataUrl.slice(0, 40);
+  // GIF 缩放会丢动画，SVG 是矢量本来就小 —— 这两类原样保留
+  if(/gif|svg/i.test(head)) return dataUrl;
+  // 本来就小于上限且已是 JPEG、体积不大，就不必重编码（重编码会掉画质）
+  if(/jpe?g/i.test(head) && dataUrl.length < skipUnder) return dataUrl;
+  initImageCtor();
+  if(!win_img) return dataUrl;
+  let im;
+  try{ im = await loadImageEl(dataUrl); }catch(e){ return dataUrl; }
+  const w = im.naturalWidth || im.width, h = im.naturalHeight || im.height;
+  if(!w || !h) return dataUrl;
+  const longest = Math.max(w, h);
+  // 本来就小于上限且已是 JPEG、体积不大，就不必重编码（重编码会掉画质）
+  if(longest <= edge && dataUrl.length < skipUnder && /jpe?g/i.test(dataUrl.slice(0, 40))) return dataUrl;
+  const scale = longest > edge ? edge / longest : 1;
+  const tw = Math.max(1, Math.round(w * scale)), th = Math.max(1, Math.round(h * scale));
+  let cv;
+  try{ cv = document.createElement("canvas"); cv.width = tw; cv.height = th; }
+  catch(e){ return dataUrl; }
+  const ctx = cv.getContext && cv.getContext("2d");
+  if(!ctx) return dataUrl;
+  try{
+    ctx.drawImage(im, 0, 0, tw, th);
+    const out = cv.toDataURL("image/jpeg", q);
+    // toDataURL 在某些环境会返回 "data:," 表示失败，此时必须用原图
+    if(!out || out.length < 64 || !/^data:image\/jpe?g/i.test(out)) return dataUrl;
+    // 压完反而更大（比如本来就压得很狠的小图）就用原图
+    return out.length < dataUrl.length ? out : dataUrl;
+  }catch(e){ return dataUrl; }
+}
+
+/* 档案完整性：封面跟着记录走。
+   远程 coverUrl（Bangumi/AniList 图床）随时可能失效，
+   开着「封面本地化」时，入库/保存后把封面抓回来、压缩到长边 480 存进记录。
+   失败是常态（跨域、图床 403），静默保留远程地址即可，不值得打扰用户。 */
+async function localizeCover(a){
+  if(!settings.cover_localize || Repo.mode !== "idb") return;
+  if(!a || !a.id || !a.coverUrl || a.coverData) return;
+  if(!/^https?:\/\//i.test(a.coverUrl)) return;    // data:/本地封面本来就是本机的
+  try{
+    const res = await fetch(a.coverUrl, { mode:"cors", referrerPolicy:"no-referrer" });
+    if(!res.ok) return;
+    const blob = await res.blob();
+    if(!/^image\//i.test(String(blob.type || ""))) return;
+    const raw = await new Promise((resolve, reject) => {
+      const fr = new FileReader();
+      fr.onload = () => resolve(fr.result);
+      fr.onerror = () => reject(fr.error || new Error("读取失败"));
+      fr.readAsDataURL(blob);
+    });
+    const packed = await compressBgImage(raw, 480, 0.82);
+    if(!packed || !/^data:image\//i.test(packed) || packed.length > 400 * 1024) return;
+    a.coverData = packed;
+    await persistAnimeQuiet(a);
+  }catch(e){
+    console.info("封面本地化失败（保留远程地址）：", a.titleCn, e && e.message || e);
+  }
+}
+
+/* L1/L2/L3 处理 */
+async function handleDuplicate(an, dup, opts){
+  const level = dup.level, exist = dup.match;
+  const name = exist.titleCn || exist.titleOriginal;
+  if(level === "L1" || level === "L2"){
+    const nav = await confirmDialog({
+      title: "重复检测",
+      html: "《" + esc(name) + "》已在片库中（" + (level === "L1" ? "同一数据源条目" : "标题完全相同") + "）。<br>你可以直接去看看，或仍然新建一条。",
+      okText: "去看看",
+      cancelText: "仍要新建"
+    });
+    if(nav){ go("theater", exist.id); return; }
+    await saveAnime(an);
+    toast("已新建《" + an.titleCn + "》", "ok");
+    refreshAll();
+    localizeCover(an);
+    if(opts && opts.onSaved) opts.onSaved(an);
+    return;
+  }
+  const merge = await confirmDialog({
+    title: "疑似重复",
+    html: "《" + esc(name) + "》与《" + esc(an.titleCn) + "》标题与首播年份一致。<br>它们是同一部作品吗？",
+    okText: "这是同一部（合并）",
+    cancelText: "是不同作品（新建）"
+  });
+  if(merge){
+    const merged = mergeRecords(exist, an, {});
+    await saveAnime(merged);
+    toast("已合并为《" + merged.titleCn + "》", "ok");
+    refreshAll();
+  } else {
+    await saveAnime(an);
+    toast("已新建《" + an.titleCn + "》", "ok");
+    refreshAll();
+  }
+}
+
+/* 合并规则（§8.3 智能合并） */
+function mergeRecords(base, incoming, opts){
+  const out = Object.assign({}, base);
+  const lockedFields = ["titleCn","titleOriginal","aliases","coverUrl","airDate","totalEpisodes","genres","studios","summary","communityScore","durationMinutes"];
+  out.pending = Object.assign({}, base.pending || {});
+  lockedFields.forEach(f => {
+    const isLocked = base.locked && base.locked[f];
+    const bEmpty = Array.isArray(base[f]) ? base[f].length === 0 : (base[f] == null || base[f] === "");
+    const iEmpty = Array.isArray(incoming[f]) ? incoming[f].length === 0 : (incoming[f] == null || incoming[f] === "");
+    if(isLocked || iEmpty || (bEmpty === false && iEmpty === false && JSON.stringify(base[f]) === JSON.stringify(incoming[f]))) return;
+    if(!bEmpty && !iEmpty && JSON.stringify(base[f]) !== JSON.stringify(incoming[f])){
+      out.pending[f] = { baseValue: base[f], incomingValue: incoming[f] };
+      return;
+    }
+    if(bEmpty && !iEmpty) out[f] = incoming[f];
+  });
+  ["aliases","genres","personalTags"].forEach(f => {
+    out[f] = unionArr(base[f], incoming[f]);
+  });
+  ["statusId","watchedEpisodes","myScore","watchYear","watchGrade","watchChannel"].forEach(f => {
+    const bt = new Date(base.updatedAt || 0).getTime(), it = new Date(incoming.updatedAt || 0).getTime();
+    let winner = it >= bt ? incoming : base;
+    let other = it >= bt ? base : incoming;
+    /* 刚填的表单草稿 updatedAt 恒为 now、恒胜出，但它的「想看 / 0 集」只是
+       表单默认值，不代表用户想清空已有进度 —— 重录同一部作品选「合并」，
+       不该把「看完 / 已看 12 集」重置回零。此时改为让 base 胜出。 */
+    if(winner === incoming && f === "watchedEpisodes" && !Number(winner.watchedEpisodes) && Number(other.watchedEpisodes)){ winner = base; other = incoming; }
+    if(winner === incoming && f === "statusId" && winner.statusId === "st_want" && other.statusId && other.statusId !== "st_want"){ winner = base; other = incoming; }
+    let v = winner[f];
+    if(v == null || v === "") v = other[f];
+    out[f] = v;
+  });
+  out.favorite = !!(base.favorite || incoming.favorite);
+  out.masterpiece = !!(base.masterpiece || incoming.masterpiece);
+  out.rewatchCount = Math.max(Number(base.rewatchCount) || 0, Number(incoming.rewatchCount) || 0);
+  out.sourceIds = Object.assign({}, base.sourceIds || {}, incoming.sourceIds || {});
+  /* 线路：base 本来就没有而备份带过来时搬过去（恢复场景）；
+     base 已有自己的线路则保留 base，不拿表单/备份的线路覆盖。 */
+  if((!Array.isArray(base.sources) || !base.sources.length) && Array.isArray(incoming.sources) && incoming.sources.length){
+    out.sources = incoming.sources;
+    out.activeSourceId = incoming.activeSourceId || "";
+  }
+  /* 本地封面同理：base 没有而 incoming（备份）带了就采纳 */
+  if(!base.coverData && incoming.coverData) out.coverData = incoming.coverData;
+  out.coverUrl = (base.locked && base.locked.coverUrl) || base.coverUrl ? base.coverUrl : (incoming.coverUrl || base.coverUrl);
+  const seen = new Set();
+  const reviews = (base.reviews || []).concat(incoming.reviews || []).map(r => Object.assign({}, r, { id: r.id || uid("rv") }));
+  out.reviews = reviews.filter(r => {
+    /* round 进 key：观看记录允许没有感想（content 为空串），
+       同一天看两次（第 1 次、第 2 次）若只按 日期|内容 判重会被误删一条 */
+    const k = normalize(r.date) + "|" + String(Number(r.round) || 1) + "|" + normalize(r.content);
+    if(seen.has(k)) return false;
+    seen.add(k); return true;
+  }).sort((a,b) => String(b.date).localeCompare(String(a.date)));
+  out.updatedAt = new Date().toISOString();
+  applyAutoStatus(out);
+  return out;
+}
+function unionArr(a, b){
+  const out = [], seen = new Set();
+  (a || []).concat(b || []).forEach(v => {
+    const k = normalize(v);
+    if(!k || seen.has(k)) return;
+    seen.add(k); out.push(v);
+  });
+  return out;
+}
+

@@ -1,0 +1,322 @@
+[
+  {
+    "file": "src/shell/00-head.html",
+    "module": "shell.head",
+    "desc": "doctype/meta/字体与 <style> 开标签"
+  },
+  {
+    "file": "src/css/01-Anime-Rewind番忆-设计令牌层.part",
+    "module": "css.Anime-Rewind番忆-设计令牌层",
+    "desc": "CSS：Anime Rewind・番忆 — 设计令牌层"
+  },
+  {
+    "file": "src/css/02-基础重置.part",
+    "module": "css.基础重置",
+    "desc": "CSS：基础重置"
+  },
+  {
+    "file": "src/css/03-浏览器表面.part",
+    "module": "css.浏览器表面",
+    "desc": "CSS：浏览器表面"
+  },
+  {
+    "file": "src/css/04-应用外壳-背景层.part",
+    "module": "css.应用外壳-背景层",
+    "desc": "CSS：应用外壳 / 背景层"
+  },
+  {
+    "file": "src/css/05-基础组件.part",
+    "module": "css.基础组件",
+    "desc": "CSS：基础组件（八种状态）"
+  },
+  {
+    "file": "src/css/06-播放器.part",
+    "module": "css.播放器",
+    "desc": "CSS：播放器（原生 video 层）"
+  },
+  {
+    "file": "src/css/07-筛选条.part",
+    "module": "css.筛选条",
+    "desc": "CSS：筛选条"
+  },
+  {
+    "file": "src/css/08-片库封面墙-3D-翻转卡.part",
+    "module": "css.片库封面墙-3D-翻转卡",
+    "desc": "CSS：片库：封面墙 —— 3D 翻转卡"
+  },
+  {
+    "file": "src/css/09-播放源台账.part",
+    "module": "css.播放源台账",
+    "desc": "CSS：播放源台账"
+  },
+  {
+    "file": "src/css/10-首页看板.part",
+    "module": "css.首页看板",
+    "desc": "CSS：首页看板"
+  },
+  {
+    "file": "src/css/11-童年编年史.part",
+    "module": "js.童年编年史",
+    "desc": "JS：17. 童年编年史"
+  },
+  {
+    "file": "src/css/12-重看转盘.part",
+    "module": "js.重看转盘",
+    "desc": "JS：18. 重看转盘"
+  },
+  {
+    "file": "src/css/13-放映厅.part",
+    "module": "js.放映厅",
+    "desc": "JS：16. 放映厅（作品详情 + 外部播放器）"
+  },
+  {
+    "file": "src/css/14-语录本.part",
+    "module": "js.语录本",
+    "desc": "JS：19. 语录本"
+  },
+  {
+    "file": "src/css/15-设置.part",
+    "module": "css.设置",
+    "desc": "CSS：设置"
+  },
+  {
+    "file": "src/css/16-荣誉墙票券卡.part",
+    "module": "css.荣誉墙票券卡",
+    "desc": "CSS：荣誉墙：票券卡（ticket card）"
+  },
+  {
+    "file": "src/css/17-UI-套系层.part",
+    "module": "css.UI-套系层",
+    "desc": "CSS：UI 套系层"
+  },
+  {
+    "file": "src/css/18-套系-B像素风.part",
+    "module": "css.套系-B像素风",
+    "desc": "CSS：套系 B：像素风（8-bit / dither）"
+  },
+  {
+    "file": "src/css/19-套系-C科技感-全息.part",
+    "module": "css.套系-C科技感-全息",
+    "desc": "CSS：套系 C：科技感 / 全息（holo）"
+  },
+  {
+    "file": "src/css/20-TV-套系.part",
+    "module": "css.TV-套系",
+    "desc": "CSS：TV 套系（参考 Izuko_TV 的电视端布局）"
+  },
+  {
+    "file": "src/shell/01-mid.html",
+    "module": "shell.mid",
+    "desc": "</style>、body 静态外壳、荣誉配图 script 开标签"
+  },
+  {
+    "file": "src/js/00-honor-art.js",
+    "module": "data.honor-art",
+    "desc": "荣誉墙配图 dataURL（tools/build-honor-art.js 生成，勿手改）"
+  },
+  {
+    "file": "src/shell/01b-close.html",
+    "module": "shell.between",
+    "desc": "</script> 与主应用 <script> 开标签"
+  },
+  {
+    "file": "src/js/01-Anime-Rewind番忆.part",
+    "module": "js.Anime-Rewind番忆",
+    "desc": "JS：Anime Rewind・番忆"
+  },
+  {
+    "file": "src/js/02-常量与工具.part",
+    "module": "js.常量与工具",
+    "desc": "JS：0. 常量与工具"
+  },
+  {
+    "file": "src/js/03-通用-UI吐司-模态-确认框.part",
+    "module": "js.通用-UI吐司-模态-确认框",
+    "desc": "JS：4. 通用 UI：吐司 / 模态 / 确认框"
+  },
+  {
+    "file": "src/js/04-默认设置.part",
+    "module": "js.默认设置",
+    "desc": "JS：1. 默认设置（§12）"
+  },
+  {
+    "file": "src/js/05-存储层IndexedDB-localStorag.part",
+    "module": "js.存储层IndexedDB-localStorag",
+    "desc": "JS：2. 存储层：IndexedDB（主）+ localStorage（降级）"
+  },
+  {
+    "file": "src/js/06-5-播放源体系.part",
+    "module": "js.5-播放源体系",
+    "desc": "JS：16.5 播放源体系（数据模型 + 选源算法）"
+  },
+  {
+    "file": "src/js/07-状态-System-Status-与内存数据.part",
+    "module": "js.状态-System-Status-与内存数据",
+    "desc": "JS：3. 状态 System Status 与内存数据"
+  },
+  {
+    "file": "src/js/08-持久化辅助.part",
+    "module": "js.持久化辅助",
+    "desc": "JS：5. 持久化辅助"
+  },
+  {
+    "file": "src/js/09-6-播放源台账.part",
+    "module": "js.6-播放源台账",
+    "desc": "JS：16.6 播放源台账（跨作品管理）"
+  },
+  {
+    "file": "src/js/10-统计口径.part",
+    "module": "js.统计口径",
+    "desc": "JS：20. 统计口径（§11）"
+  },
+  {
+    "file": "src/js/11-荣誉称号.part",
+    "module": "js.荣誉称号",
+    "desc": "JS：21. 荣誉称号（§10）"
+  },
+  {
+    "file": "src/js/12-外观应用.part",
+    "module": "js.外观应用",
+    "desc": "JS：6. 外观应用"
+  },
+  {
+    "file": "src/js/13-图表.part",
+    "module": "js.图表",
+    "desc": "JS：22. 图表（ECharts CDN + 降级文字排行）"
+  },
+  {
+    "file": "src/js/14-页面注册与路由.part",
+    "module": "js.页面注册与路由",
+    "desc": "JS：7. 页面注册与路由"
+  },
+  {
+    "file": "src/js/15-数据源接入.part",
+    "module": "js.数据源接入",
+    "desc": "JS：8. 数据源接入（Bangumi → AniList → 手动）"
+  },
+  {
+    "file": "src/js/16-去重检测.part",
+    "module": "js.去重检测",
+    "desc": "JS：9. 去重检测（§7 三级判重）"
+  },
+  {
+    "file": "src/js/17-添加-编辑作品的通用表单.part",
+    "module": "js.添加-编辑作品的通用表单",
+    "desc": "JS：10. 添加 / 编辑作品的通用表单"
+  },
+  {
+    "file": "src/js/18-记录一次重看-新增感想.part",
+    "module": "js.记录一次重看-新增感想",
+    "desc": "JS：11. 记录一次重看 / 新增感想"
+  },
+  {
+    "file": "src/js/19-筛选-排序.part",
+    "module": "js.筛选-排序",
+    "desc": "JS：12. 筛选 / 排序"
+  },
+  {
+    "file": "src/js/20-片库页.part",
+    "module": "js.片库页",
+    "desc": "JS：13. 片库页"
+  },
+  {
+    "file": "src/js/21-5-TV-影院横滑卡行-剧集卡行.part",
+    "module": "js.5-TV-影院横滑卡行-剧集卡行",
+    "desc": "JS：13.5 TV 影院：横滑卡行 + 剧集卡行"
+  },
+  {
+    "file": "src/js/22-添加新番搜索-选源-表单-入库.part",
+    "module": "js.添加新番搜索-选源-表单-入库",
+    "desc": "JS：14. 添加新番：搜索 → 选源 → 表单 → 入库"
+  },
+  {
+    "file": "src/js/23-语录数据.part",
+    "module": "js.语录数据",
+    "desc": "JS：15. 语录数据（§9.3 内置语录包）"
+  },
+  {
+    "file": "src/js/24-放映厅.part",
+    "module": "js.放映厅",
+    "desc": "JS：16. 放映厅（作品详情 + 外部播放器）"
+  },
+  {
+    "file": "src/js/25-开机音效老式电视通电-街机-8-bit-主题.part",
+    "module": "js.开机音效老式电视通电-街机-8-bit-主题",
+    "desc": "JS：开机音效：老式电视通电 + 街机 8-bit 主题"
+  },
+  {
+    "file": "src/js/26-放映厅-外部播放器.part",
+    "module": "js.放映厅-外部播放器",
+    "desc": "JS：17. 放映厅 · 外部播放器"
+  },
+  {
+    "file": "src/js/27-站点搜索型片源.part",
+    "module": "js.站点搜索型片源",
+    "desc": "JS：站点搜索型片源"
+  },
+  {
+    "file": "src/js/28-5-原生视频播放器.part",
+    "module": "js.5-原生视频播放器",
+    "desc": "JS：17.5 原生视频播放器"
+  },
+  {
+    "file": "src/js/29-9-播放源管理.part",
+    "module": "js.9-播放源管理",
+    "desc": "JS：16.9 播放源管理（台账页）"
+  },
+  {
+    "file": "src/js/30-5-荣誉墙.part",
+    "module": "js.5-荣誉墙",
+    "desc": "JS：21.5 荣誉墙"
+  },
+  {
+    "file": "src/js/31-童年编年史.part",
+    "module": "js.童年编年史",
+    "desc": "JS：17. 童年编年史"
+  },
+  {
+    "file": "src/js/32-重看转盘.part",
+    "module": "js.重看转盘",
+    "desc": "JS：18. 重看转盘"
+  },
+  {
+    "file": "src/js/33-语录本.part",
+    "module": "js.语录本",
+    "desc": "JS：19. 语录本"
+  },
+  {
+    "file": "src/js/34-CSV-导入.part",
+    "module": "js.导入",
+    "desc": "JS：25. 导入（§8 校验 / 预览报告 / 三种去重模式）"
+  },
+  {
+    "file": "src/js/35-导出.part",
+    "module": "js.导出",
+    "desc": "JS：24. 导出"
+  },
+  {
+    "file": "src/js/36-导入.part",
+    "module": "js.导入",
+    "desc": "36-导入.part"
+  },
+  {
+    "file": "src/js/37-首页-档案馆看板.part",
+    "module": "js.首页-档案馆看板",
+    "desc": "JS：23. 首页 · 档案馆看板"
+  },
+  {
+    "file": "src/js/38-设置页.part",
+    "module": "js.设置页",
+    "desc": "JS：26. 设置页"
+  },
+  {
+    "file": "src/js/39-启动.part",
+    "module": "js.启动",
+    "desc": "JS：27. 启动"
+  },
+  {
+    "file": "src/shell/02-tail.html",
+    "module": "shell.tail",
+    "desc": "</script></body></html>"
+  }
+]

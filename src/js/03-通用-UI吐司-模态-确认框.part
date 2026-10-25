@@ -1,0 +1,119 @@
+/* ============================================================
+   4. 通用 UI：吐司 / 模态 / 确认框
+   ============================================================ */
+function toast(msg, kind, ms){
+  const kinds = { ok:"toast-ok", err:"toast-err", warn:"toast-warn", info:"toast-info" };
+  const icons = { ok:"check", err:"warning", warn:"warning", info:"info" };
+  const root = $("#toast-root");
+  const t = document.createElement("div");
+  t.className = "toast " + (kinds[kind] || "toast-info");
+  t.innerHTML = ic(icons[kind] || "info", 16) + '<span>' + esc(msg) + "</span>";
+  root.appendChild(t);
+  setTimeout(() => {
+    t.style.transition = "opacity 240ms, transform 240ms";
+    t.style.opacity = "0"; t.style.transform = "translateY(6px)";
+    setTimeout(() => t.remove(), 250);
+  }, ms || 2600);
+}
+
+/* 荣誉墙打开标志：closeModal 要在任意关闭路径上清掉它，
+   所以标志放在模态层而不是荣誉墙层（荣誉墙在更上层，只会写它） */
+let honorWallOpen = false;
+let lastFocus = null;
+function openModal(opts){
+  const root = $("#modal-root");
+  lastFocus = document.activeElement;
+  root.innerHTML =
+    '<div class="modal-mask" data-close="1"></div>' +
+    '<div class="modal ' + (opts.wide ? "modal-wide" : "") + (opts.narrow ? " modal-narrow" : "") + '" id="modal-card">' +
+      '<div class="modal-head"><h3 id="modal-title">' + esc(opts.title || "") + "</h3>" +
+        '<button class="btn btn-ghost btn-icon" type="button" id="modal-x" aria-label="关闭">' + ic("close",16) + "</button></div>" +
+      '<div class="modal-body scroll" id="modal-body"></div>' +
+      (opts.footer === false ? "" : '<div class="modal-foot" id="modal-foot"></div>') +
+    "</div>";
+  root.classList.add("open");
+
+  // 关闭行为用事件委托绑定在 root 上，而非逐个按钮绑定。
+  // 这样无论 body/footer 回调何时渲染出 [data-close]，也无论回调是否抛错，弹窗都一定关得掉。
+  root.addEventListener("click", (e) => {
+    const n = e.target && e.target.closest ? e.target.closest("[data-close]") : null;
+    if(!n || !root.contains(n) || n.dataset.close === "0") return;
+    closeModal();
+  });
+
+  const body = $("#modal-body");
+  const foot = $("#modal-foot");
+  // 渲染回调来自各页面，包裹 try/catch：单个回调出错不应让弹窗变成无法关闭的僵尸。
+  try{
+    if(typeof opts.body === "string") body.innerHTML = opts.body; else if(opts.body) opts.body(body);
+    if(foot){
+      if(typeof opts.footer === "string") foot.innerHTML = opts.footer;
+      else if(typeof opts.footer === "function") opts.footer(foot);
+      else foot.innerHTML = '<div class="grow"></div><button class="btn" type="button" data-close="1">关闭</button>';
+    }
+  }catch(err){
+    console.error("[openModal] 渲染回调出错：", err);
+    if(body) body.insertAdjacentHTML("afterbegin",
+      '<p class="err-text">界面渲染出错：' + esc(String(err && err.message || err)) + "</p>");
+  }
+
+  const card = $("#modal-card");
+  if(card) card.addEventListener("keydown", (e) => { if(e.key === "Tab") trapFocus(card, e); });
+  const x = $("#modal-x");
+  if(x) x.addEventListener("click", closeModal);
+  if(typeof opts.onMount === "function"){ try{ opts.onMount(root); }catch(err){ console.error("[openModal] onMount 出错：", err); } }
+  const focusTarget = (card && card.querySelector("[data-autofocus]")) || x;
+  setTimeout(() => { if(focusTarget && document.contains(focusTarget)) focusTarget.focus(); }, 30);
+  return root;
+}
+function closeModal(){
+  const root = $("#modal-root");
+  root.classList.remove("open");
+  root.innerHTML = "";
+  // 任何关闭途径（×/ESC/遮罩/关闭按钮）都要清掉荣誉墙的打开标志，
+  // 否则下次点「新建」保存后会把一个早已关闭的荣誉墙重新弹出来。
+  honorWallOpen = false;
+  if(lastFocus && lastFocus.focus) setTimeout(() => { try{ lastFocus.focus(); }catch(e){} }, 20);
+}
+function modalEscape(e){
+  if(e.key === "Escape" && $("#modal-root").classList.contains("open")){ closeModal(); }
+}
+document.addEventListener("keydown", modalEscape);
+
+function confirmDialog(opts){
+  return new Promise((resolve) => {
+    let answered = false;
+    const done = (v) => { if(!answered){ answered = true; closeModal(); resolve(v); } };
+    openModal({
+      title: opts.title || "请确认",
+      narrow: true,
+      body: '<p class="small" style="line-height:1.7">' + (opts.html || esc(opts.message || "")) + "</p>",
+      footer: (f) => {
+        f.innerHTML =
+          '<div class="grow"></div>' +
+          '<button class="btn" type="button" id="cd-no">' + esc(opts.cancelText || "取消") + "</button>" +
+          '<button class="btn ' + (opts.danger ? "btn-danger" : "btn-primary") + '" type="button" id="cd-yes" data-autofocus>' + esc(opts.okText || "确定") + "</button>";
+        f.querySelector("#cd-no").addEventListener("click", () => done(false));
+        f.querySelector("#cd-yes").addEventListener("click", () => done(true));
+      },
+      onMount: () => {
+        const card = $("#modal-card");
+        const handler = (e) => {
+          if(e.key === "Escape") done(false);
+          if(e.key === "Enter" && e.target.tagName !== "BUTTON") { e.preventDefault(); done(true); }
+        };
+        card.addEventListener("keydown", handler);
+        card.addEventListener("keydown", (e) => { if(e.key === "Tab") trapFocus(card, e); });
+      }
+    });
+  });
+}
+function trapFocus(container, e){
+  const f = container.querySelectorAll('button,input,select,textarea,[tabindex]:not([tabindex="-1"])');
+  const list = Array.from(f).filter(n => !n.disabled && n.offsetParent !== null);
+  if(!list.length) return;
+  const first = list[0], last = list[list.length-1];
+  if(e.shiftKey && document.activeElement === first){ e.preventDefault(); last.focus(); }
+  else if(!e.shiftKey && document.activeElement === last){ e.preventDefault(); first.focus(); }
+}
+

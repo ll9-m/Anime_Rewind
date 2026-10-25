@@ -1,0 +1,64 @@
+</style>
+</head>
+<body>
+
+<div id="app">
+  <div class="bg-layer" id="bg-layer" aria-hidden="true"></div>
+  <div class="bg-overlay" id="bg-overlay" aria-hidden="true"></div>
+  <div class="grain" id="grain" aria-hidden="true"></div>
+
+  <div id="shell">
+    <aside id="sidebar" aria-label="主导航">
+      <div class="brand">
+        <svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true"><rect x="1" y="1" width="30" height="30" rx="7" fill="none" stroke="currentColor" stroke-width="1.4" opacity=".45"/><path d="M18 8.5 9.6 16 18 23.5V18h7.4v-4H18z" fill="currentColor"/></svg>
+        <div class="brand-text">
+          <strong>Anime Rewind</strong>
+          <span>番忆 · 童年动画档案馆</span>
+        </div>
+      </div>
+      <nav id="nav-list" aria-label="页面导航"></nav>
+      <div class="side-foot">
+        <button class="side-honor" id="side-honor" type="button" title="查看荣誉墙">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><circle cx="12" cy="9" r="5.2"/><path d="M8.4 13.6 7 22l5-2.4L17 22l-1.4-8.4"/></svg>
+          <span><b id="side-honor-name">未解锁</b><small id="side-honor-next">继续建档解锁称号</small></span>
+        </button>
+        <div class="side-stat"><span>收录总数</span><b id="side-total">0</b></div>
+        <div class="side-stat"><span>数据位置</span><b id="side-store">本机</b></div>
+      </div>
+    </aside>
+
+    <div id="main">
+      <div id="topbar">
+        <div>
+          <h1 class="page-title" id="page-title">档案馆看板</h1>
+          <div class="page-sub" id="page-sub"></div>
+        </div>
+        <div class="topbar-actions" id="page-actions"></div>
+      </div>
+      <div id="view" class="scroll" tabindex="-1" role="main"></div>
+    </div>
+  </div>
+</div>
+
+<div id="modal-root" role="dialog" aria-modal="true" aria-labelledby="modal-title"></div>
+<div id="toast-root" aria-live="polite" aria-atomic="false"></div>
+
+<div id="boot">
+  <svg class="rewind" viewBox="0 0 48 48" aria-hidden="true"><circle cx="24" cy="24" r="20" fill="none" stroke="currentColor" stroke-width="1.5" opacity=".35"/><path d="M27 13 15.5 24 27 35v-7.6h11.5v-7H27z" fill="currentColor"/></svg>
+  <p>正在打开放映厅…</p>
+</div>
+
+<div id="too-narrow">
+  <div class="panel">
+    <div class="state-box" style="border-style:solid">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="2.5" y="4" width="19" height="13" rx="2"/><path d="M8.5 21h7M12 17v4"/></svg>
+      <h2>建议在电脑宽屏下使用</h2>
+      <p class="small">番忆为桌面宽屏设计，需要至少 1100px 的视口宽度。请拉宽窗口或换用电脑浏览器（Edge / Chrome）。</p>
+    </div>
+  </div>
+</div>
+
+<!-- 荣誉墙默认配图：独立 script 块，放在主脚本之前。
+     纯数据（base64 JPEG），不含逻辑；放独立块是为了不拖慢主脚本的解析与执行，
+     也让 tools/build-honor-art.js 能独立重新生成而不触碰业务代码。 -->
+<script>

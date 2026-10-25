@@ -1,0 +1,13 @@
+/* ============================================================
+   语录本
+   ============================================================ */
+.quote-card{
+  display:flex; flex-direction:column; gap:var(--sp-3); padding:var(--sp-4);
+  border:1px solid var(--border); border-radius:var(--r-lg); background:var(--panel);
+}
+.quote-card .q-text{ font-size:var(--fs-md); line-height:1.6; }
+.quote-card footer{ display:flex; align-items:center; gap:var(--sp-2); margin-top:auto; padding-top:var(--sp-2); border-top:1px solid var(--border); }
+.quote-card .who{ font-size:var(--fs-xs); color:var(--muted); }
+.quote-card .actions{ margin-left:auto; display:flex; gap:4px; }
+.quote-grid{ display:grid; grid-template-columns:repeat(auto-fill,minmax(300px,1fr)); gap:var(--sp-3); }
+

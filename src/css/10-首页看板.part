@@ -1,0 +1,81 @@
+/* ============================================================
+   首页看板
+   ============================================================ */
+.quote-banner{
+  display:flex; align-items:center; gap:var(--sp-4); padding:var(--sp-4);
+  border-radius:var(--r-lg); border:1px solid var(--border); position:relative; overflow:hidden;
+  background:linear-gradient(120deg,var(--accent-soft),transparent 62%),var(--panel);
+}
+.quote-body{ min-width:0; }
+.quote-text{ font-size:var(--fs-xl); font-weight:600; line-height:1.45; }
+.quote-src{ margin-top:4px; font-size:var(--fs-xs); color:var(--muted); }
+.quote-actions{ margin-left:auto; display:flex; gap:var(--sp-2); flex:0 0 auto; }
+/* 数字带：不是六个方块，而是一条机读索引带。
+   分隔靠 1px 发丝线（divide），不靠各自的边框与阴影 —— 避免「卡片套卡片」。 */
+.stats-strip{
+  display:grid; grid-template-columns:repeat(6,minmax(0,1fr));
+  background:var(--panel); border:1px solid var(--border); border-radius:var(--r-lg);
+  box-shadow:var(--shadow), inset 0 1px 0 var(--hairline);
+  overflow:hidden;
+}
+@media (max-width:1300px){ .stats-strip{ grid-template-columns:repeat(3,minmax(0,1fr)); } }
+@media (max-width:720px){ .stats-strip{ grid-template-columns:repeat(2,minmax(0,1fr)); } }
+.stat-card{
+  position:relative; min-width:0;
+  padding:var(--sp-4) var(--sp-4) var(--sp-3);
+  display:flex; flex-direction:column; gap:3px;
+  transition:background var(--dur-fast) var(--ease);
+}
+/* 竖向发丝分隔：偶数项右侧无线，避免双线 */
+.stat-card + .stat-card{ border-left:1px solid var(--hairline); }
+@media (max-width:1300px){
+  .stat-card:nth-child(3n+1){ border-left:0; }
+  .stat-card:nth-child(n+4){ border-top:1px solid var(--hairline); }
+}
+@media (max-width:720px){
+  .stat-card:nth-child(3n+1){ border-left:1px solid var(--hairline); }
+  .stat-card:nth-child(2n+1){ border-left:0; }
+  .stat-card:nth-child(n+3){ border-top:1px solid var(--hairline); }
+}
+.stat-card:hover{ background:var(--panel-2); }
+/* 顶部 2px 强调线：悬停时从中心展开，是唯一被允许的「颜色出现」 */
+.stat-card::before{
+  content:""; position:absolute; left:0; right:0; top:0; height:2px;
+  background:var(--accent); transform:scaleX(0); transform-origin:center;
+  transition:transform var(--dur) var(--ease);
+}
+.stat-card:hover::before{ transform:scaleX(1); }
+.stat-card b{
+  font-family:var(--font-mono); font-variant-numeric:tabular-nums; font-feature-settings:"tnum" 1;
+  font-size:var(--fs-2xl); font-weight:500; line-height:1.1; letter-spacing:-.02em;
+  color:var(--text);
+}
+.stat-card span{ font-size:11px; color:var(--muted); letter-spacing:.01em; line-height:1.35; }
+.stat-card svg{ width:14px; height:14px; color:var(--accent); opacity:.8; margin-bottom:3px; }
+.honor-card{
+  display:flex; align-items:center; gap:var(--sp-4); padding:var(--sp-4);
+  border-radius:var(--r-lg); border:1px solid var(--accent);
+  background:linear-gradient(120deg,var(--accent-soft),transparent 70%),var(--panel);
+}
+.honor-medal{ width:52px; height:52px; flex:0 0 52px; color:var(--accent); }
+.honor-medal-sm{ width:28px; height:28px; flex:0 0 28px; }
+.honor-title{ font-size:var(--fs-2xl); font-weight:700; }
+.honor-prog{ margin-left:auto; min-width:280px; display:grid; gap:6px; }
+.chart-box{ min-width:0; }
+.chart-el{ width:100%; height:280px; }
+.chart-el.tall{ height:340px; }
+.rank-list{ display:flex; flex-direction:column; gap:var(--sp-2); }
+.rank-item{ display:flex; align-items:center; gap:var(--sp-3); padding:6px 8px; border-radius:var(--r-md); border:1px solid var(--border); background:var(--panel-2); }
+.rank-no{ width:22px; flex:0 0 22px; text-align:center; font-weight:700; color:var(--muted); font-size:var(--fs-xs); }
+.rank-thumb{ width:30px; height:40px; flex:0 0 30px; border-radius:4px; overflow:hidden; background:var(--panel-3); }
+.rank-thumb img{ width:100%; height:100%; object-fit:cover; }
+.rank-name{ min-width:0; flex:1; }
+.rank-val{ font-weight:700; font-variant-numeric:tabular-nums; color:var(--accent); }
+.recent-item{ display:flex; align-items:center; gap:var(--sp-3); padding:8px; border-radius:var(--r-md); }
+.recent-item:hover{ background:var(--panel-2); }
+.recent-thumb{ width:34px; height:46px; flex:0 0 34px; border-radius:5px; overflow:hidden; background:var(--panel-3); }
+.recent-thumb img{ width:100%; height:100%; object-fit:cover; }
+.recent-review{ border-left:2px solid var(--accent); padding-left:var(--sp-3); display:grid; gap:2px; }
+.recent-review .txt{ font-size:var(--fs-sm); color:var(--text-2); }
+.recent-review .meta{ font-size:11px; color:var(--muted); }
+

@@ -1,0 +1,329 @@
+/* ============================================================
+   8. 数据源接入（Bangumi → AniList → 手动）
+   ============================================================ */
+const API_TIMEOUT = 8000;
+
+function fetchWithTimeout(url, opts, ms){
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), ms || API_TIMEOUT);
+  return fetch(url, Object.assign({}, opts, { signal: ctrl.signal }))
+    .finally(() => clearTimeout(t));
+}
+function proxyUrl(target){
+  const p = (settings.data_proxy_url || "").trim();
+  if(!p) return null;
+  return p + encodeURIComponent(target);
+}
+/* 公共代理有一类会把响应包一层壳再返回：
+   allorigins 的 /get 就是 { contents: "<原 body 字符串>" }，
+   corsproxy.xyz 的非raw 端点也是类似结构。
+   不解包的话 res.json() 拿到的是壳对象，下游读 data.data 全是undefined，
+   表现成「搜索到 0 条结果」—— 而用户会以为是自己的关键词没匹配上。
+
+   判据要严：只有壳里确实是字符串、且能解析成对象、且不是错误页，
+   才认它是壳。只认 contents 一个键是不够的：目标自己返回一个
+   带 contents 字段的合法 JSON 时会被误拆。 */
+function unwrapProxyPayload(data){
+  if(!data || typeof data !== "object" || Array.isArray(data)) return data;
+  if(typeof data.contents !== "string") return data;
+  let inner;
+  try{ inner = JSON.parse(data.contents); }
+  catch(e){ return data; }               /* 壳里不是 JSON：不是壳，按原样 */
+  if(!inner || typeof inner !== "object") return data;
+  /* 代理出错时 contents 常是 HTML 错误页或 { error: ... }。
+     那种情况下原样返回，让下游按错误处理 —— 把错误页解析成
+     「空结果」会把代理故障伪装成「没搜到」，是最难查的一类假象。 */
+  if(inner.error || inner.status || typeof inner.html === "string") return data;
+  return inner;
+}
+
+/* 代理自检：填完地址先点这个，别直接拿去搜索。
+   分四层报，因为用户看到「搜索失败」时无法区分是哪一层坏了：
+     ① 代理地址本身能不能解析出 host（填错格式最常见）
+     ② 网络能不能到（超时 = 大概率被墙/被限流）
+     ③ 有没有HTTP 响应
+     ④ 有没有 CORS 头 —— 这一层最隐蔽：curl 看着完全正常，
+        页面上照样失败，因为浏览器不让读没有 ACAO 的响应。
+   附带说明该代理是否需要 API Key。 */
+async function diagnoseProxy(prefix){
+  const report = { prefix: prefix, ok: false, stage: "", detail: "", cors: null, status: null };
+  let u = null;
+  try{ u = new URL(prefix); }
+  catch(e){
+    report.stage = "地址格式";
+    report.detail = "不是合法 URL（要含 https:// 与 ?url= 之类的参数）";
+    return report;
+  }
+  /* 探测目标用 AniList 根路径：GET 必然返回 400/404，
+     「有响应」就说明代理把请求转发出去了。不拿它当成功判据 ——
+     能转发和能用是两件事。 */
+  const probe = "https://graphql.anilist.co";
+  let res = null, err = null;
+  try{
+    res = await fetchWithTimeout(prefix + encodeURIComponent(probe), {
+      method: "GET", headers: { "Accept": "application/json" }
+    }, 9000);
+  }catch(e){ err = e; }
+  if(err){
+    const name = (err && err.name) || "";
+    if(name === "AbortError"){
+      report.stage = "网络";
+      report.detail = "9秒 无响应。公共免费代理多数在境外，国内常常连不上或被限流";
+    }else{
+      report.stage = "网络";
+      report.detail = "请求失败：" + ((err && err.message) || name || "未知");
+    }
+    return report;
+  }
+  report.status = res.status;
+  report.cors = !!res.headers.get("access-control-allow-origin");
+  if(res.status === 401 || res.status === 403){
+    report.stage = "需要授权";
+    report.detail = "HTTP " + res.status + "：该代理需要 API Key 或已关闭免费额度";
+    return report;
+  }
+  if(res.status === 429){
+    report.stage = "被限流";
+    report.detail = "HTTP 429：请求过于频繁，稍后再试";
+    return report;
+  }
+  if(!report.cors){
+    report.stage = "CORS 头";
+    report.detail = "HTTP " + res.status + " 但响应没有 Access-Control-Allow-Origin，浏览器仍会拦截";
+    return report;
+  }
+  if(res.status >= 400 && res.status < 500){
+    /* 4xx + 有 CORS 头 = 转发成功了，目标自己不接受这个方法。
+       对自检来说这就是通过。 */
+    report.ok = true;
+    report.stage = "可用";
+    report.detail = "转发正常（探测目标返回 " + res.status + " 属预期：它不接受 GET）";
+    return report;
+  }
+  if(res.status >= 500){
+    report.stage = "代理侧错误";
+    report.detail = "HTTP " + res.status + "：代理自己出错了";
+    return report;
+  }
+  report.ok = true;
+  report.stage = "可用";
+  report.detail = "HTTP " + res.status;
+  return report;
+}
+
+async function fetchJSON(target, opts, useProxy){
+  const tryOnce = async (url) => {
+    const res = await fetchWithTimeout(url, opts);
+    if(!res.ok) {
+      const e = new Error("HTTP " + res.status);
+      e.httpStatus = res.status;
+      throw e;
+    }
+    return unwrapProxyPayload(await res.json());
+  };
+  try{
+    return await tryOnce(target);
+  }catch(err){
+    if(!useProxy){ throw err; }
+    const p = proxyUrl(target);
+    if(!p) throw err;
+    const e2 = new Error("代理请求也失败了");
+    try{ return await tryOnce(p); }
+    catch(err2){
+      if(err2 && err2.httpStatus){ e2.message = "HTTP " + err2.httpStatus; }
+      else if(err2 && /JSON|Unexpected/i.test(err2.message || "")){
+        /* 代理返回了非 JSON：多半是它自己出错了而不是目标出错。
+           照实说「代理返回的不是 JSON」，别让用户去查关键词。 */
+        e2.message = "代理返回的内容不是 JSON（该地址可能不是 CORS 代理，或已失效）";
+      }
+      throw e2;
+    }
+  }
+}
+
+/* 8.1 Bangumi */
+function bangumiBody(keyword){
+  return JSON.stringify({ keyword: keyword, filter: { type: [2] } });
+}
+async function searchBangumi(keyword){
+  const target = "https://api.bgm.tv/v0/search/subjects?limit=" + clampNum(settings.search_limit,1,25);
+  const opts = { method:"POST", headers:{ "Content-Type":"application/json", "Accept":"application/json" }, body: bangumiBody(keyword) };
+  const data = await fetchJSON(target, opts, true);
+  const list = Array.isArray(data && data.data) ? data.data : [];
+  return list.map(s => ({
+    id: s.id,
+    sourceId: String(s.id),
+    sourceLabel: "Bangumi",
+    source: "bangumi",
+    titleCn: (s.name_cn || "").trim() || (s.name || "").trim(),
+    titleOriginal: (s.name || "").trim(),
+    coverUrl: (s.images && (s.images.large || s.images.common || s.images.medium)) || "",
+    airDate: s.date || "",
+    totalEpisodes: (s.eps == null ? null : s.eps),
+    communityScore: (s.score ? Math.round(s.score * 10) / 10 : null),
+    summary: s.summary || ""
+  }));
+}
+async function detailBangumi(sid){
+  const target = "https://api.bgm.tv/v0/subjects/" + sid;
+  const data = await fetchJSON(target, { method:"GET", headers:{ "Accept":"application/json" } }, true);
+  const summary = cleanText(data.summary || "");
+  return {
+    sourceId: String(data.id),
+    sourceLabel: "Bangumi",
+    source: "bangumi",
+    titleCn: (data.name_cn || "").trim() || (data.name || "").trim(),
+    titleOriginal: (data.name || "").trim(),
+    coverUrl: (data.images && (data.images.large || data.images.common || data.images.medium)) || "",
+    airDate: data.date || "",
+    totalEpisodes: (data.eps == null ? null : data.eps),
+    genres: (Array.isArray(data.tags) ? data.tags.map(t => t && t.name).filter(Boolean) : []).slice(0, 16),
+    studios: parseBangumiInfobox(data.infobox),
+    summary: summary,
+    communityScore: (data.rating && data.rating.score ? Math.round(data.rating.score * 10) / 10 : null)
+  };
+}
+const STUDIO_KEYS = ["动画制作","制作公司","制作会社","制作","プロデュース","アニメーション制作","出品","animation studio"];
+function parseBangumiInfobox(infobox){
+  const out = [];
+  if(!Array.isArray(infobox)) return out;
+  infobox.forEach(item => {
+    const key = String((item && item.key) || "");
+    if(!STUDIO_KEYS.some(k => key.indexOf(k) >= 0 && ["动画制作","制作公司","制作会社","プロデュース","アニメーション制作"].indexOf(k) >= 0)) return;
+    let val = item.value;
+    const push = v => { const s = cleanText(v); if(s && out.indexOf(s) < 0) out.push(s); };
+    if(Array.isArray(val)) val.forEach(v => push(typeof v === "string" ? v : (v && (v.name || v.v || v.value) || "")));
+    else if(val && typeof val === "object") push(val.name || val.v || val.value || "");
+    else if(typeof val === "string") val.split(/[、,，\/]/).forEach(push);
+  });
+  return out;
+}
+function cleanText(html){
+  let s = String(html || "");
+  s = s.replace(/<br\s*\/?>/gi, "\n");
+  s = s.replace(/\[\/?mask\]/gi, "");
+  s = s.replace(/<[^>]+>/g, "");
+  /* &amp; 必须最后解码：先解它会把源文本里的字面量 &amp;lt; 二次解码成 < */
+  s = s.replace(/&nbsp;/g, " ").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, "&");
+  s = s.replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n");
+  return s.trim();
+}
+
+/* 8.2 AniList GraphQL */
+const ANILIST_QUERY = `
+query ($q: String, $perPage: Int) {
+  Page(perPage: $perPage) {
+    pageInfo { total }
+    media(search: $q, type: ANIME, sort: SEARCH_MATCH) {
+      id
+      title { romaji english native }
+      coverImage { extraLarge large }
+      episodes
+      duration
+      startDate { year month day }
+      studios(isMain: true) { nodes { name } }
+      genres
+      description(asHtml: false)
+      averageScore
+      synonyms
+    }
+  }
+}`;
+async function searchAniList(keyword){
+  const body = JSON.stringify({ query: ANILIST_QUERY, variables: { q: keyword, perPage: clampNum(settings.search_limit,1,25) } });
+  const opts = { method:"POST", headers:{ "Content-Type":"application/json", "Accept":"application/json" }, body: body };
+  const data = await fetchJSON("https://graphql.anilist.co", opts, true);
+  const media = (data && data.data && data.data.Page && data.data.Page.media) || [];
+  return media.map(m => ({
+    id: m.id,
+    sourceId: String(m.id),
+    sourceLabel: "AniList",
+    source: "anilist",
+    titleCn: (m.title && ((m.title.english || m.title.romaji) || "")) || (m.title && m.title.native) || "",
+    titleOriginal: (m.title && m.title.native) || "",
+    noCnName: !(m.title && m.title.english),
+    coverUrl: (m.coverImage && (m.coverImage.extraLarge || m.coverImage.large)) || "",
+    airDate: joinASD(m.startDate),
+    totalEpisodes: (m.episodes == null ? null : m.episodes),
+    genres: Array.isArray(m.genres) ? m.genres.slice(0,12) : [],
+    studios: ((m.studios && m.studios.nodes) || []).map(n => n && n.name).filter(Boolean).slice(0,4),
+    summary: cleanText(m.description || ""),
+    communityScore: (m.averageScore ? Math.round(m.averageScore / 10 * 10) / 10 : null),
+    durationMinutes: (m.duration == null ? null : m.duration),
+    synonyms: Array.isArray(m.synonyms) ? m.synonyms.slice(0,6) : []
+  }));
+}
+function joinASD(d){
+  if(!d || !d.year) return "";
+  const p = n => String(n).padStart(2,"0");
+  return d.year + (d.month ? "-" + p(d.month) : "") + (d.day ? "-" + p(d.day) : "");
+}
+
+/* 组合搜索：Bangumi → AniList */
+async function searchAll(keyword, onPartial){
+  const out = { results: [], notices: [], errors: [], sources: [] };
+  const tasks = [];
+  if(settings.src_bangumi_enabled){
+    tasks.push(searchBangumi(keyword).then(list => {
+      out.results = out.results.concat(list);
+      out.sources.push({ name:"Bangumi", count: list.length, ok:true });
+      if(onPartial) onPartial(out);
+    }).catch(e => {
+      out.errors.push({ name:"Bangumi", message: describeFetchError(e) });
+      out.sources.push({ name:"Bangumi", count:0, ok:false });
+      if(onPartial) onPartial(out);
+    }));
+  }
+  if(settings.src_anilist_enabled){
+    tasks.push(searchAniList(keyword).then(list => {
+      out.results = out.results.concat(list);
+      out.sources.push({ name:"AniList", count: list.length, ok:true });
+      if(onPartial) onPartial(out);
+    }).catch(e => {
+      out.errors.push({ name:"AniList", message: describeFetchError(e) });
+      out.sources.push({ name:"AniList", count:0, ok:false });
+      if(onPartial) onPartial(out);
+    }));
+  }
+  if(!tasks.length){
+    out.errors.push({ name:"数据源", message:"两个数据源都已在设置中被关闭" });
+    return out;
+  }
+  await Promise.allSettled(tasks);
+  if(out.results.length && out.sources.some(s => s.name === "AniList" && s.ok) && out.sources.some(s => s.name === "Bangumi" && !s.ok)){
+    out.notices.push("以下结果来自 AniList");
+  }
+  if(out.sources.some(s => s.name === "AniList" && s.ok) && out.sources.some(s => s.name === "Bangumi" && s.ok)){
+    out.notices.push("Bangumi 与 AniList 结果已合并");
+  }
+  return out;
+}
+function describeFetchError(e){
+  if(e && e.name === "AbortError") return "请求超时（8 秒）";
+  if(e && /代理/.test(e.message)) return e.message + "，请检查设置中的代理地址";
+  const msg = (e && e.message) || String(e);
+  if(/Failed to fetch|NetworkError|TypeError/i.test(msg)) return "网络错误或被浏览器跨域拦截（可在设置中配置代理）";
+  return msg;
+}
+/* 8.3 候选 → 详情补全 */
+async function enrichCandidate(c){
+  const full = Object.assign({}, c);
+  try{
+    if(c.source === "bangumi"){
+      const d = await detailBangumi(c.sourceId);
+      Object.assign(full, d, { sourceIds: { bangumi: String(c.sourceId) } });
+    } else if(c.source === "anilist"){
+      // AniList 搜索结果已是完整字段，仅补充别名
+      full.sourceIds = { anilist: String(c.sourceId) };
+      full.aliases = (c.synonyms || []).slice(0,6);
+    }
+  }catch(e){
+    full._warn = "详情抓取失败，已用搜索结果的基础字段：" + describeFetchError(e);
+    full.sourceIds = {};
+    full.sourceIds[c.source] = String(c.sourceId);
+  }
+  delete full.id;
+  delete full.synonyms;
+  return full;
+}
+

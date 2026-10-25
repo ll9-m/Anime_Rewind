@@ -1,0 +1,99 @@
+/* ============================================================
+   12. 筛选 / 排序
+   ============================================================ */
+const libState = {
+  q: "",
+  view: "wall",
+  sort: "createdAt_desc",
+  statusId: "",
+  decade: "",
+  watchYear: "",
+  watchGrade: "",
+  studio: "",
+  genre: "",
+  /* null = 未按系列筛选；"" = 筛选「默认系列」（未归类作品）；
+     其余为具体系列 id。
+     这三个状态必须分开：默认系列的 id 就是空串，若用 "" 同时表示
+     「未筛选」和「筛选默认系列」，两者永远无法区分 ——
+     用户选「默认系列」会看到全部作品，以为筛选器坏了。 */
+  seriesId: null,
+  flag: "",
+  /* 从卡行「更多」进来时要摊平的那一组（系列 id 或 ROW_CONTINUE）。
+     空串 = 没展开，网格显示正常筛选结果。
+     它不属于筛选器体系：库里没有「有进度未看完」这个筛选维度，
+     硬塞进 filterAnime 只会在筛选栏多出一个语义不清的下拉项。 */
+  rowExpanded: ""
+};
+const SORTS = [
+  { key:"createdAt_desc", name:"添加时间（新→旧）" },
+  { key:"createdAt_asc",  name:"添加时间（旧→新）" },
+  { key:"airDate_desc",   name:"首播年（新→旧）" },
+  { key:"airDate_asc",    name:"首播年（旧→新）" },
+  { key:"myScore_desc",   name:"我的评分（高→低）" },
+  { key:"communityScore_desc", name:"社区评分（高→低）" },
+  { key:"rewatchCount_desc", name:"重看次数（多→少）" },
+  { key:"series_asc",     name:"系列（归拢同一部）" }
+];
+
+function matchQ(a, q){
+  if(!q) return true;
+  const k = normalize(q);
+  /* 系列名一并参与搜索：用户记得「这是那个系列里的」，
+     却想不起具体某一季的片名时，搜系列名应该能捞出来。 */
+  return [a.titleCn, a.titleOriginal, seriesNameOf(a)].concat(a.aliases || [], a.personalTags || [], a.studios || [], a.genres || [])
+    .filter(Boolean).some(s => normalize(s).indexOf(k) >= 0);
+}
+function filterAnime(list){
+  const f = libState;
+  return list.filter(a => {
+    if(f.statusId && a.statusId !== f.statusId) return false;
+    if(f.decade && decadeOf(a.airDate) !== f.decade) return false;
+    if(f.watchYear && String(a.watchYear || "") !== String(f.watchYear)) return false;
+    if(f.watchGrade && a.watchGrade !== f.watchGrade) return false;
+    if(f.studio && (a.studios || []).indexOf(f.studio) < 0) return false;
+    if(f.genre && (a.genres || []).indexOf(f.genre) < 0) return false;
+    /* 系列筛选：libState.seriesId === null 表示未筛选，
+       空串表示「只看未归类的作品」，两者语义不同，必须显式判 null。 */
+    if(f.seriesId !== null && (a.seriesId || DEFAULT_SERIES_ID) !== f.seriesId) return false;
+    if(f.flag === "fav" && !a.favorite) return false;
+    if(f.flag === "master" && !a.masterpiece) return false;
+    if(f.flag === "review" && !(a.reviews || []).length) return false;
+    if(f.flag === "noYear" && a.watchYear) return false;
+    if(f.q && !matchQ(a, f.q)) return false;
+    return true;
+  });
+}
+function sortAnime(list){
+  const key = libState.sort;
+  const arr = list.slice();
+  const num = v => (v == null ? -1 : Number(v));
+  switch(key){
+    case "createdAt_asc":  arr.sort((a,b) => String(a.createdAt).localeCompare(String(b.createdAt))); break;
+    case "airDate_desc":   arr.sort((a,b) => String(b.airDate||"").localeCompare(String(a.airDate||""))); break;
+    case "airDate_asc":    arr.sort((a,b) => String(a.airDate||"0000").localeCompare(String(b.airDate||"0000"))); break;
+    case "myScore_desc":   arr.sort((a,b) => num(b.myScore) - num(a.myScore)); break;
+    case "communityScore_desc": arr.sort((a,b) => num(b.communityScore) - num(a.communityScore)); break;
+    case "rewatchCount_desc":   arr.sort((a,b) => (b.rewatchCount||0) - (a.rewatchCount||0)); break;
+    /* 按系列归拢：先按系列名，同系列内再按首播年 ——
+       这样「第一季 / 第二季 / 剧场版」会自动挨在一起。 */
+    case "series_asc":
+      arr.sort((a,b) => {
+        const sa = seriesNameOf(a), sb = seriesNameOf(b);
+        const c = sa.localeCompare(sb, "zh");
+        if(c) return c;
+        return String(a.airDate||"9999").localeCompare(String(b.airDate||"9999"));
+      });
+      break;
+    default: arr.sort((a,b) => String(b.createdAt).localeCompare(String(a.createdAt)));
+  }
+  return arr;
+}
+function activeFilterCount(){
+  let n = 0;
+  /* seriesId 的「未筛选」是 null，用 truthy 判断会漏计，
+     于是「正在按系列筛选」时清空筛选按钮不出现，用户找不到退出口。 */
+  ["statusId","decade","watchYear","watchGrade","studio","genre","flag"].forEach(k => { if(libState[k]) n++; });
+  if(libState.seriesId !== null) n++;
+  return n;
+}
+

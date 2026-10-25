@@ -1,0 +1,271 @@
+/* ============================================================
+   18. 重看转盘
+   ============================================================ */
+const wheelState = { filter:"all", decade:"", spinning:false, result:null, angle:0 };
+function wheelCandidates(){
+  let list = state.anime.filter(a => settings.module_wheel ? true : false);
+  if(wheelState.filter === "any"){ /* 全部作品，不按状态收窄 */ }
+  else if(wheelState.filter === "done") list = list.filter(a => a.statusId === "st_done" || progressOf(a) === 100);
+  else if(wheelState.filter === "master") list = list.filter(a => a.masterpiece);
+  else list = list.filter(a => (a.statusId === "st_done" || a.statusId === "st_watching" || (a.watchedEpisodes||0) > 0));
+  if(wheelState.decade) list = list.filter(a => decadeOf(a.airDate) === wheelState.decade);
+  return list;
+}
+/* 候选为 0 时必须说清「为什么」和「怎么办」——否则用户只看到一个转不动的圆盘，
+   无从判断是自己筛选错了、是筛选太窄，还是根本还没入库。
+   返回 { reason, hint, actions:[{label, act}] }，由 renderWheel 渲染成可点击的引导。 */
+function wheelEmptyDiagnosis(){
+  const all = state.anime;
+  if(!all.length){
+    return { reason:"片库还是空的", hint:"转盘需要先有作品才能抽。搜索一部童年动画，或手动录入。",
+      actions:[{ label:"去搜索添加", act:"go-add" }] };
+  }
+  if(!wheelState.decade && wheelState.filter === "all"){
+    return { reason:"没有「看过或在看」的作品",
+      hint:"当前筛选只包含看过、在看或已看集数大于 0 的作品。你的 " + all.length + " 部作品目前都是「想看」且 0 集。",
+      actions:[{ label:"改看「全部作品」", act:"set-all" }] };
+  }
+  // 有其他维度在收窄：指出是年代还是类型
+  if(wheelState.decade){
+    const n = all.filter(a => decadeOf(a.airDate) === wheelState.decade).length;
+    if(!n) return { reason:wheelState.decade + " 年代没有作品",
+      hint:"把年代切回「全部年代」，或先去补几部这一年的作品。",
+      actions:[{ label:"切回全部年代", act:"decade-clear" }] };
+    return { reason:wheelState.decade + " 年代里没有符合当前筛选的作品",
+      hint:"该年代共有 " + n + " 部作品，但都不满足当前筛选条件。",
+      actions:[{ label:"改看「全部作品」", act:"set-all" },{ label:"切回全部年代", act:"decade-clear" }] };
+  }
+  if(wheelState.filter === "master"){
+    const n = all.filter(a => a.masterpiece).length;
+    if(!n) return { reason:"还没有标记「神作」的作品",
+      hint:"在片库里把作品标为神作，它们就会进入这个范围。共 " + all.length + " 部作品待标记。",
+      actions:[{ label:"改看「看过 / 在看」", act:"set-default" }] };
+    return { reason:"没有同时满足「神作」和其他条件的作品",
+      hint:"共 " + n + " 部神作作品，但都不满足其他条件。",
+      actions:[{ label:"改看「看过 / 在看」", act:"set-default" }] };
+  }
+  return { reason:"当前条件下没有候选作品", hint:"共 " + all.length + " 部作品，换个筛选条件试试。",
+    actions:[{ label:"改看「全部作品」", act:"set-all" }] };
+}
+function drawWheel(canvas, items){
+  const ctx = canvas && canvas.getContext ? canvas.getContext("2d") : null;
+  if(!ctx) return;
+  const dpr = window.devicePixelRatio || 1;
+  const size = canvas.offsetWidth || 520;
+  canvas.width = size * dpr; canvas.height = size * dpr;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, size, size);
+  const cx = size/2, cy = size/2, R = size/2 - 6;
+  const cs = getComputedStyle(document.documentElement);
+  const accent = (cs.getPropertyValue("--accent") || "#22d3ee").trim();
+  const panel = (cs.getPropertyValue("--panel-3") || "#232c38").trim();
+  const text = (cs.getPropertyValue("--text") || "#e6edf3").trim();
+  const muted = (cs.getPropertyValue("--muted") || "#94a3b3").trim();
+  if(!items.length){
+    ctx.beginPath(); ctx.arc(cx, cy, R, 0, Math.PI*2);
+    ctx.fillStyle = panel; ctx.fill();
+    ctx.fillStyle = muted; ctx.font = "600 " + Math.round(size/26) + "px 'PingFang SC','Microsoft YaHei',sans-serif";
+    ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    ctx.fillText("没有候选作品", cx, cy);
+    return;
+  }
+  const n = items.length;
+  const step = (Math.PI*2) / n;
+  items.forEach((it, i) => {
+    const a0 = -Math.PI/2 + i*step;
+    ctx.beginPath();
+    ctx.moveTo(cx, cy);
+    ctx.arc(cx, cy, R, a0, a0 + step);
+    ctx.closePath();
+    ctx.fillStyle = i % 2 === 0 ? panel : accentFade(accent, 0.14, cs);
+    ctx.fill();
+    ctx.strokeStyle = accent; ctx.lineWidth = 1; ctx.stroke();
+    // 文字始终保持「可读朝向」：落在左半圈的扇区翻转 180° 再画，
+    // 否则下半圈的片名会整个倒过来显示。
+    const mid = a0 + step/2;
+    const flip = Math.cos(mid) < 0;
+    ctx.save();
+    ctx.translate(cx, cy);
+    ctx.rotate(flip ? mid + Math.PI : mid);
+    ctx.textAlign = flip ? "left" : "right";
+    ctx.textBaseline = "middle";
+    ctx.fillStyle = text;
+    const maxLen = n > 16 ? 8 : (n > 8 ? 12 : 18);
+    let label = it.titleCn || it.titleOriginal || "未命名";
+    if(label.length > maxLen) label = label.slice(0, maxLen) + "…";
+    const fs = Math.max(10, Math.min(16, Math.round(size / Math.max(10, n) * 1.6)));
+    ctx.font = "600 " + fs + "px 'PingFang SC','Microsoft YaHei',sans-serif";
+    ctx.fillText(label, flip ? -(R - 14) : (R - 14), 0);
+    ctx.restore();
+  });
+  ctx.beginPath(); ctx.arc(cx, cy, R, 0, Math.PI*2);
+  ctx.strokeStyle = accent; ctx.lineWidth = 3; ctx.stroke();
+}
+function accentFade(accent, alpha, cs){
+  return hexToRgba(accent.includes("#") ? accent : "#22d3ee", alpha);
+}
+function hexToRgba(hex, a){
+  let h = hex.replace("#","");
+  if(h.length === 3) h = h.split("").map(c => c+c).join("");
+  const num = parseInt(h, 16);
+  return "rgba(" + ((num>>16)&255) + "," + ((num>>8)&255) + "," + (num&255) + "," + a + ")";
+}
+function renderWheel(root){
+  const cands = wheelCandidates();
+  let result = wheelState.result;
+  if(result && !animeById(result.id)) result = wheelState.result = null;
+  root.innerHTML =
+    '<div class="wheel-page">' +
+      "<div>" +
+        '<div class="panel">' +
+          '<div class="panel-head"><h3>候选范围</h3><span class="hint" id="wheel-count">' + cands.length + " 部候选</span></div>" +
+          '<div class="row gap-3" style="flex-wrap:wrap">' +
+            '<div class="field"><label>筛选</label>' +
+              '<select class="select" id="wh-filter" style="min-width:170px">' +
+                '<option value="all"' + (wheelState.filter==="all"?" selected":"") + '>看过 / 在看（推荐）</option>' +
+                '<option value="any"' + (wheelState.filter==="any"?" selected":"") + '>全部作品</option>' +
+                '<option value="done"' + (wheelState.filter==="done"?" selected":"") + '>仅「看过」</option>' +
+                '<option value="master"' + (wheelState.filter==="master"?" selected":"") + ">仅神作</option>" +
+              "</select></div>" +
+            '<div class="field"><label>年代</label>' +
+              '<select class="select" id="wh-decade" style="min-width:120px">' +
+                '<option value="">全部年代</option>' + allDecades().map(d => '<option value="' + attr(d) + '"' + (wheelState.decade===d?" selected":"") + ">" + esc(d) + "</option>").join("") +
+              "</select></div>" +
+          "</div>" +
+        "</div>" +
+        '<div class="panel mt-4">' +
+          '<div class="wheel-stage"><div class="wheel-wrap">' +
+            '<canvas id="wheel-canvas" aria-label="候选作品转盘"></canvas>' +
+            '<div class="wheel-pointer"></div>' +
+            '<button class="wheel-center" id="wh-go" type="button"' + (cands.length ? "" : " disabled") + '>' + ic("play",18) + "<span>开始</span></button>" +
+          "</div></div>" +
+        "</div>" +
+        (cands.length ? "" : '<div class="panel mt-4" id="wheel-why">' + wheelEmptyHTML(wheelEmptyDiagnosis()) + "</div>") +
+      "</div>" +
+      '<div class="col">' +
+        '<div class="panel" id="result-panel">' + resultCardHTML(result) + "</div>" +
+        (reduceMotion() ? '<p class="hint">已检测到「减少动态效果」偏好，转盘会直接给出结果。</p>' : "") +
+      "</div>" +
+    "</div>";
+  const canvas = root.querySelector("#wheel-canvas");
+  drawWheel(canvas, cands);
+  // 重渲染会重建 canvas，CSS transform 随之清零；把已转到的角度回放回去，
+  // 否则下一次点「再来」会从 0° 突然跳到累计角度。
+  if(canvas && wheelState.angle) canvas.style.transform = "rotate(" + (wheelState.angle * 180 / Math.PI) + "deg)";
+  const wf = root.querySelector("#wh-filter"), wd = root.querySelector("#wh-decade");
+  if(wf) wf.addEventListener("change", () => { wheelState.filter = wf.value; rerender(); });
+  if(wd) wd.addEventListener("change", () => { wheelState.decade = wd.value; rerender(); });
+  const goBtn = root.querySelector("#wh-go");
+  if(goBtn) goBtn.addEventListener("click", () => spinWheel(root, cands));
+  // 候选为 0 时的引导按钮：必须真的能改变筛选条件，否则只是装饰
+  root.querySelectorAll("#wheel-why [data-why-act]").forEach(b => b.addEventListener("click", () => {
+    const a = b.dataset.whyAct;
+    if(a === "set-all"){ wheelState.filter = "any"; }
+    else if(a === "set-default"){ wheelState.filter = "all"; }
+    else if(a === "decade-clear"){ wheelState.decade = ""; }
+    else if(a === "go-add"){ go("library"); return; }
+    else return;
+    rerender();
+    toast("已调整候选范围", "ok");
+  }));
+  bindResultActions(root, result);
+}
+/* 候选为 0 的诊断面板：说清原因 + 给可点击的修复动作 */
+function wheelEmptyHTML(dg){
+  return '<div class="panel-head"><h3>为什么转不动</h3><span class="hint">' + esc(dg.reason) + "</span></div>" +
+    '<p class="small" style="line-height:1.75;margin-bottom:12px">' + esc(dg.hint) + "</p>" +
+    '<div class="row gap-3" style="flex-wrap:wrap">' +
+      dg.actions.map(a => '<button class="btn btn-sm' + (a.act === "go-add" ? " btn-primary" : "") + '" type="button" data-why-act="' + attr(a.act) + '">' + esc(a.label) + "</button>").join("") +
+    "</div>";
+}
+function resultCardHTML(a){
+  if(!a) return '<div class="state-box" style="border:0;padding:32px 8px">' + ic("wheel",40) +
+    "<h2>还没有抽出片子</h2><p>点中间的「开始」转一次。</p></div>";
+  const last = (a.reviews||[]).slice().sort((x,y) => String(y.date).localeCompare(String(x.date)))[0];
+  return '<div class="result-card">' +
+      '<div class="result-cover">' + coverImg(a) + "</div>" +
+      '<div class="result-body">' +
+        '<h3>' + esc(a.titleCn || a.titleOriginal) + "</h3>" +
+        (a.titleOriginal ? '<div class="small muted">' + esc(a.titleOriginal) + "</div>" : "") +
+        '<div class="row gap-3 mt-3" style="flex-wrap:wrap">' +
+          (a.myScore != null ? '<span class="score-pill mine">' + ic("starfill",11) + fmtNum(a.myScore) + "</span>" : "") +
+          '<span class="badge badge-src">' + esc(statusName(a)) + "</span>" +
+          '<span class="small muted">重看 ' + (a.rewatchCount||0) + " 次</span>" +
+        "</div>" +
+        (last ? '<div class="small muted mt-3 clamp-3">上次感想（' + esc(last.date) + "，第 " + (last.round||1) + " 次）：" + esc(last.content || "（仅记录未写感想）") + "</div>" : "") +
+        '<div class="result-actions mt-3">' +
+          '<button class="btn btn-primary btn-sm" type="button" data-act="rewatch">' + ic("refresh",14) + "记录一次重看</button>" +
+          '<button class="btn btn-sm" type="button" data-act="again">' + ic("wheel",14) + "再转一次</button>" +
+          '<button class="btn btn-sm" type="button" data-act="detail">' + ic("play",14) + "详情</button>" +
+        "</div>" +
+      "</div></div>";
+}
+function bindResultActions(root, a){
+  if(!a) return;
+  root.querySelectorAll("#result-panel [data-act]").forEach(b => b.addEventListener("click", async () => {
+    const act = b.dataset.act;
+    if(act === "detail"){ go("theater", a.id); return; }
+    if(act === "rewatch"){ await promptReview(a); return; }
+    if(act === "again"){
+      const cands = wheelCandidates();
+      spinWheel(root, cands);
+    }
+  }));
+}
+function spinWheel(root, cands){
+  if(wheelState.spinning) return;
+  if(!cands.length){ toast("没有候选作品：换一下筛选范围","warn"); return; }
+  const pick = pickRandom(cands);
+  if(reduceMotion() || !settings.module_wheel){
+    wheelState.result = pick;
+    bindResultHTML(pick);
+    return;
+  }
+  wheelState.spinning = true;
+  const btn = $("#wh-go");
+  if(btn){ btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>'; }
+  const canvas = $("#wheel-canvas");
+  const n = cands.length;
+  const targetIndex = cands.findIndex(c => c.id === pick.id);
+  const step = (Math.PI*2) / n;
+  const base = -Math.PI/2;
+  // 指针固定在 0°（右侧）。扇区 i 的中心角 c = base + i*step + step/2，
+  // 要让它转到 0°，画布需要「减 c」而不是「加 c」—— 之前符号写反，指针永远指错片。
+  const target = -(base + targetIndex*step + step*0.5);
+  const start = performance.now();
+  const from = wheelState.angle;
+  const spins = 4 + Math.floor(Math.random()*3);
+  const dur = 3000 + Math.random()*2000;
+  const ease = t => 1 - Math.pow(1 - t, 3);
+  // 归一化到「顺时针至少转 4 圈」的等价角，避免 from 较大时出现反转或动画不转
+  let goal = target + Math.PI*2*spins;
+  while(goal - from < Math.PI*2*spins) goal += Math.PI*2;
+  const frame = (now) => {
+    const t = Math.min(1, (now - start) / dur);
+    const rad = from + (goal - from) * ease(t);
+    canvas.style.transform = "rotate(" + (rad * 180 / Math.PI) + "deg)";
+    if(t < 1){ requestAnimationFrame(frame); return; }
+    wheelState.angle = goal;
+    wheelState.spinning = false;
+    wheelState.result = pick;
+    canvas.style.transform = "rotate(" + (goal * 180 / Math.PI) + "deg)";
+    if(btn){ btn.disabled = false; btn.innerHTML = ic("play",18) + "<span>再来</span>"; }
+    bindResultHTML(pick);
+  };
+  requestAnimationFrame(frame);
+}
+function bindResultHTML(pick){
+  const panel = $("#result-panel");
+  if(!panel) return;
+  panel.innerHTML = resultCardHTML(pick);
+  bindResultActions(document, pick);
+  panel.animate ? panel.animate([{ opacity:0, transform:"translateY(8px)" },{ opacity:1, transform:"none" }], { duration:260, easing:"ease-out" }) : null;
+}
+
+registerPage({
+  id:"wheel", name:"重看转盘", icon:"wheel", title:"重看转盘",
+  sub:"让转盘替你决定今晚重温哪一部",
+  settingKey:"module_wheel",
+  render: renderWheel
+});
+

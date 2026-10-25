@@ -1,0 +1,280 @@
+/* ============================================================
+   16.5 播放源体系（数据模型 + 选源算法）
+   ------------------------------------------------------------
+   参考 Izuko_TV / Animeko 的 MediaSelector 体系，直译成纯函数。
+
+   为什么要有「多线路」：原先一条作品只存一个 streamUrl，
+   用户要换线路只能覆盖，之前的线路就没了。Izuko_TV 的做法是
+   一个条目下并存多个源，播放时再挑。
+
+   为什么筛选要三态（included / excluded + 原因）：
+   直接把不合适的资源丢掉，用户只会看到「搜不到」，
+   不知道是分辨率不对还是字幕缺失。携带原因排到最后，
+   界面上能写清「为什么没选它」，用户也能手动挑回来。
+
+   为什么选源是 DFS 而不是加权求和：
+   加权求和会让「4K 无字幕」压过「1080P 有字幕」——
+   数字算出来是 4K 分高，但用户其实想要字幕。
+   DFS 是字典序：分辨率 → 字幕 → 字幕组 → 线路，
+   每一层内部穷尽后才下降，且某层匹配不到时不下降
+   （字幕组匹配不到不代表该换更差的字幕语言）。
+   ============================================================ */
+
+/* 分辨率档位：从高到低。用于 DFS 的第一层，也是唯一的排序依据。
+   不看文件大小 —— Izuko_TV 的原始注释里明确「质量优先而非大小优先」，
+   4K 体积是 1080P 的十倍，掺进评分就成了噪音。 */
+const RESOLUTION_ORDER = ["2160P","1440P","1080P","720P","480P"];
+const SUBTITLE_ORDER    = ["CHS","CHT","JPY","ENG"];
+/* 字幕形态。网页端只有「外挂字幕轨」是真正可用的，
+   内封在 <video> 上无法切换，硬字幕烧进画面更无法处理。
+   所以 UNSUPPORTED 不是缺陷陈述，是能力边界。 */
+const SUBTITLE_KINDS = ["EXTERNAL","CLOSED","EMBEDDED"];
+
+function resolutionRank(res){
+  const s = String(res || "").toUpperCase().trim();
+  const i = RESOLUTION_ORDER.indexOf(s);
+  return i < 0 ? RESOLUTION_ORDER.length : i;   // 未知分辨率排在所有已知之后
+}
+function subtitleRank(lang, wanted){
+  if(!wanted) return 0;                                   // 没偏好语言要求时不构成筛选条件
+  const i = SUBTITLE_ORDER.indexOf(String(lang || "").toUpperCase());
+  return i < 0 ? SUBTITLE_ORDER.length : i;
+}
+
+/* 线路健康度：探测结果与人工标记。
+   浏览器端只能确认「网络层有没有响应」，确认不了 HTTP 状态码，
+   所以状态只有四档且必须允许 unknown —— 把「没探测过」画成
+   「可用」和画成「失效」都是在骗用户。 */
+const HEALTH_STATES = ["unknown", "alive", "dead", "blocked"];
+const HEALTH_TEXT = {
+  unknown: "未检测",
+  alive:   "网络可达",
+  dead:    "已标记失效",
+  blocked: "被拒绝访问"
+};
+function normalizeHealth(h){
+  if(!h || typeof h !== "object") return { state:"unknown", at:"", detail:"" };
+  const st = HEALTH_STATES.indexOf(String(h.state)) >= 0 ? String(h.state) : "unknown";
+  return { state:st, at:String(h.at || ""), detail:String(h.detail || "").slice(0, 200) };
+}
+
+/* 把一条线路补全成完整结构。
+   缺字段必须给确定的默认值而不是 undefined ——
+   下游的排序比较全部是数值比较，undefined 会让比较结果变成 NaN，
+   而 NaN 参与 sort 的后果是顺序不确定且不报错，极难排查。 */
+function normalizeSource(s, idx, nowIso){
+  if(!s) return null;
+  const url = String(s.url || s.streamUrl || "").trim();
+  if(!url) return null;
+  const kind = SUBTITLE_KINDS.indexOf(String(s.subtitleKind || "").toUpperCase()) >= 0
+    ? String(s.subtitleKind).toUpperCase()
+    /* 拿不到就当外挂：这是网页端唯一真正可用的形态，
+       标成硬字幕会让所有线路都被判「平台不支持」而一个都不剩。 */
+    : "EXTERNAL";
+  return {
+    /* id 必须在多次保存之间稳定 —— 选源结果按 id 记忆「上次用的是哪条」，
+       id 每次变的话记忆永远落空，表现为「每次都选第一条」。 */
+    id: String(s.id || ("src-" + idx + "-" + hashish(url))),
+    name: String(s.name || ("线路 " + (idx + 1))),
+    url: url,
+    ep: s.ep == null || s.ep === "" ? null : Number(s.ep),
+    resolution: String(s.resolution || "").toUpperCase() || null,
+    subtitleKind: kind,
+    /* 语言可能是数组也可能是单值，统一成数组 */
+    subtitles: Array.isArray(s.subtitles)
+      ? s.subtitles.map(x => String(x || "").toUpperCase()).filter(Boolean)
+      : (s.subtitle ? [String(s.subtitle).toUpperCase()] : []),
+    tier: Number.isFinite(Number(s.tier)) ? Number(s.tier) : 2,
+    /* ---- 搜索型片源 ----
+       存的是「站点首页 + 搜索模板」而不是播放页：点一下把片名带过去让站自己搜。
+       kind 缺省必须是 play：老数据没有这个键，
+       按 truthy 判断会把用户所有已存线路一次性变成搜索型。 */
+    kind: String(s.kind || "") === "search" ? "search" : "play",
+    searchUrl: String(s.searchUrl || "").trim(),
+    savedAt: s.savedAt || nowIso || "",
+    /* ---- 台账字段（播放源管理页用）----
+       这三个字段只影响「管理与筛选」，不参与选源质量比较。
+       enabled 缺省必须为 true：老数据没有这个键，
+       若按 falsy 判断会把用户所有线路一次性判成停用。 */
+    enabled: s.enabled === false ? false : true,
+    note: String(s.note || "").slice(0, 200),
+    health: normalizeHealth(s.health),
+    lastUsedAt: s.lastUsedAt || ""
+  };
+}
+/* 轻量字符串哈希，用于生成稳定 id。不追求分布性，只求稳定。 */
+function hashish(str){
+  let h = 5381;
+  const s = String(str || "");
+  for(let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) >>> 0;
+  return h.toString(36);
+}
+
+/* ---- 迁移：旧数据 → 多线路 ----
+   旧结构是 a.streamUrl（单条）+ a.streamEp + a.streamUrlAt。
+   迁移必须幂等：已经迁过的数据再迁一次结果不变。
+   这一点很重要 —— 启动流程、导入流程、备份恢复都会调用迁移，
+   只要有一处重复调用就会产生第二条重复线路。 */
+function migrateSources(a){
+  if(!a) return a;
+  const now = new Date().toISOString();
+  const raw = Array.isArray(a.sources) ? a.sources : [];
+  const list = raw.map((s, i) => normalizeSource(s, i, now)).filter(Boolean);
+  if(list.length){ a.sources = list; return a; }
+  /* 没有 sources 但有旧字段 → 迁一条。 */
+  if(a.streamUrl){
+    const migrated = normalizeSource({
+      url: a.streamUrl, ep: a.streamEp, name: "原线路", savedAt: a.streamUrlAt
+    }, 0, now);
+    if(migrated) a.sources = [migrated];
+  }
+  if(!Array.isArray(a.sources)) a.sources = [];
+  return a;
+}
+
+/* 取出该作品的全部线路（未保存任何线路时给一条临时线路）。
+   settings.stream_url 是历史兜底：早期版本只有全局一份，
+   直接丢掉会让老用户的片源凭空消失。 */
+function sourcesOf(a){
+  const own = Array.isArray(a && a.sources) ? a.sources.filter(s => s && s.url) : [];
+  if(own.length) return own;
+  if(a && a.streamUrl) return migrateSources(a).sources;
+  const legacy = String(settings.stream_url || "").trim();
+  return legacy ? [normalizeSource({ url: legacy, name: "临时片源" }, 0, new Date().toISOString())] : [];
+}
+/* 当前应当使用的那条：优先用户上次选的，其次列表第一条。
+   记忆的那条若已被停用/标记失效，必须跳过 ——
+   否则用户在管理页标了失效，回到放映厅还是它自动起播，
+   「管理」就成了假动作。此时退回到第一条仍然可用的线路。 */
+function activeSourceOf(a){
+  const list = sourcesOf(a);
+  if(!list.length) return null;
+  const usable = list.filter(sourceUsable);
+  const pool = usable.length ? usable : list;
+  const want = a && a.activeSourceId;
+  return pool.find(s => s.id === want) || pool[0];
+}
+/* 线路是否参与播放。停用与人工标记失效都算不可用，
+   但「未检测」不算 —— 把没探测过的线路默认判死，
+   等于让所有老线路一夜之间全变成不可用。 */
+function sourceIsSearch(s){ return !!(s && s.kind === "search" && s.searchUrl); }
+
+function sourceUsable(s){
+  if(!s) return false;
+  if(sourceIsSearch(s)) return false;   // 站点首页没有可播放地址，不能当播放线路
+  if(s.enabled === false) return false;
+  if(s.health && s.health.state === "dead") return false;
+  return true;
+}
+/* 不可用的原因。必须能说清是哪一条规则判的 ——
+   只显示「不可用」的话，用户会去改别的字段（网址、集数），
+   而真正的原因是这条线路被他自己停用过。 */
+function sourceUnusableReason(s){
+  if(!s) return "无效线路";
+  if(sourceIsSearch(s)) return "搜索型片源：点它带着片名去站里搜，不会在站内播放";
+  if(s.enabled === false) return "已停用，不会被自动选中";
+  if(s.health && s.health.state === "dead") return "已标记失效，不会被自动选中";
+  return "";
+}
+
+/* 「现在看到第几集」的唯一口径：当前线路声明的集数 → 旧 streamEp → 已看集数。
+   三处（片尾自动下一集、详情页播放记录、剧集卡行）都调它 ——
+   各写一遍的话，改其中一处就会出现「下一集提示跳错集数」这种对不上的 bug。 */
+function currentEpisodeOf(a){
+  if(!a) return 0;
+  const line = activeSourceOf(a);
+  if(line && line.ep != null && Number.isFinite(Number(line.ep))) return Math.max(0, Number(line.ep));
+  if(a.streamEp != null && Number.isFinite(Number(a.streamEp))) return Math.max(0, Number(a.streamEp));
+  return Math.max(0, Number(a.watchedEpisodes) || 0);
+}
+
+/* ---- 三态筛选 ----
+   直译 MaybeExcludedMedia：被排除的资源不丢弃，携带原因排到最后。 */
+const EXCLUDE_REASONS = {
+  episode_mismatch: "集数不匹配",
+  no_subtitle:      "无字幕",
+  subtitle_kind:    "字幕形态不支持",
+  invalid_url:      "网址无效",
+  /* 台账状态参与选源：用户在管理页把线路停用或标记失效后，
+     这里必须同步排除，否则「管理」只是一个不生效的标签。 */
+  disabled:         "已停用",
+  dead:             "已标记失效",
+  /* 搜索型片源不是「坏了」，只是形态不同：它是站点首页 + 搜索模板，
+     没有可播放地址，放进播放候选里只会让选源报「没有可用线路」却指着一条活着的源。 */
+  search_only:      "搜索型片源"
+};
+function excludeSource(src, reason){
+  return { state:"excluded", src:null, original:src, reason:reason, reasonText:EXCLUDE_REASONS[reason] || reason };
+}
+function includeSource(src, meta){
+  return { state:"included", src:src, original:src, reason:null,
+           reasonText:null, similarity: meta && meta.similarity != null ? meta.similarity : 100 };
+}
+/* 筛选：返回有序的三态列表（included 在前，按 sortSource 排；excluded 附后）。
+   ctx = { wantEp, wantSubtitle, showExcluded } */
+function filterSources(list, ctx){
+  ctx = ctx || {};
+  const out = [];
+  (list || []).forEach(s => {
+    if(!s || !normalizeStreamURL(s.url)){
+      out.push(excludeSource(s, "invalid_url")); return;
+    }
+    /* 台账状态先于质量筛选判定。
+       顺序有讲究：把「已停用」排在集数/字幕之前，
+       否则同一条线路会先报「集数不匹配」，用户改了集数才发现
+       它早就被自己停用了 —— 提示指向的原因不是真正的原因。 */
+    if(s.enabled === false){ out.push(excludeSource(s, "disabled")); return; }
+    if(s.health && s.health.state === "dead"){ out.push(excludeSource(s, "dead")); return; }
+    /* 搜索型必须排除在**播放**候选之外：它是「去站里搜」的入口，
+       不是可播地址。留在这里会让它顶掉真正能播的线路，
+       表现为「明明存了 B 站那条，播放却说没有可用线路」。 */
+    if(sourceIsSearch(s)){ out.push(excludeSource(s, "search_only")); return; }
+    /* 集数匹配：source.ep 是用户声明的「这条源对应第几集」。
+       为空表示「整季通用」，此时不该被判为不匹配 ——
+       大量站点一条链接覆盖整季，误杀等于让用户白填。
+       同理 wantEp 为空时不做这项筛选：用户没声明在看哪集。 */
+    const ep = s.ep == null || s.ep === "" ? null : Number(s.ep);
+    if(ctx.wantEp != null && ep != null && ep !== Number(ctx.wantEp)){
+      out.push(excludeSource(s, "episode_mismatch")); return;
+    }
+    const subs = srcSubs(s);
+    if(ctx.wantSubtitle && String(s.subtitleKind || "").toUpperCase() === "EMBEDDED"){
+      /* 硬字幕不可关闭，要求外挂字幕时排除。 */
+      out.push(excludeSource(s, "subtitle_kind")); return;
+    }
+    if(ctx.wantSubtitle && subs.length && !subs.includes(String(ctx.wantSubtitle).toUpperCase())){
+      out.push(excludeSource(s, "no_subtitle")); return;
+    }
+    out.push(includeSource(s));
+  });
+  return out.filter(x => x.state === "included" || ctx.showExcluded)
+            .sort(compareSourceResult);
+}
+function compareSourceResult(x, y){
+  if(x.state !== y.state) return x.state === "included" ? -1 : 1;
+  /* 排除项之间不排序，交给 sort 的稳定性保持原始顺序。
+     这里必须显式早返回：excluded 项的 src 是 null，
+     继续往下走会在 compareSourceQuality 里读 null.subtitles 抛错。
+     被排除的项保持数据源给出的顺序，比给它们编一个排序规则更有用 ——
+     数据源的查询顺序本身就反映了「相关性」。 */
+  if(x.state === "excluded") return 0;
+  return compareSourceQuality(x.src, y.src);
+}
+/* 七级排序，直译 sortMediaList。稳定排序由 Array.prototype.sort 保证。
+   全部字段读取都走读取器而不是直接取属性：排序层会被喂进
+   未经 normalizeSource 的对象（导入的旧备份、手写构造的线路），
+   直接读 a.subtitles[0] 会在 undefined 上取下标直接抛错，
+   而 sort 回调抛错的表现是「整个列表排不出来」，定位成本极高。 */
+function srcSubs(s){ return Array.isArray(s && s.subtitles) ? s.subtitles : []; }
+function srcNum(v, d){ const n = Number(v); return Number.isFinite(n) ? n : d; }
+function compareSourceQuality(a, b){
+  if(!a || !b) return 0;
+  const ra = resolutionRank(a.resolution), rb = resolutionRank(b.resolution);
+  if(ra !== rb) return ra - rb;                            /* ① 分辨率 */
+  const pa = subtitleRank(srcSubs(a)[0], true), pb = subtitleRank(srcSubs(b)[0], true);
+  if(pa !== pb) return pa - pb;                            /* ② 字幕语言 */
+  const ta = srcNum(a.tier, 2), tb = srcNum(b.tier, 2);
+  if(ta !== tb) return ta - tb;                            /* ③ 线路优先级 */
+  return String(a.name || "").localeCompare(String(b.name || "")); /* ④ 名称稳定序 */
+}
+

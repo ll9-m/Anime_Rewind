@@ -1,0 +1,72 @@
+/* ============================================================
+   11. 记录一次重看 / 新增感想
+   ============================================================ */
+/* nextRound：第几次观看（首次=1，重看一次后新增的为 2，以此类推；允许手动修正）
+   只看有内容的 reviews 不够 —— 感想可留空，留空的观看只进 rewatchCount；
+   与 rewatchCount 取大，避免出现与历史错位/重复的轮次号。 */
+function nextViewRound(an){
+  const rs = (an.reviews || []).map(r => Number(r.round) || 0);
+  const fromReviews = rs.length ? Math.max.apply(null, rs) + 1 : 1;
+  return Math.max(fromReviews, (Number(an.rewatchCount) || 0) + 1);
+}
+/* opts.review 传入时为编辑模式：预填该条感想，保存改为就地更新；
+   不传则是记录一次新观看（追加）。 */
+function promptReview(an, opts){
+  opts = opts || {};
+  const editing = opts.review || null;
+  return new Promise((resolve) => {
+    const suggested = editing ? (Number(editing.round) || 1) : nextViewRound(an);
+    const root = openModal({
+      title: editing ? "编辑这条感想" : (suggested === 1 ? "记录一次观看" : "记录一次重看"),
+      narrow: true,
+      body:
+        '<p class="hint mb-3">' + esc(an.titleCn) + " · " + (editing ? "修改第 " + suggested + " 次观看的记录" : "第 " + suggested + " 次观看") + '</p>' +
+        '<div class="field mb-3"><label for="rv-date">观看日期</label>' +
+          '<input class="input" id="rv-date" type="date" data-autofocus value="' + attr(editing ? (editing.date || todayISO()) : todayISO()) + '"></div>' +
+        '<div class="field mb-3"><label for="rv-round">第几次观看</label>' +
+          '<input class="input" id="rv-round" type="number" min="1" max="999" step="1" value="' + suggested + '"></div>' +
+        '<div class="field"><label for="rv-content">感想（可留空）</label>' +
+          '<textarea class="textarea" id="rv-content" rows="5" maxlength="4000" placeholder="这次看的心情…">' + esc(editing ? (editing.content || "") : "") + '</textarea></div>',
+      footer: (f) => {
+        f.innerHTML =
+          '<div class="grow"></div>' +
+          '<button class="btn" type="button" id="rv-cancel">取消</button>' +
+          '<button class="btn btn-primary" type="button" id="rv-save">' + (editing ? "保存修改" : "保存") + '</button>';
+        f.querySelector("#rv-cancel").addEventListener("click", () => { closeModal(); resolve(null); });
+        f.querySelector("#rv-save").addEventListener("click", async () => {
+          const date = root.querySelector("#rv-date").value || todayISO();
+          const content = root.querySelector("#rv-content").value.trim();
+          const round = Math.max(1, Number(root.querySelector("#rv-round").value) || suggested);
+          if(editing){
+            /* 编辑：就地更新这条记录，不动其它条目；
+               重看次数只升不降（改次数不代表少看了一遍）。 */
+            editing.date = dateISO(new Date(date + "T00:00:00"));
+            editing.round = round;
+            editing.content = content;
+            editing.editedAt = new Date().toISOString();
+            an.rewatchCount = Math.max(an.rewatchCount || 0, round - 1);
+            await saveAnime(an);
+            closeModal();
+            toast("已更新第 " + round + " 次观看的感想", "ok");
+            refreshAll();
+            resolve(editing);
+            return;
+          }
+          const rev = { id: uid("rv"), date: dateISO(new Date(date + "T00:00:00")), round: round, content: content, createdAt: new Date().toISOString() };
+          /* 重看次数 = round − 1（全库统一约定，编辑/导入路径均如此）：
+             「记录一次观看」是第 1 次，不算重看。 */
+          an.rewatchCount = Math.max(an.rewatchCount || 0, round - 1);
+          /* 观看本身就该留档，感想只是附言 —— 不写感想也记下日期，
+             「上次重温是什么时候」「今年重温了几部」才有数据可用。 */
+          an.reviews = (an.reviews || []).concat([rev]);
+          await saveAnime(an);
+          closeModal();
+          toast("已记录第 " + round + " 次观看", "ok");
+          refreshAll();
+          resolve(rev);
+        });
+      }
+    });
+  });
+}
+

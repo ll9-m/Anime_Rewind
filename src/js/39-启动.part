@@ -1,0 +1,124 @@
+/* ============================================================
+   27. 启动
+   ============================================================ */
+async function boot(){
+  loadSettings();
+  const mode = await Repo.open();
+  try{
+    const [animeRaw, quotesRaw, statusesRaw, seriesRaw] = await Promise.all([
+      Repo.all("anime"), Repo.all("quotes"), Repo.all("statuses"), Repo.all("series")
+    ]);
+    state.anime = animeRaw.map(a => migrateRecord(a, "anime")).filter(Boolean);
+    state.quotes = quotesRaw.map(q => migrateRecord(q, "quote")).filter(Boolean);
+    if(statusesRaw.length){
+      const saved = statusesRaw.map(s => migrateRecord(s, "status")).filter(Boolean);
+      const merged = SYSTEM_STATUSES.map(sys => {
+        const hit = saved.find(s => s.id === sys.id);
+        return hit ? Object.assign({}, sys, { name: hit.name || sys.name, color: hit.color || sys.color }) : sys;
+      });
+      state.statuses = merged.concat(saved.filter(s => !s.isSystem));
+    } else {
+      state.statuses = SYSTEM_STATUSES.slice();
+      await Promise.all(state.statuses.map(s => Repo.put("statuses", s).catch(() => {})));
+    }
+    state.series = seriesRaw.map(s => migrateRecord(s, "series")).filter(Boolean);
+    /* 恢复备份文件夹句柄（结构化克隆对象只存得进 IndexedDB）。
+       不 await：它只影响设置页与一键备份的可用性，不该阻塞首屏。 */
+    initBackupFolder();
+    /* seriesId 指向的系列可能已被删除（导入了旧备份、手动清过库），
+       这类作品要落回默认系列 —— 留一个悬空 id 的话，
+       筛选「默认系列」时它们会凭空消失，用户以为作品丢了。 */
+    const orphan = state.anime.filter(a => a.seriesId && !seriesById(a.seriesId));
+    if(orphan.length){
+      orphan.forEach(a => { a.seriesId = DEFAULT_SERIES_ID; });
+      await Promise.all(orphan.map(a => Repo.put("anime", a).catch(() => {})));
+      console.warn("已把 " + orphan.length + " 部作品的系列归回默认系列（原系列已不存在）");
+    }
+    /* 播放源迁移的落盘。
+       走 Repo.put 而非 saveAnime：saveAnime 会 touch() 改 updatedAt，
+       迁移是数据形态升级不是用户编辑，改了时间戳会让
+       「最近添加」排序把所有老作品顶到最前面。
+       判据 = 「有旧字段 streamUrl，但迁移产物 sources 还没落出来」。
+       streamUrl 迁移后不清空（详情页还读它），所以不能只看它 ——
+       把 !a.sources.length 单独算进去更不行：所有本来就没填片源的
+       作品（手动添加不填源是常态）会被每次启动重写一遍。 */
+    const needSourceMigrate = state.anime.filter(a =>
+      a.streamUrl && (!Array.isArray(a.sources) || !a.sources.length));
+    if(needSourceMigrate.length){
+      await Promise.all(needSourceMigrate.map(a => {
+        migrateSources(a);
+        return Repo.put("anime", a).catch(() => {});
+      }));
+      console.info("已把 " + needSourceMigrate.length + " 部作品的播放源迁移为多线路");
+    }
+  }catch(e){
+    console.warn("数据读取失败", e);
+    openModal({
+      title:"数据读取失败",
+      narrow:true,
+      body:'<p class="small" style="line-height:1.7">无法读取本机数据：<span class="err-text">' + esc(String(e && e.message || e)) + '</span><br>' +
+        "为避免丢失，<b>没有清空任何旧数据</b>。请先刷新重试；若反复失败，请更换浏览器或联系开发者手动导出 IndexedDB 内容。</p>",
+      footer:(f) => { f.innerHTML = '<div class="grow"></div><button class="btn btn-primary" type="button" data-close="1">我知道了</button>'; }
+    });
+  }
+  await ensureBuiltinQuotes();
+  await refreshBgImage();
+  // 设置里有 key、库里读不出图：这是「上传了却没反应」最常见的后遗症
+  //（清过站点数据、换了浏览器、或从旧备份导入）。静默清掉僵尸 key，
+  // 并在设置页留下可见的提示，而不是让用户对着一张不存在的图发呆。
+  const bgLost = bgLostReason();
+  if(bgLost){ settings.bg_image = ""; saveSettings(); }
+  installImageFallback();
+  applyAppearance();
+  /* 默认视图：TV 影院套系下默认给卡行（横滑才是电视该有的滚法），
+     其余套系维持网格。写死的取值表在加第三个视图时会漏掉新值，
+     这里改成白名单。 */
+  libState.view = ["table","rows","wall"].indexOf(settings.default_view) >= 0
+    ? settings.default_view : "wall";
+  if(libState.view === "rows" && settings.ui_skin !== "tv") libState.view = "wall";
+  libState.sort = settings.default_sort || "createdAt_desc";
+  const order = ["home","library","sources","chronicle","wheel","theater","quotes","settings"];
+  PAGES.sort((a,b) => order.indexOf(a.id) - order.indexOf(b.id));
+  buildNav();
+  /* 窗口变宽变窄都要重算 TV 套系的列数。
+     用 rAF 节流：resize 在拖窗口时每秒能触发几十次，
+     每次都读 clientWidth 强制重排，手感会明显发涩。 */
+  let tvColsRaf = 0;
+  window.addEventListener("resize", () => {
+    if(settings.ui_skin !== "tv" || tvColsRaf) return;
+    tvColsRaf = requestAnimationFrame(() => { tvColsRaf = 0; updateTvColumns(); });
+  }, { passive:true });
+  const honorBtn = $("#side-honor");
+  if(honorBtn) honorBtn.addEventListener("click", () => openHonorWall());
+  renderRoute();
+  // ECharts 是全文件最重的外部依赖（~1MB min）。旧代码在启动流程里就把它拉下来，
+  // 与首屏渲染抢主线程 —— 用户看到的是"开机画面卡一下才出内容"。
+  // 改为：首屏画完 → 让浏览器喘一口气 → 空闲时再去拉，且此时不阻塞任何交互。
+  const kickCharts = () => {
+    if(state.route !== "home" || !settings.module_charts) return;
+    mountCharts($("#view"));
+  };
+  if(window.requestIdleCallback){
+    requestIdleCallback(kickCharts, { timeout: 2000 });
+  }else{
+    setTimeout(kickCharts, 200);
+  }
+  setTimeout(() => {
+    const b = $("#boot");
+    if(b){ b.classList.add("hide"); setTimeout(() => b.remove(), 600); }
+  }, 260);
+  if(mode === "ls"){
+    console.info("[番忆] IndexedDB 不可用（多见于 file:// 直接打开），已降级到 localStorage 存储。功能不受影响，但容量上限较低。");
+  }
+}
+document.addEventListener("DOMContentLoaded", () => { boot(); });
+
+/* 降级模式的写入被节流到微任务，必须在页面卸载前强制落盘，
+   否则「导入完立刻关标签页」会丢数据。visibilitychange 比 beforeunload 更可靠
+   （移动端切后台时 beforeunload 根本不触发）。 */
+document.addEventListener("visibilitychange", () => {
+  if(document.visibilityState === "hidden") Repo.flushLS();
+});
+window.addEventListener("pagehide", () => Repo.flushLS());
+
+//@@JS9@@

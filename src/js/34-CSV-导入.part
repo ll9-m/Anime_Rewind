@@ -1,0 +1,340 @@
+/* ============================================================
+   CSV 导入
+   解析器必须自己写，不能用 split(",") —— 真实 CSV 里字段可以包含：
+     · 双引号包裹的逗号   "他说, 然后笑了"
+     · 转义的双引号       "他说""你好"""
+     · 字段内换行
+     · CRLF 换行
+     · UTF-8 BOM（Excel 导出必带，不剥会让第一个表头变成"﻿语录"而匹配不上）
+   下面是一个符合 RFC 4180 的状态机实现。
+   ============================================================ */
+function parseCSV(text){
+  // 剥 BOM
+  if(text.charCodeAt(0) === 0xFEFF) text = text.slice(1);
+  const rows = [];
+  let row = [], field = "", i = 0, inQuotes = false;
+  const n = text.length;
+  while(i < n){
+    const c = text[i];
+    if(inQuotes){
+      if(c === '"'){
+        if(text[i+1] === '"'){ field += '"'; i += 2; continue; }  // "" -> "
+        inQuotes = false; i++; continue;
+      }
+      field += c; i++; continue;
+    }
+    if(c === '"'){ inQuotes = true; i++; continue; }
+    if(c === ","){ row.push(field); field = ""; i++; continue; }
+    if(c === "\r"){ i++; continue; }                                  // CRLF 当单个换行
+    if(c === "\n"){ row.push(field); rows.push(row); row = []; field = ""; i++; continue; }
+    field += c; i++;
+  }
+  // 收尾：最后一行没有换行符时也要吐出来
+  if(field !== "" || row.length){ row.push(field); rows.push(row); }
+  return rows.filter(r => r.some(c => String(c).trim() !== ""));
+}
+
+/* 表头别名：用户的 CSV 表头可能是「语录」「台词」「text」「作品」「出处」…
+   逐一映射，认不出就按位置猜（第一列正文、第二列出处、第三列角色）。 */
+const CSV_HEADER_MAP = [
+  { key:"text",       pats:["语录","语录正文","正文","台词","内容","text","quote","content","台词内容"] },
+  { key:"sourceAnimeTitle", pats:["出处","出处作品","作品","来源","动画","source","anime","title","作品名","番剧"] },
+  { key:"character",  pats:["角色","人物","演唱者","cv","声优","character","who","role"] },
+  { key:"favorite",   pats:["收藏","favorite","fav","星标"] }
+];
+function mapCSVHeader(cells){
+  const map = {};
+  cells.forEach((raw, idx) => {
+    const c = normalize(raw);
+    if(!c) return;
+    for(const h of CSV_HEADER_MAP){
+      if(map[h.key] != null) continue;
+      if(h.pats.some(p => c === normalize(p) || c.indexOf(normalize(p)) >= 0)){ map[h.key] = idx; return; }
+    }
+    map["__pos" + idx] = idx;
+  });
+  return map;
+}
+function openQuoteImport(){
+  const root = openModal({
+    title:"导入语录 CSV",
+    body:
+      '<p class="small muted mb-3">第一行须为表头。支持的列：<b>语录</b>（必填）、<b>出处作品</b>（必填）、' +
+        "<b>角色</b>、<b>收藏</b>。列名不区分中英文顺序，认不出表头时按「正文 / 出处 / 角色」的位置解析。</p>" +
+      '<div class="state-box" style="padding:var(--sp-4);margin-bottom:var(--sp-3)">' +
+        '<textarea class="textarea" id="qi-text" style="min-height:150px;font-family:var(--font-mono);font-size:12px" ' +
+          'placeholder="语录,出处作品,角色&#10;「出发吧！」,冒险的风,希诺" spellcheck="false"></textarea>' +
+      "</div>" +
+      '<div class="row gap-2"><button class="btn btn-sm" type="button" id="qi-pick">' + ic("upload",14) + "选择 CSV 文件</button>" +
+        '<button class="btn btn-sm" type="button" id="qi-demo">填入示例</button>' +
+        '<span class="hint" id="qi-hint">也可以直接把 CSV 内容粘进上面的框</span></div>' +
+      '<div id="qi-preview"></div>',
+    footer:(f) => {
+      f.innerHTML = '<span class="hint" id="qi-msg"></span><div class="grow"></div>' +
+        '<button class="btn" type="button" data-close="1">取消</button>' +
+        '<button class="btn btn-primary" type="button" id="qi-go" disabled>导入</button>';
+      f.querySelector("#qi-go").addEventListener("click", onImport);
+    }
+  });
+  const ta = root.querySelector("#qi-text");
+  const preview = root.querySelector("#qi-preview");
+  const goBtn = root.querySelector("#qi-go");
+  const msg = root.querySelector("#qi-msg");
+  let parsed = null;
+
+  function analyze(){
+    const text = ta.value;
+    if(!text.trim()){ parsed = null; goBtn.disabled = true; preview.innerHTML = ""; return; }
+    const rows = parseCSV(text);
+    if(rows.length < 2){
+      parsed = null; goBtn.disabled = true;
+      preview.innerHTML = '<div class="note-box is-warn">' + ic("warning",16) + "<span>只读到 " + rows.length + " 行，至少需要表头 + 1 行数据</span></div>";
+      return;
+    }
+    const map = mapCSVHeader(rows[0]);
+    const body = rows.slice(1).map(r => ({
+      text: String(r[map.text != null ? map.text : 0] || "").trim(),
+      sourceAnimeTitle: String(r[map.sourceAnimeTitle != null ? map.sourceAnimeTitle : 1] || "").trim(),
+      character: String(r[map.character != null ? map.character : 2] || "").trim(),
+      favorite: map.favorite != null ? /^(1|true|yes|y|是|✓)$/i.test(String(r[map.favorite] || "").trim()) : false
+    })).filter(r => r.text && r.sourceAnimeTitle);
+    const bad = rows.length - 1 - body.length;
+    parsed = body;
+    goBtn.disabled = !body.length;
+    preview.innerHTML =
+      '<div class="note-box is-ok">' + ic("check",16) + "<span>解析到 <b>" + body.length + "</b> 条可用语录" +
+      (bad > 0 ? "，跳过 " + bad + " 行（缺少正文或出处）" : "") + "</span></div>" +
+      (body.length ? '<div class="quote-grid mt-3" style="max-height:220px;overflow:auto">' +
+        body.slice(0, 6).map(q => '<article class="quote-card"><div class="q-text">「' + esc(q.text) + "」</div>" +
+          '<footer><div class="who">' + esc(q.sourceAnimeTitle) + (q.character ? " · " + esc(q.character) : "") + "</div></footer></article>").join("") +
+        "</div>" + (body.length > 6 ? '<p class="hint mt-2">…以及另外 ' + (body.length - 6) + " 条</p>" : "") : "");
+  }
+  bindIMEInput(ta, debounce(analyze, 200));
+  root.querySelector("#qi-pick").addEventListener("click", () => {
+    const inp = document.createElement("input");
+    inp.type = "file"; inp.accept = ".csv,text/csv,text/plain";
+    inp.addEventListener("change", () => {
+      const f = inp.files && inp.files[0];
+      if(!f) return;
+      const fr = new FileReader();
+      // 非 UTF-8（Excel 导出的 GBK）会乱码。GBK 体积大且本项目不引依赖，
+      // 因此这里明确告知用户而不是默默显示乱码。
+      fr.onload = () => { ta.value = String(fr.result || ""); analyze(); };
+      fr.onerror = () => { msg.innerHTML = '<span class="err-text">读取文件失败</span>'; };
+      fr.readAsText(f, "utf-8");
+    });
+    inp.click();
+  });
+  root.querySelector("#qi-demo").addEventListener("click", () => {
+    ta.value = "语录,出处作品,角色,收藏\n" +
+      "「就算世界末日，也要和你一起看烟火。」,烟火列车,露娜,true\n" +
+      '"她说：我要, 走了",夏日重现,香子,false\n' +
+      "「 We're  back 」,鲁邦三世,鲁邦,false";
+    analyze();
+  });
+  async function onImport(){
+    if(!parsed || !parsed.length) return;
+    const existing = new Set(state.quotes.map(q => normalize(q.text) + "|" + normalize(q.sourceAnimeTitle)));
+    let added = 0, dup = 0;
+    for(const r of parsed){
+      const k = normalize(r.text) + "|" + normalize(r.sourceAnimeTitle);
+      if(existing.has(k)){ dup++; continue; }
+      existing.add(k);
+      await saveQuote({
+        id: uid("q"), text:r.text.slice(0, 200),
+        sourceAnimeTitle:r.sourceAnimeTitle.slice(0, 80),
+        character:r.character.slice(0, 50),
+        favorite:!!r.favorite, isBuiltin:false, source:"csv",
+        createdAt:new Date().toISOString()
+      });
+      added++;
+    }
+    closeModal();
+    toast("已导入 " + added + " 条" + (dup ? "，跳过重复 " + dup + " 条" : ""), "ok", dup ? 5000 : 2600);
+    quotesState.tab = "mine";
+    rerender();
+  }
+}
+
+function renderQuotes(root){
+  const favs = state.quotes.filter(q => q.favorite);
+  const builtins = state.quotes.filter(q => q.isBuiltin);
+  const mine = state.quotes.filter(q => !q.isBuiltin);
+  const groups = [
+    { key:"fav", name:"我的收藏", list:favs },
+    { key:"builtin", name:"全部内置语录", list:builtins },
+    { key:"mine", name:"我添加的", list:mine }
+  ];
+  const cur = groups.find(g => g.key === quotesState.tab) || groups[0];
+  const kw = normalize(quotesState.q);
+  const list = cur.list.filter(q => {
+    if(quotesState.filterSource && normalize(q.sourceAnimeTitle) !== normalize(quotesState.filterSource)) return false;
+    if(kw && normalize(q.text + " " + q.sourceAnimeTitle + " " + (q.character||"")).indexOf(kw) < 0) return false;
+    return true;
+  });
+  const sources = Array.from(new Set(state.quotes.map(q => q.sourceAnimeTitle).filter(Boolean)));
+  /* 空态与 toolbar 的「添加语录」按钮必须二选一。默认分区是「我的收藏」且初始为空，
+     旧版此时同一屏渲染出两个一模一样的按钮 —— 这正是用户报的"重复"。
+     规则：空态给更贴切的引导（按分区给不同文案与动作），有内容时只留 toolbar 那一处。 */
+  const empty = !list.length;
+  let html =
+    '<div class="row gap-3 mb-3" style="flex-wrap:wrap">' +
+      '<div class="seg" role="group" aria-label="分区">' +
+        groups.map(g => '<button type="button" data-tab="' + g.key + '" aria-pressed="' + (cur.key === g.key) + '">' + esc(g.name) + " <span class=\"muted\">" + g.list.length + "</span></button>").join("") +
+      "</div>" +
+      '<div class="search-wrap" style="margin-left:auto;max-width:280px">' + ic("search",16) +
+        '<input class="input" id="qt-q" type="search" placeholder="搜索语录 / 出处" value="' + attr(quotesState.q) + '"></div>' +
+      '<select class="select" id="qt-src" style="max-width:200px"><option value="">全部出处</option>' +
+        sources.map(s => '<option value="' + attr(s) + '"' + (quotesState.filterSource === s ? " selected" : "") + ">" + esc(s) + "</option>").join("") +
+      "</select>" +
+      (empty ? "" : '<button class="btn btn-primary" type="button" data-act="add">' + ic("plus",16) + "添加语录</button>") +
+    "</div>";
+  html += list.length
+    ? '<div class="quote-grid">' + list.map(quoteCardHTML).join("") + "</div>"
+    : '<div class="state-box">' + ic("quote",40) +
+      "<h2>" + esc(cur.name) + "里还没有内容</h2>" +
+      "<p>" + (cur.key === "fav" ? "在首页横幅或这里点星标，就能收藏语录。"
+           : cur.key === "mine" ? "可以添加自己的童年台词，或用 CSV 批量导入。"
+           : "内置语录会在首次启动时自动写入。") + "</p>" +
+      '<div class="row gap-2" style="justify-content:center">' +
+        '<button class="btn btn-primary" type="button" data-act="add">' + ic("plus",16) + "添加语录</button>" +
+        '<button class="btn" type="button" data-act="import-csv">' + ic("upload",16) + "导入 CSV</button>" +
+      "</div></div>";
+  root.innerHTML = html;
+  root.querySelectorAll("[data-tab]").forEach(b => b.addEventListener("click", () => { quotesState.tab = b.dataset.tab; rerender(); }));
+  const q = root.querySelector("#qt-q");
+  if(q) bindIMEInput(q, debounce(() => { quotesState.q = q.value; rerender(); const n = root.querySelector("#qt-q"); if(n){ n.focus(); n.setSelectionRange(n.value.length, n.value.length); } }, 300));
+  const s = root.querySelector("#qt-src");
+  if(s) s.addEventListener("change", () => { quotesState.filterSource = s.value; rerender(); });
+  root.querySelectorAll("[data-act=add]").forEach(b => b.addEventListener("click", () => openQuoteForm(null)));
+  root.querySelectorAll("[data-act=import-csv]").forEach(b => b.addEventListener("click", () => openQuoteImport()));
+  root.querySelectorAll("[data-qact]").forEach(b => b.addEventListener("click", () => quoteAction(b.dataset.qact, b.dataset.id, b)));
+}
+function quoteCardHTML(q){
+  return '<article class="quote-card">' +
+    '<div class="q-text">「' + esc(q.text) + "」</div>" +
+    "<footer>" +
+      '<div><div class="who">' + esc(q.sourceAnimeTitle) + (q.character ? " · " + esc(q.character) : "") + "</div>" +
+      '<div class="badge badge-src" style="margin-top:4px">' + (q.isBuiltin ? "内置" : "自建") + "</div></div>" +
+      '<div class="actions">' +
+        '<button class="btn btn-sm btn-icon ' + (q.favorite ? "is-on" : "") + '" type="button" data-qact="fav" data-id="' + attr(q.id) + '" title="收藏" aria-pressed="' + (q.favorite ? "true":"false") + '">' + ic(q.favorite ? "starfill" : "star",14) + "</button>" +
+        (q.isBuiltin ? "" : '<button class="btn btn-sm btn-icon" type="button" data-qact="del" data-id="' + attr(q.id) + '" title="删除" aria-label="删除">' + ic("trash",14) + "</button>") +
+      "</div>" +
+    "</footer></article>";
+}
+async function quoteAction(act, id, node){
+  const q = state.quotes.find(x => x.id === id);
+  if(!q) return;
+  if(act === "fav"){
+    q.favorite = !q.favorite;
+    await saveQuote(q);
+    rerender();
+    updateSidebarInfo();
+    return;
+  }
+  if(act === "del"){
+    const ok = await confirmDialog({ title:"删除语录", html:"确定删除这条自建语录吗？", okText:"删除", danger:true });
+    if(!ok) return;
+    await removeQuote(id);
+    toast("已删除","ok");
+    rerender();
+  }
+}
+function openQuoteForm(q){
+  const editing = !!q;
+  const base = q || { text:"", sourceAnimeTitle:"", character:"" };
+  const root = openModal({
+    title: editing ? "编辑语录" : "添加语录",
+    narrow:true,
+    body:
+      '<div class="field mb-3"><label for="qf-text">语录正文 *（1–200 字）</label>' +
+        '<textarea class="textarea" id="qf-text" data-autofocus maxlength="200">' + esc(base.text) + "</textarea></div>" +
+      '<div class="field mb-3 autocomplete"><label for="qf-src">出处作品 *（可填片库外的作品名）</label>' +
+        '<input class="input" id="qf-src" maxlength="80" value="' + attr(base.sourceAnimeTitle) + '" autocomplete="off">' +
+        '<ul class="ac-list" id="qf-ac" hidden></ul></div>' +
+      '<div class="field"><label for="qf-who">角色 / 演唱者（选填，1–50 字）</label>' +
+        '<input class="input" id="qf-who" maxlength="50" value="' + attr(base.character || "") + '"></div>',
+    footer:(f) => {
+      f.innerHTML = '<span class="hint" id="qf-msg"></span><div class="grow"></div>' +
+        '<button class="btn" type="button" data-close="1">取消</button>' +
+        '<button class="btn btn-primary" type="button" id="qf-save">保存</button>';
+      f.querySelector("#qf-save").addEventListener("click", onSave);
+    }
+  });
+  const textEl = root.querySelector("#qf-text");
+  const srcEl = root.querySelector("#qf-src");
+  const whoEl = root.querySelector("#qf-who");
+  const acEl = root.querySelector("#qf-ac");
+  setupAutocomplete(srcEl, acEl);
+  async function onSave(){
+    const text = textEl.value.trim();
+    const src = srcEl.value.trim();
+    const who = whoEl.value.trim();
+    if(!text || !src){
+      root.querySelector("#qf-msg").innerHTML = '<span class="err-text">正文与出处作品都为必填</span>';
+      return;
+    }
+    if(text.length > 200 || who.length > 50){ toast("字数超限","warn"); return; }
+    const dup = state.quotes.find(x => normalize(x.text) === normalize(text) && (!editing || x.id !== base.id));
+    if(dup){
+      root.querySelector("#qf-msg").innerHTML = '<span class="err-text">已收录这条语录</span>';
+      return;
+    }
+    const rec = Object.assign({ id: base.id || uid("q"), isBuiltin:false, favorite:false, createdAt:new Date().toISOString(), schemaVersion:SCHEMA_VERSION },
+      base.id ? {} : {}, { text, sourceAnimeTitle:src, character:who || null });
+    if(editing) Object.assign(rec, { favorite: base.favorite, isBuiltin: base.isBuiltin });
+    await saveQuote(rec);
+    closeModal();
+    toast(editing ? "已更新" : "已收录", "ok");
+    quotesState.tab = editing ? "mine" : "mine";
+    rerender();
+  }
+}
+function setupAutocomplete(input, listEl){
+  let items = [], idx = -1;
+  const close = () => { listEl.hidden = true; items = []; idx = -1; };
+  bindIMEInput(input, () => {
+    const kw = normalize(input.value);
+    if(!kw){ close(); return; }
+    items = Array.from(new Set(state.anime.map(a => a.titleCn).filter(Boolean)))
+      .filter(t => normalize(t).indexOf(kw) >= 0).slice(0, 8);
+    if(!items.length){ close(); return; }
+    listEl.hidden = false;
+    listEl.innerHTML = items.map((t, i) => '<li role="option" data-i="' + i + '" aria-selected="false">' + esc(t) + "</li>").join("");
+    listEl.querySelectorAll("li").forEach(li => {
+      li.addEventListener("mousedown", (e) => {
+        e.preventDefault();
+        input.value = li.textContent;
+        close();
+      });
+    });
+  });
+  input.addEventListener("keydown", (e) => {
+    if(listEl.hidden) return;
+    if(e.key === "ArrowDown" || e.key === "ArrowUp"){
+      e.preventDefault();
+      idx = clampNum(idx + (e.key === "ArrowDown" ? 1 : -1), 0, items.length-1);
+      Array.from(listEl.children).forEach((li, i) => li.setAttribute("aria-selected", i === idx ? "true" : "false"));
+    } else if(e.key === "Enter" && idx >= 0){
+      e.preventDefault();
+      input.value = items[idx];
+      close();
+    } else if(e.key === "Escape"){ close(); }
+  });
+  input.addEventListener("blur", () => setTimeout(close, 120));
+}
+
+registerPage({
+  id:"quotes", name:"语录本", icon:"quote", title:"语录本",
+  sub:"内置台词、收藏与我添加的句子",
+  settingKey:"module_quotes",
+  /* 旧版这里和页面内 toolbar 各放了一个「添加语录」，右上角常驻两个一样的按钮。
+     保留页面内那一处：它与筛选器、分区切换在同一行，语境更清楚；
+     而 topbar 在窄屏会被挤到换行，重复按钮更显多余。 */
+  actions(box){
+    box.innerHTML = '<button class="btn btn-sm" type="button" data-act="import-csv">' + ic("upload",14) + "导入 CSV</button>";
+    box.querySelector("[data-act=import-csv]").addEventListener("click", () => openQuoteImport());
+  },
+  render: renderQuotes
+});
+

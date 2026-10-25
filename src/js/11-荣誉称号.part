@@ -1,0 +1,100 @@
+/* ============================================================
+   21. 荣誉称号（§10）
+   ============================================================ */
+
+const BUILTIN_HONORS = [
+  { id:"h10",    cat:"看完数量", name:"初入番门",     desc:"看完 ≥ 10 部",                metric:"done", need:10,  art:"h10" },
+  { id:"h30",    cat:"看完数量", name:"番剧常客",     desc:"看完 ≥ 30 部",                metric:"done", need:30,  art:"h30" },
+  { id:"h60",    cat:"看完数量", name:"老二次元",     desc:"看完 ≥ 60 部",                metric:"done", need:60,  art:"h60" },
+  { id:"h100d3", cat:"看完数量", name:"番剧考古学家", desc:"看完 ≥ 100 部且年代覆盖 ≥ 3",  metric:"done100_3",        art:"h100d3" },
+  { id:"h200",   cat:"看完数量", name:"童年守墓人",   desc:"看完 ≥ 200 部",               metric:"done", need:200, art:"h200" },
+  { id:"dec3",   cat:"年代",     name:"跨年代观众",   desc:"首播年代覆盖 ≥ 3 个",          metric:"decades", need:3,  art:"dec3" },
+  { id:"old90",  cat:"年代",     name:"动画考古队员", desc:"库中最早作品首播早于 1990 年", metric:"oldest1990",        art:"old90" },
+  { id:"rew10",  cat:"重看",     name:"回味者",       desc:"全库重看次数累计 ≥ 10",        metric:"rewatches", need:10, art:"rew10" },
+  { id:"rew5",   cat:"重看",     name:"五刷大佬",     desc:"单部重看 ≥ 5 次",              metric:"maxRewatch", need:5, art:"rew10" },
+  /* 十年之约 / 年度重逢没有专属 AI 配图：honorArtURL 取不到 HONOR_ART[h.art]
+     会自然落到第三级纯色玻璃背景（用户确认过三级回退的好看标准），先不硬凑图。 */
+  { id:"reunion10", cat:"重看",  name:"十年之约",     desc:"最近一次观看距首播 ≥ 10 年",   metric:"reunion10", need:10 },
+  { id:"reyear3",   cat:"重看",  name:"年度重逢",     desc:"今年重新看过的作品 ≥ 3 部",    metric:"reyear3", need:3 },
+  { id:"m10",    cat:"收藏",     name:"神作收藏家",   desc:"神作标记 ≥ 10",                metric:"masterpieces", need:10, art:"m10" },
+  { id:"keng",   cat:"趣味",     name:"坑王",         desc:"弃坑 ≥ 10 且弃坑率 > 40%",     metric:"keng",                art:"keng" },
+  { id:"mecha",  cat:"趣味",     name:"机战魂",       desc:"含机战/机甲类标签且看完 ≥ 10", metric:"mecha", need:10,   art:"mecha" }
+];
+/* 自定义荣誉存在 settings（localStorage）而不是 IndexedDB：
+   它本质是「个人配置」而非「档案数据」，跟主题、密度等同属偏好。 */
+function customHonors(){ return Array.isArray(settings.custom_honors) ? settings.custom_honors : []; }
+function saveCustomHonors(list){ settings.custom_honors = list; saveSettings(); }
+function allHonors(){
+  return BUILTIN_HONORS.map(h => Object.assign({ builtin:true }, h))
+    .concat(customHonors().map(h => Object.assign({ builtin:false }, h)));
+}
+function honorContext(){
+  const list = state.anime;
+  const doneList = list.filter(isDone);
+  const decades = new Set();
+  let oldest = null;
+  list.forEach(a => {
+    const d = decadeOf(a.airDate);
+    if(d) decades.add(d);
+    const y = yearOf(a.airDate);
+    if(y && (oldest == null || y < oldest)) oldest = y;
+  });
+  const tags = (settings.mecha_tags || []).map(normalize);
+  const mechaCount = doneList.filter(a => (a.genres || []).some(g => tags.indexOf(normalize(g)) >= 0)).length;
+  const s = stats();
+  /* 时隔重逢：全库最长的「最近观看年 − 首播年」；
+     年度重逢：今年重新看过（今年有观看记录，且此前已有观看）的作品数。 */
+  let reunionMax = null;
+  state.anime.forEach(a => {
+    const g = reunionYearsOf(a);
+    if(g != null && (reunionMax == null || g > reunionMax)) reunionMax = g;
+  });
+  return {
+    done: doneList.length,
+    decades: decades.size,
+    oldest,
+    rewatches: s.rewatches,
+    maxRewatch: list.reduce((m,a) => Math.max(m, a.rewatchCount || 0), 0),
+    masterpieces: s.masterpieces,
+    drop: s.drop,
+    dropRate: s.dropRate,
+    total: list.length,
+    mechaCount,
+    reunionMax,
+    reyearCount: rewatchedThisYear()
+  };
+}
+function honorStatus(h, ctx){
+  // 自定义荣誉是「手动授予」：没有可自动计算的指标，由用户决定是否点亮。
+  // 这样既保留自定的自由，又不会让自定义项永远灰着、看着像坏了。
+  if(!h.builtin) return { got: !!h.awarded, cur: h.awarded ? 1 : 0, need: 1, unit:"" };
+  switch(h.metric){
+    case "done":         return { got: ctx.done >= h.need, cur: ctx.done, need: h.need, unit:"部" };
+    case "done100_3":    return { got: ctx.done >= 100 && ctx.decades >= 3, cur: Math.min(ctx.done, ctx.decades * 40), need:100, unit:"部", extra: ctx.done >= 100 ? ("年代覆盖 " + ctx.decades + "/3") : null };
+    case "decades":      return { got: ctx.decades >= h.need, cur: ctx.decades, need: h.need, unit:"个年代" };
+    case "oldest1990":   return { got: ctx.oldest != null && ctx.oldest < 1990, cur: ctx.oldest == null ? 0 : 1, need:1, unit:"部", extra: ctx.oldest == null ? "还没有首播年份" : ("最早 " + ctx.oldest + " 年") };
+    case "rewatches":    return { got: ctx.rewatches >= h.need, cur: ctx.rewatches, need: h.need, unit:"次" };
+    case "maxRewatch":   return { got: ctx.maxRewatch >= h.need, cur: ctx.maxRewatch, need: h.need, unit:"次 / 单部" };
+    case "masterpieces": return { got: ctx.masterpieces >= h.need, cur: ctx.masterpieces, need: h.need, unit:"部" };
+    case "keng":         return { got: ctx.drop >= 10 && ctx.dropRate > 0.4, cur: ctx.drop, need:10, unit:"部弃坑", extra: "弃坑率 " + Math.round(ctx.dropRate*100) + "%" };
+    case "mecha":        return { got: ctx.mechaCount >= h.need, cur: ctx.mechaCount, need: h.need, unit:"部机战" };
+    case "reunion10":    return { got: ctx.reunionMax != null && ctx.reunionMax >= h.need,
+                                  cur: ctx.reunionMax == null ? 0 : ctx.reunionMax, need: h.need, unit:"年",
+                                  extra: ctx.reunionMax == null ? "还没有带日期的观看记录" : ("最长时隔 " + ctx.reunionMax + " 年") };
+    case "reyear3":      return { got: ctx.reyearCount >= h.need, cur: ctx.reyearCount, need: h.need, unit:"部今年重逢" };
+    default:             return { got:false, cur:0, need:1, unit:"" };
+  }
+}
+const QUANT_ORDER = ["h10","h30","h60","h100d3","h200"];
+function currentHonor(){
+  const ctx = honorContext();
+  let top = null;
+  QUANT_ORDER.forEach(id => {
+    const h = BUILTIN_HONORS.find(x => x.id === id);
+    if(h && honorStatus(h, ctx).got) top = h;
+  });
+  const nextQuant = QUANT_ORDER.map(id => BUILTIN_HONORS.find(x => x.id === id))
+    .find(h => h && !honorStatus(h, ctx).got) || null;
+  const nx = nextQuant ? Object.assign({ name: nextQuant.name, need: honorStatus(nextQuant, ctx).need, cur: honorStatus(nextQuant, ctx).cur }) : null;
+  return { topId: top ? top.id : null, nextQuant: nx, ctx };
+}

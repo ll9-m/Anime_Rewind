@@ -1,0 +1,184 @@
+/* ============================================================
+   片库：封面墙 —— 3D 翻转卡
+   结构：.card(perspective) > .card-3d(preserve-3d) > .fc-front + .fc-back
+   两个面都是 absolute + backface-visibility:hidden，绕 Y 轴翻 180° 互换。
+   注意：.card 不能有 overflow:hidden —— 那会 flatten preserve-3d，
+   翻转时会连带把子面压平（这是 3D 卡片最常见的失效原因）。
+   ============================================================ */
+.wall{ display:grid; grid-template-columns:repeat(auto-fill,minmax(var(--card-min),1fr)); gap:var(--sp-4); }
+.card{
+  position:relative; display:block; width:100%; aspect-ratio:3/4;
+  perspective:1200px; cursor:pointer;
+  background:none; border:none; padding:0; text-align:left; color:inherit; font:inherit;
+}
+.card-3d{
+  position:absolute; inset:0; transform-style:preserve-3d;
+  transition:transform var(--dur-slow) var(--ease);
+  border-radius:var(--r-lg);
+}
+/* 翻面触发：分设备能力给入口，不再挂常驻按钮。
+   原先卡片右下角常驻一个圆形翻面按钮，桌面端其实用不上 ——
+   鼠标移上去卡片就翻了，它纯粹是个视觉噪音（且在封面上压住画面）。
+   但触摸设备没有 hover，若只留 hover 入口，手机上背面就永远看不到。
+   所以：能 hover 的设备走 :hover，不能的走 JS 点击（见 bindLibraryActions），
+   翻面态统一用 .is-flipped 承载，两条路径共用同一套样式。
+   必须用 @media (hover:hover) 包住 :hover 规则：移动端浏览器点完会留下
+   「粘住」的 :hover，若不隔离，JS 刚翻好的面会被 :hover 规则接管，
+   出现「点了没反应 / 翻了又翻回去」的怪状。 */
+.card:focus-within .card-3d,
+.card.is-flipped .card-3d{ transform:rotateY(180deg); }
+@media (hover:hover){
+  .card:hover .card-3d{ transform:rotateY(180deg); }
+}
+
+.fc-face{
+  position:absolute; inset:0; border-radius:var(--r-lg); overflow:hidden;
+  backface-visibility:hidden; -webkit-backface-visibility:hidden;
+  box-shadow:var(--shadow), inset 0 1px 0 var(--hairline);
+}
+.fc-front{ background:var(--panel); }
+.fc-back{ transform:rotateY(180deg); background:var(--panel-2); display:flex; flex-direction:column; justify-content:space-between; padding:var(--card-p); }
+
+/* 关键修正：backface-visibility:hidden 只让背面「不被绘制」，
+   并不阻止它参与命中测试。实测（tools/probe-card-hit.js）：
+   卡片已翻成 matrix3d rotateY(180°)，但点背面的「改状态」按钮，
+   elementFromPoint 返回的却是正面 .fc-name —— 正面在 DOM 中靠前，
+   整个背面（含三个操作按钮）的点击全被它吃掉，冒泡到卡片的 data-open，
+   表现为「三个按钮都跳到详情页」。
+   修法是显式关掉不可见那一面的指针事件。
+   注意 :focus-within 也算「翻开」：键盘 Tab 进背面按钮时卡片同样处于翻开态。
+   :hover 触发的那条同样要包在 @media (hover:hover) 里 —— 触摸设备上
+   :hover 会「粘住」，若不隔离，静止态的卡片会因为残留 hover
+   把 pointer-events 交给背面，鼠标/手指再点正面就点不动了。 */
+.card:focus-within .fc-front,
+.card.is-flipped .fc-front{ pointer-events:none; }
+.card:focus-within .fc-back,
+.card.is-flipped .fc-back{ pointer-events:auto; }
+.fc-back{ pointer-events:none; }
+@media (hover:hover){
+  .card:hover .fc-front{ pointer-events:none; }
+  .card:hover .fc-back{ pointer-events:auto; }
+}
+
+/* 状态标记：封面封底一道 2px 细线（挂在正面内，避免 3D 层级错乱） */
+.fc-front::after{
+  content:""; position:absolute; left:0; right:0; bottom:0; height:2px; z-index:3;
+  background:var(--st-color,var(--muted)); opacity:.9;
+}
+
+/* ---- 正面：封面 + 玻璃字幕块 ---- */
+.fc-cover{ position:absolute; inset:0; background:var(--panel-3); }
+.fc-cover img{ width:100%; height:100%; object-fit:cover; display:block; }
+.fc-flags{ position:absolute; left:8px; top:8px; z-index:3; display:flex; flex-direction:column; gap:4px; align-items:flex-start; }
+/* 遮罩下限 .55 起，而非从 transparent 渐入：
+   片库里有大量白底/浅色官方海报，若上部无遮罩，白字只有 1.0~2.0:1，完全不可读。
+   曲线经最坏情况（纯白封面）采样验证：0%~100% 全程 ≥4.5:1。 */
+.fc-caption{
+  position:absolute; left:0; right:0; bottom:0; z-index:2;
+  padding:var(--sp-3); display:flex; flex-direction:column; gap:3px;
+  background:linear-gradient(180deg,rgba(4,8,14,.58),rgba(4,8,14,.82) 34%,rgba(4,8,14,.95));
+  -webkit-backdrop-filter:blur(3px); backdrop-filter:blur(3px);
+}
+.fc-tag{
+  align-self:flex-start; padding:2px 8px; border-radius:var(--r-pill);
+  background:rgba(0,0,0,.5); color:#fff; font-size:10.5px; font-weight:600; letter-spacing:.03em;
+  -webkit-backdrop-filter:blur(2px); backdrop-filter:blur(2px);
+}
+/* 系列徽标与状态标签同一行；没有系列时不留空隙 */
+.fc-tagrow{ display:flex; gap:4px; flex-wrap:wrap; align-items:center; }
+.fc-tagrow:empty{ display:none; }
+.fc-series{
+  display:inline-flex; align-items:center; gap:3px; max-width:100%;
+  padding:2px 8px; border-radius:var(--r-pill);
+  background:rgba(0,0,0,.5); color:#fff; font-size:10.5px; font-weight:600; letter-spacing:.03em;
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+  box-shadow:inset 0 0 0 1px rgba(255,255,255,.28);
+  -webkit-backdrop-filter:blur(2px); backdrop-filter:blur(2px);
+}
+.fc-series svg{ width:10px; height:10px; flex:0 0 auto; }
+.fc-name{ font-size:var(--fs-sm); font-weight:600; line-height:1.35; color:#fff; text-shadow:0 1px 2px rgba(0,0,0,.55); }
+.fc-orig{ font-size:11px; color:rgba(255,255,255,.78); text-shadow:0 1px 2px rgba(0,0,0,.5); }
+.fc-sub{ font-size:11px; color:rgba(255,255,255,.86); display:flex; align-items:center; gap:6px; flex-wrap:wrap; text-shadow:0 1px 2px rgba(0,0,0,.5); }
+
+/* ---- 背面：旋转光带 + 漂浮光球 + 资料 + 操作 ---- */
+.fc-sweep{
+  position:absolute; inset:-25% -50%; z-index:0; pointer-events:none;
+  background:linear-gradient(90deg,transparent,var(--accent) 22%,var(--accent) 78%,transparent);
+  opacity:.14; animation:fc-rotate 5s linear infinite; animation-play-state:paused;
+}
+.fc-orb{ position:absolute; z-index:0; border-radius:50%; filter:blur(15px); opacity:.5; pointer-events:none;
+  animation:fc-float 2.6s ease-in-out infinite; animation-play-state:paused; }
+.fc-orb-a{ width:46%; aspect-ratio:1; left:6%;  bottom:16%; background:var(--accent); }
+.fc-orb-b{ width:76%; aspect-ratio:1; left:24%; top:-16%;   opacity:.34; animation-delay:-.8s; }
+.fc-orb-c{ width:16%; aspect-ratio:1; right:5%; top:16%;   opacity:.6;  animation-delay:-1.8s; }
+/* 只在翻开时才让装饰层运动：静止态零合成开销 */
+.card:focus-within .fc-sweep,.card.is-flipped .fc-sweep,
+.card:focus-within .fc-orb,.card.is-flipped .fc-orb{ animation-play-state:running; }
+@media (hover:hover){
+  .card:hover .fc-sweep,.card:hover .fc-orb{ animation-play-state:running; }
+}
+
+@keyframes fc-rotate{ from{ transform:rotateZ(0deg); } to{ transform:rotateZ(360deg); } }
+@keyframes fc-float{ 0%,100%{ transform:translateY(0); } 50%{ transform:translateY(10px); } }
+
+/* 降低动效偏好：不做 3D 翻转（绕 Y 轴旋转会引起前庭不适），
+   改为静止时直接把背面资料平铺显示在正面下方。 */
+@media (prefers-reduced-motion:reduce){
+  .card{ aspect-ratio:auto; }
+  .card-3d{ position:static; transform:none !important; display:flex; flex-direction:column; }
+  .fc-face{ position:static; inset:auto; backface-visibility:visible; -webkit-backface-visibility:visible; }
+  .fc-cover{ position:relative; inset:auto; aspect-ratio:3/4; }
+  .fc-back{ transform:none; border-top:1px solid var(--border); }
+  .fc-sweep,.fc-orb{ display:none; }
+  /* 平铺后 .fc-body 不能再靠 flex 撑开，字幕块改用静态配色 */
+  .fc-caption{ position:static; background:var(--panel-2); }
+  .fc-name,.fc-orig,.fc-sub{ color:var(--text); }
+  .fc-orig,.fc-sub{ color:var(--text-2); }
+  .fc-caption .clamp-2,.fc-caption .truncate{ display:block; overflow:visible; white-space:normal; }
+  .fc-title{ -webkit-line-clamp:none; }
+}
+
+.fc-body{ position:relative; z-index:1; display:flex; flex-direction:column; gap:var(--sp-2); min-height:0; }
+.fc-title{ font-size:var(--fs-md); font-weight:600; line-height:1.3; }
+.fc-rows{ display:flex; flex-direction:column; gap:5px; font-size:var(--fs-xs); color:var(--text-2); }
+.fc-rows div{ display:flex; gap:6px; }
+.fc-rows b{ color:var(--text); font-weight:500; flex:0 0 auto; }
+.fc-rows span{ min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.fc-prog{ display:flex; align-items:center; gap:6px; font-size:11px; color:var(--muted); }
+.fc-prog .progress{ flex:1; }
+/* 底部操作区。原先有 padding-right:44px 给右下角那个圆形翻面按钮让位，
+   按钮删掉后这行会让「详情」按钮右侧凭空空一截、看起来没居中，已去掉。 */
+.fc-acts{ position:relative; z-index:1; display:flex; gap:6px; flex-wrap:wrap; }
+.fc-acts .btn{ flex:1 1 auto; min-width:0; min-height:30px; padding:0 var(--sp-2); }
+
+/* 卡片右下角原先常驻一个圆形翻面按钮，现已整块删除。
+   桌面端鼠标移上去卡片就自己翻了，按钮纯属视觉噪音；
+   触摸端改用「点卡片翻面」，不再往封面上压一个圆圈。
+   保留这条注释是为了防止以后有人觉得「少了个翻面入口」又加回来 ——
+   要加回触摸端翻面，用 .is-flipped，不要加常驻按钮。 */
+
+.placeholder{
+  width:100%; height:100%; display:flex; align-items:center; justify-content:center;
+  background:var(--panel-2); color:var(--muted); font-size:var(--fs-2xl); font-weight:700;
+}
+
+/* 表格视图 */
+.table-wrap{ border:1px solid var(--border); border-radius:var(--r-lg); overflow:auto; max-height:calc(100vh - 260px); }
+table.grid-table{ width:100%; border-collapse:collapse; font-size:var(--fs-sm); }
+.grid-table thead th{
+  position:sticky; top:0; z-index:2; background:var(--panel-2); text-align:left; font-weight:600;
+  font-size:var(--fs-xs); color:var(--muted); padding:var(--row-py) var(--sp-3); border-bottom:1px solid var(--border-2);
+  white-space:nowrap;
+}
+.grid-table td{ padding:var(--row-py) var(--sp-3); border-bottom:1px solid var(--border); vertical-align:middle; }
+.grid-table tbody tr{ cursor:pointer; transition:background var(--dur-fast); }
+.grid-table tbody tr:hover{ background:var(--panel-2); }
+.grid-table .col-thumb{ width:52px; }
+.grid-table .thumb{ width:38px; height:52px; border-radius:5px; overflow:hidden; background:var(--panel-3); }
+.grid-table .thumb img{ width:100%; height:100%; object-fit:cover; }
+.grid-table .select,.grid-table .input{ min-height:30px; padding:2px 6px; font-size:var(--fs-xs); }
+.grid-table .ep-input{ width:60px; text-align:center; }
+.grid-table .score-input{ width:64px; }
+.grid-table td.nowrap{ white-space:nowrap; }
+.st-dot{ display:inline-flex; align-items:center; gap:6px; white-space:nowrap; }
+
